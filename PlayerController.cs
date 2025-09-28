@@ -1,42 +1,35 @@
-﻿using System.Collections;
-using System.Collections.Generic;
-using UnityEngine;
+﻿using UnityEngine;
 
 public class PlayerController : MonoBehaviour
 {
     [Header("组件")]
     private Rigidbody2D rb;
     private Animator anim;
-    private SpriteRenderer sr;
 
-    [Header("子节点引用")]
-    public Transform groundPoint;   // 拖 Ground Point
-    public Transform flipRoot;      // 拖 Flip 节点
+    [Header("翻转节点 (Flip)")]
+    public Transform flipRoot;   // 挂 Flip 节点
 
     [Header("移动参数")]
     public float moveSpeed = 5f;
-    public float jumpForce = 12f;
-    public float groundCheckRadius = 0.1f;
-    public LayerMask groundLayer;
 
     [Header("状态参数")]
-    private bool isGrounded;
-    private bool allowSecondJump = true;
     private bool isFacingRight = true;
-    private bool attackLocked = false;
-    private bool inBackFlash = false;
+    private bool isDucking = false;  // 是否下蹲
+    private bool isGettingUp = false; // 是否正在起身（新增）
+
+    private bool duckCancelable = false;
+
 
     private void Awake()
     {
-        rb = GetComponent<Rigidbody2D>();              // 挂在 Component 上
-        anim = GetComponentInChildren<Animator>();     // 从子物体 Flip/player 找
-        sr = GetComponentInChildren<SpriteRenderer>(); // 找 SpriteRenderer
+        rb = GetComponent<Rigidbody2D>();
+        anim = GetComponentInChildren<Animator>();  // 找到子物体 player 上的 Animator
     }
 
     private void Update()
     {
-        CheckGrounded();
-        HandleInput();
+        HandleFlip();
+        HandleDuck();
         UpdateAnimatorParams();
     }
 
@@ -45,171 +38,105 @@ public class PlayerController : MonoBehaviour
         HandleMovement();
     }
 
-    // ================== 输入处理 ==================
-    private void HandleInput()
-    {
-        float moveInput = Input.GetAxisRaw("Horizontal");
-
-        TryTurn(moveInput);
-
-        // 攻击 J
-        if (Input.GetKeyDown(KeyCode.J))
-        {
-            if (CanStandAttack())
-            {
-                if (!isGrounded) // 空中攻击
-                {
-                    if (Input.GetKey(KeyCode.S))
-                        anim.SetTrigger("Trig_JumpDownFwdAttack"); // 下劈攻击
-                    else
-                        anim.SetTrigger("Trig_JumpAttack"); // 空中普通攻击
-                }
-                else if (Input.GetKey(KeyCode.S)) // 地面蹲下攻击
-                {
-                    if (Mathf.Abs(moveInput) > 0.01f)
-                        anim.SetTrigger("Trig_DuckFwdAttack");
-                    else
-                        anim.SetTrigger("Trig_DuckAttack");
-                }
-                else // 普通站立攻击
-                {
-                    anim.SetTrigger("Trig_Attack");
-                }
-            }
-        }
-
-        // 跳跃 K
-        if (Input.GetKeyDown(KeyCode.K))
-        {
-            if (isGrounded)
-            {
-                if (Mathf.Abs(moveInput) > 0.01f)
-                    anim.SetTrigger("Trig_JumpForward");
-                else
-                    anim.SetTrigger("Trig_JumpUp");
-
-                rb.velocity = new Vector2(rb.velocity.x, jumpForce);
-                allowSecondJump = true;
-            }
-            else if (allowSecondJump)
-            {
-                anim.SetTrigger("Trig_JumpDouble");
-                rb.velocity = new Vector2(rb.velocity.x, jumpForce);
-                allowSecondJump = false;
-            }
-        }
-
-        // 闪避 I
-        if (Input.GetKeyDown(KeyCode.I))
-        {
-            if (CanBackFlash())
-                anim.SetTrigger("Trig_BackFlash");
-        }
-
-        // 魔法 W
-        if (Input.GetKeyDown(KeyCode.W))
-        {
-            if (CanMagic())
-                anim.SetTrigger("Trig_MagicUp");
-        }
-        if (Input.GetKeyUp(KeyCode.W))
-        {
-            anim.SetTrigger("Trig_MagicDown");
-        }
-
-        // 盾 L
-        if (Input.GetKeyDown(KeyCode.L))
-        {
-            anim.SetTrigger("Trig_ShieldUp");
-        }
-        if (Input.GetKeyUp(KeyCode.L))
-        {
-            anim.SetTrigger("Trig_ShieldDown");
-        }
-
-        // 下蹲 S（持续）
-        anim.SetBool("IsDucking", Input.GetKey(KeyCode.S) && isGrounded);
-    }
-
     // ================== 移动 ==================
     private void HandleMovement()
     {
         float moveInput = Input.GetAxisRaw("Horizontal");
+
+        // 🛑 如果正在起身，不能动
+        if (isGettingUp)
+        {
+            rb.velocity = new Vector2(0, rb.velocity.y);
+            return;
+        }
+
+        // 🛑 如果在蹲下系动画（Duck / DuckIdle），不能动
+        AnimatorStateInfo state = anim.GetCurrentAnimatorStateInfo(0);
+        if (state.IsName("player_duck") || state.IsName("player_duck_idle") || state.IsName("player_getUp"))
+        {
+            rb.velocity = new Vector2(0, rb.velocity.y);
+            return;
+        }
+
+        // ✅ 其它情况正常移动
         rb.velocity = new Vector2(moveInput * moveSpeed, rb.velocity.y);
+    }
+
+
+
+
+    // ================== 翻转 ==================
+    private void HandleFlip()
+    {
+        float moveInput = Input.GetAxisRaw("Horizontal");
+
+        if (moveInput > 0 && !isFacingRight)
+        {
+            isFacingRight = true;
+            flipRoot.localScale = new Vector3(1, 1, 1);
+        }
+        else if (moveInput < 0 && isFacingRight)
+        {
+            isFacingRight = false;
+            flipRoot.localScale = new Vector3(-1, 1, 1);
+        }
+    }
+
+    // ================== 下蹲逻辑 ==================
+    private void HandleDuck()
+    {
+        if (Input.GetKey(KeyCode.S))
+        {
+            isDucking = true;
+        }
+        else
+        {
+            isDucking = false;
+        }
+
+        anim.SetBool("IsDucking", isDucking);
     }
 
     // ================== 动画参数同步 ==================
     private void UpdateAnimatorParams()
     {
         anim.SetFloat("MoveSpeed", Mathf.Abs(rb.velocity.x));
-        anim.SetFloat("VertSpeed", rb.velocity.y);
-        anim.SetBool("IsGrounded", isGrounded);
-        anim.SetBool("IsFalling", rb.velocity.y < 0);
-        anim.SetBool("IsFacingRight", isFacingRight);
-    }
-
-    // ================== 转向 ==================
-    private void TryTurn(float moveInput)
-    {
-        if (attackLocked || inBackFlash) return;
-
-        if (moveInput > 0 && !isFacingRight)
+        anim.SetBool("IsDucking", isDucking);
+        // 🛑 如果松开 S 且已进入可取消阶段
+        if (!Input.GetKey(KeyCode.S) && duckCancelable)
         {
-            isFacingRight = true;
-            flipRoot.localScale = new Vector3(1, 1, 1);   // 向右
-            anim.SetTrigger("Trig_Turn");
+            anim.SetBool("IsDucking", false);
         }
-        else if (moveInput < 0 && isFacingRight)
+
+        anim.SetBool("IsGettingUp", isGettingUp);  // ✅ 同步到 Animator
+
+        if (anim.GetCurrentAnimatorStateInfo(0).IsName("player_duck"))
         {
-            isFacingRight = false;
-            flipRoot.localScale = new Vector3(-1, 1, 1);  // 向左
-            anim.SetTrigger("Trig_Turn");
+            if (!Input.GetKey(KeyCode.S) && duckCancelable)
+                anim.SetBool("IsDucking", false);
         }
-    }
 
-    // ================== 判定函数 ==================
-    private bool CanStandAttack()
-    {
-        if (attackLocked) return false;
-        if (inBackFlash) return false;
-        return true;
-    }
-
-    private bool CanBackFlash()
-    {
-        if (attackLocked) return false;
-        return true;
-    }
-
-    private bool CanMagic()
-    {
-        if (attackLocked) return false;
-        if (inBackFlash) return false;
-        return true;
-    }
-
-    // ================== Ground 判定 ==================
-    private void CheckGrounded()
-    {
-        isGrounded = Physics2D.OverlapCircle(groundPoint.position, groundCheckRadius, groundLayer);
-        if (isGrounded) allowSecondJump = true;
     }
 
     // ================== 动画事件接口 ==================
-    public void OnLockStart() { attackLocked = true; }
-    public void OnLockEnd() { attackLocked = false; }
-    public void OnBackFlashStart() { inBackFlash = true; }
-    public void OnBackFlashEnd() { inBackFlash = false; }
 
-    public void OnAttackWindowOpen() { /* 开启攻击判定HitBox */ }
-    public void OnAttackWindowClose() { /* 关闭攻击判定HitBox */ }
-    public void OnLand() { allowSecondJump = true; }
-    public void OnShieldActive() { /* isShielding = true; */ }
-    public void OnShieldInactive() { /* isShielding = false; */ }
-    public void OnMagicReady() { /* magicIdle可用 */ }
-    public void OnMagicAttackCast() { /* 生成魔法弹or技能 */ }
-    public void OnMagicEnd() { /* 清空魔法状态 */ }
-    public void OnInvincibleStart() { /* 设置无敌=true */ }
-    public void OnInvincibleEnd() { /* 设置无敌=false */ }
-    public void OnJumpApex() { /* 到达跳跃顶点逻辑 */ }
+
+    public void OnDuckCancelable()
+    {
+        duckCancelable = true;
+    }
+    public void OnGetUpStart()
+    {
+        isGettingUp = true;
+        anim.SetBool("IsGettingUp", true);
+        duckCancelable = false;   // 起身时重置
+    }
+
+    public void OnGetUpEnd()
+    {
+        isGettingUp = false;
+        anim.SetBool("IsGettingUp", false);
+    }
+
+
 }
