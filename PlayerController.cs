@@ -34,15 +34,25 @@ public class PlayerController : MonoBehaviour
     public bool turnLocksMovement = false;
     public TurnFlipMode turnFlipMode = TurnFlipMode.ByEvent;
     public enum TurnFlipMode { ByEvent, Immediate }
+    public bool allowAirImmediateTurn = true;  // 空中瞬时转向（不播 turn）
+
     private bool isTurning = false;
     private bool desiredFacingRight = true;
     private bool hasFlippedInThisTurn = false;
 
-    [Header("空中攻击参数")]
-    public float downForwardAttackFastFallSpeed = -15f; // 下落前倾攻击立即赋予的下落速度（可调）
-    public bool allowDownForwardOverrideUpwardVelocity = true;
+    [Header("空中攻击参数（普通 & 下落前倾）")]
+    public bool allowAirMoveDuringAirAttack = true;   // 空中攻击允许水平漂移
 
-    private bool isInAirAttack = false;  // 是否正在空中攻击
+    // 为防止在跳起的同一帧就触发空中攻击，加入短延时（秒）
+    [Header("空中攻击时序")]
+    [Tooltip("跳起后多长时间后允许触发空中攻击（秒），防止按键连按在同帧产生误触）")]
+    public float airAttackAllowDelayAfterJump = 0.08f;
+    private float airAttackAllowedTime = 0f;
+
+    private bool isInAirAttack = false;       // 是否处于任一空中攻击（普通/下落）
+    // 不再对 downForward 做特殊重力处理（和普通空中攻击一致）
+    // 保留标志以区分动画/判定差异（若需要）
+    private bool inDownForwardAttack = false;
 
     private bool isJumping;
     private bool isFalling;
@@ -76,6 +86,7 @@ public class PlayerController : MonoBehaviour
     private const string PARAM_IsGettingUp = "IsGettingUp";
     private const string PARAM_IsFalling = "IsFalling";
 
+    // Triggers
     private const string TRIG_JumpUp = "Trig_JumpUp";
     private const string TRIG_JumpForward = "Trig_JumpForward";
     private const string TRIG_DuckAttack = "Trig_DuckAttack";
@@ -84,8 +95,6 @@ public class PlayerController : MonoBehaviour
     private const string TRIG_JumpAttack = "Trig_JumpAttack";
     private const string TRIG_JumpDownFwdAttack = "Trig_JumpDownFwdAttack";
     private const string TRIG_Turn = "Trig_Turn";
-    // 若你有落地 Trigger，可解开
-    // private const string TRIG_JumpGround = "Trig_JumpGround";
 
     private void Awake()
     {
@@ -101,8 +110,8 @@ public class PlayerController : MonoBehaviour
         CheckGrounded();
         HandleJumpLogic();
         HandleDuck();
-        HandleAttackInput();     // 包括空中攻击
-        HandleTurnInput();       // 空中也能转身（除空中攻击中）
+        HandleAttackInput();        // 包括空中攻击输入
+        HandleTurnInput();          // 空中瞬转 & 地面转身动画
         UpdateAnimatorParams();
         HandleAirAttackLandingInterrupt();
         prevIsGrounded = isGrounded;
@@ -111,6 +120,7 @@ public class PlayerController : MonoBehaviour
     private void FixedUpdate()
     {
         HandleHorizontalMovement();
+        // 不再对 down-forward 做特殊连续重力（按你的要求空中攻击与跳跃套用相同物理）
     }
 
     #region 输入
@@ -120,7 +130,7 @@ public class PlayerController : MonoBehaviour
     }
     #endregion
 
-    #region 下蹲（按住 S 锁移动）
+    #region 下蹲
     private void HandleDuck()
     {
         bool wantDuck = isGrounded && Input.GetKey(KeyCode.S);
@@ -132,7 +142,6 @@ public class PlayerController : MonoBehaviour
         }
 
         isDucking = wantDuck;
-
         if (isGettingUp)
             isDucking = false;
     }
@@ -141,11 +150,18 @@ public class PlayerController : MonoBehaviour
     #region 水平移动
     private void HandleHorizontalMovement()
     {
-        // 下蹲立即锁移动（除攻击或其它强制移动中）
+        // 下蹲锁移动
         if (isDucking && isGrounded && !inDuckAttack && !attackLocked)
         {
             currentSpeedX = 0f;
             rb.velocity = new Vector2(0f, rb.velocity.y);
+            return;
+        }
+
+        // 空中攻击中可漂移
+        if (isInAirAttack && !isGrounded && allowAirMoveDuringAirAttack)
+        {
+            ProcessNormalHorizontal();
             return;
         }
 
@@ -156,6 +172,11 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
+        ProcessNormalHorizontal();
+    }
+
+    private void ProcessNormalHorizontal()
+    {
         targetSpeedX = rawInputX * moveSpeed;
 
         if (Mathf.Abs(rawInputX) > 0.01f)
@@ -177,8 +198,9 @@ public class PlayerController : MonoBehaviour
 
     private bool IsMovementLocked()
     {
-        // 空中攻击时是否要完全锁水平速度？如果想允许保持惯性但禁止输入，可以不在这里加 isInAirAttack
-        if (attackLocked || inDuckAttack || inBackFlash || isGettingUp) return true;
+        // 不把空中攻击硬锁水平，除非地面 attackLocked 或其它锁
+        if (attackLocked && (isGrounded || !isInAirAttack)) return true;
+        if (inDuckAttack || inBackFlash || isGettingUp) return true;
         if (isTurning && turnLocksMovement) return true;
         return false;
     }
@@ -193,6 +215,9 @@ public class PlayerController : MonoBehaviour
             isFalling = false;
             jumpStartY = rb.position.y;
             rb.velocity = new Vector2(rb.velocity.x, jumpForce);
+
+            // 禁止在刚起跳的很短时间里触发空中攻击（避免 K+D+S+J 连按瞬触发）
+            airAttackAllowedTime = Time.time + airAttackAllowDelayAfterJump;
 
             string trig = Mathf.Abs(rawInputX) > 0.05f ? TRIG_JumpForward : TRIG_JumpUp;
             anim.ResetTrigger(TRIG_JumpUp);
@@ -230,14 +255,17 @@ public class PlayerController : MonoBehaviour
         if (!Input.GetKeyDown(KeyCode.J)) return;
         if (attackLocked || inBackFlash) return;
 
-        // 空中攻击
+        // 空中
         if (!isGrounded)
         {
-            if (isInAirAttack)
-                return; // 正在空中攻击中，等待当前结束
+            // 防止在刚起跳的那一小段时间被误触发空中攻击
+            if (Time.time < airAttackAllowedTime)
+                return;
 
-            // 下落前倾攻击 (S + J)
-            if (Input.GetKey(KeyCode.S))
+            if (isInAirAttack) return;
+
+            bool isDownForward = Input.GetKey(KeyCode.S);
+            if (isDownForward)
             {
                 anim.SetTrigger(TRIG_JumpDownFwdAttack);
                 StartAirAttack(true);
@@ -267,39 +295,45 @@ public class PlayerController : MonoBehaviour
     private void StartAirAttack(bool isDownForward)
     {
         isInAirAttack = true;
-        attackLocked = true; // 锁防止连按立即重入
+        attackLocked = true;
+        inDownForwardAttack = isDownForward;
+
         if (debugAirAttackLog) Debug.Log("[AirAttack] Start " + (isDownForward ? "DownForward" : "Normal"));
 
-        // 处理下落前倾攻击的快速下落（可选）
-        if (isDownForward && allowDownForwardOverrideUpwardVelocity)
-        {
-            // 立即赋一个向下速度（更果断），也可以 Mathf.Min 保留更快降速
-            rb.velocity = new Vector2(rb.velocity.x, downForwardAttackFastFallSpeed);
-        }
+        // 不再对下落攻击施加特殊重力或强制落地——与普通空中攻击行为一致
     }
 
-    // 动画事件：空中攻击开始（如果你希望通过事件锁，也可以只在事件里锁，去掉上面的 StartAirAttack 里锁定）
-    public void OnAirAttackStart()
+    public void OnAirAttackEnd() // animation event can call this if you have it
     {
-        // 如果改用事件驱动，把锁放到这里
-        // attackLocked = true; isInAirAttack = true;
+        FinishAirAttackIfEnded();
     }
 
-    // 动画事件：空中攻击结束
-    public void OnAirAttackEnd()
+    private void FinishAirAttackIfEnded()
     {
+        if (!isInAirAttack) return;
+
         if (!isGrounded)
         {
-            // 仍在空中 -> 允许再次攻击
             attackLocked = false;
             isInAirAttack = false;
-            if (debugAirAttackLog) Debug.Log("[AirAttack] End in air -> can re-attack");
+            inDownForwardAttack = false;
+
+            // 空中攻击结束若方向键与朝向相反，立即空中瞬转
+            int dir = GetInputDir();
+            if (dir != 0)
+            {
+                bool wantRight = dir > 0;
+                if (wantRight != isFacingRight && allowAirImmediateTurn)
+                    ImmediateFlip(wantRight);
+            }
+
+            if (debugAirAttackLog) Debug.Log("[AirAttack] End in air -> free");
         }
         else
         {
-            // 已经落地（落地逻辑会统一处理），保险清理
             attackLocked = false;
             isInAirAttack = false;
+            inDownForwardAttack = false;
         }
     }
 
@@ -307,19 +341,11 @@ public class PlayerController : MonoBehaviour
     {
         if (isGrounded && isInAirAttack)
         {
-            // 落地硬切：空中攻击终止
-            ForceLandFromAirAttack();
+            if (debugAirAttackLog) Debug.Log("[AirAttack] Force land interrupt");
+            attackLocked = false;
+            isInAirAttack = false;
+            inDownForwardAttack = false;
         }
-    }
-
-    private void ForceLandFromAirAttack()
-    {
-        if (debugAirAttackLog) Debug.Log("[AirAttack] Force land interrupt");
-        attackLocked = false;
-        isInAirAttack = false;
-        // 如果你使用落地 Trigger，可在此：
-        // anim.SetTrigger(TRIG_JumpGround);
-        // 否则确保空中攻击状态有 IsGrounded==true → jump_ground 的过渡
     }
     #endregion
 
@@ -330,71 +356,61 @@ public class PlayerController : MonoBehaviour
     }
     #endregion
 
-    #region 转身（空中可转身，空中攻击中禁止）
+    #region 转身（空中瞬转 / 地面动画）
     private void HandleTurnInput()
     {
-        int dir = 0;
-        if (rawInputX > 0.01f) dir = 1;
-        else if (rawInputX < -0.01f) dir = -1;
+        int dir = GetInputDir();
         if (dir == 0) return;
-
         bool wantRight = dir > 0;
 
-        if (wantRight == isFacingRight && !(isTurning && !hasFlippedInThisTurn && wantRight != desiredFacingRight))
+        if (!isGrounded)
+        {
+            // 空中：允许瞬时转（攻击中禁止）
+            if (isInAirAttack) return;
+            if (wantRight != isFacingRight && allowAirImmediateTurn)
+            {
+                ImmediateFlip(wantRight);
+            }
+            return;
+        }
+
+        // 地面：使用转身动画（但只在脚本判断允许时触发）
+        if (wantRight == isFacingRight)
             return;
 
-        RequestTurn(wantRight);
+        // 只有在 CanTurn() 允许的情况下才触发 Turn 的 Trigger（你删掉 AnyState→Turn，必须通过状态过渡到 Turn）
+        if (!CanTurn()) return;
+
+        // 发起 ground turn（Animator 需要有从地面相关状态到 Turn 的过渡，条件为 Trig_Turn）
+        desiredFacingRight = wantRight;
+        anim.SetTrigger(TRIG_Turn);
+        isTurning = true;
+        hasFlippedInThisTurn = false;
+        if (turnFlipMode == TurnFlipMode.Immediate)
+        {
+            ImmediateFlip(wantRight);
+            hasFlippedInThisTurn = true;
+        }
+        if (debugTurnLog) Debug.Log("[Turn] Ground trigger -> " + (wantRight ? "Right" : "Left"));
     }
 
     private bool CanTurn()
     {
+        // 禁止转向的情况：被锁、下蹲攻击中、起身中、闪避等；空中攻击中也禁止（但空中转向逻辑在上面单独处理）
         if (attackLocked || inDuckAttack || inBackFlash || isGettingUp) return false;
-        if (isDucking && isGrounded) return false;
-        if (isInAirAttack) return false; // 空中攻击中禁止转身
-        // 空中允许转身 -> 不再限制 isGrounded
         return true;
     }
 
-    private void RequestTurn(bool faceRight)
+    private int GetInputDir()
     {
-        if (!CanTurn()) return;
-        desiredFacingRight = faceRight;
-
-        if (!isTurning)
-        {
-            anim.SetTrigger(TRIG_Turn);
-            isTurning = true;
-            hasFlippedInThisTurn = false;
-            if (turnFlipMode == TurnFlipMode.Immediate)
-            {
-                ApplyFlipImmediate();
-                hasFlippedInThisTurn = true;
-            }
-            if (debugTurnLog) Debug.Log($"[Turn] Start -> {(faceRight ? "Right" : "Left")}, mode={turnFlipMode}");
-        }
-        else
-        {
-            if (!hasFlippedInThisTurn)
-            {
-                if (debugTurnLog) Debug.Log($"[Turn] Update desired -> {(faceRight ? "Right" : "Left")}");
-            }
-            else
-            {
-                anim.SetTrigger(TRIG_Turn);
-                hasFlippedInThisTurn = false;
-                if (turnFlipMode == TurnFlipMode.Immediate)
-                {
-                    ApplyFlipImmediate();
-                    hasFlippedInThisTurn = true;
-                }
-                if (debugTurnLog) Debug.Log($"[Turn] Retrigger -> {(faceRight ? "Right" : "Left")}");
-            }
-        }
+        if (rawInputX > 0.01f) return 1;
+        if (rawInputX < -0.01f) return -1;
+        return 0;
     }
 
-    private void ApplyFlipImmediate()
+    private void ImmediateFlip(bool faceRight)
     {
-        isFacingRight = desiredFacingRight;
+        isFacingRight = faceRight;
         flipRoot.localScale = isFacingRight ? Vector3.one : new Vector3(-1, 1, 1);
     }
     #endregion
@@ -410,7 +426,7 @@ public class PlayerController : MonoBehaviour
     }
     #endregion
 
-    #region 其它动画事件（地面攻击/下蹲攻击等）
+    #region 其它动画 events
     public void OnDuckCancelable() { duckCancelable = true; }
 
     public void OnGetUpStart()
@@ -429,13 +445,13 @@ public class PlayerController : MonoBehaviour
     public void OnJumpStart() { }
     public void OnJumpEnd() { }
 
-    // 转身事件
+    // 转身动画事件（地面）
     public void OnTurnStart() { }
     public void OnTurnFlip()
     {
         if (turnFlipMode == TurnFlipMode.ByEvent && !hasFlippedInThisTurn)
         {
-            ApplyFlipImmediate();
+            ImmediateFlip(desiredFacingRight);
             hasFlippedInThisTurn = true;
             if (debugTurnLog) Debug.Log("[Turn] Flip event");
         }
@@ -447,7 +463,7 @@ public class PlayerController : MonoBehaviour
         if (debugTurnLog) Debug.Log("[Turn] End");
     }
 
-    // 地面通用攻击
+    // 地面攻击
     public void OnAttackStart()
     {
         attackLocked = true;
@@ -478,10 +494,14 @@ public class PlayerController : MonoBehaviour
     public void OnDuckFwdAttackEnd() { inDuckAttack = false; attackLocked = false; }
     public void OnDuckFwdAttackEndStart() { inDuckAttack = true; }
     public void OnDuckFwdAttackEndEnd() { inDuckAttack = false; attackLocked = false; }
-
-    // 空中攻击事件（若你在动画里添加 OnAirAttackStart / OnAirAttackEnd，可以调用上面的空中流程）
-    // 已经在上面实现 OnAirAttackStart / OnAirAttackEnd
     #endregion
+
+    public void OnAirAttackStart()
+    {
+        // 可选：如果你想用动画事件作为开始锁定点，可以在这里设置：
+        // isInAirAttack = true; attackLocked = true;
+        // 但当前系统在 StartAirAttack 已经做了锁定，所以这里默认留空（兼容）
+    }
 
     #region 参数自检
     private void CheckAnimatorParams()
@@ -517,5 +537,7 @@ public class PlayerController : MonoBehaviour
             Gizmos.DrawWireSphere(groundPoint.position, groundCheckRadius);
         }
     }
+
+    
 #endif
 }
