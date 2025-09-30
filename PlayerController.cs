@@ -133,7 +133,14 @@ public class PlayerController : MonoBehaviour
     #region 下蹲
     private void HandleDuck()
     {
-        bool wantDuck = isGrounded && Input.GetKey(KeyCode.S);
+        // Can only duck when grounded
+        if (!isGrounded)
+        {
+            isDucking = false;
+            return;
+        }
+
+        bool wantDuck = Input.GetKey(KeyCode.S);
 
         if (wantDuck && !isDucking)
         {
@@ -216,6 +223,9 @@ public class PlayerController : MonoBehaviour
             jumpStartY = rb.position.y;
             rb.velocity = new Vector2(rb.velocity.x, jumpForce);
 
+            // Clear duck state when jumping to prevent movement lockup
+            isDucking = false;
+
             // 禁止在刚起跳的很短时间里触发空中攻击（避免 K+D+S+J 连按瞬触发）
             airAttackAllowedTime = Time.time + airAttackAllowDelayAfterJump;
 
@@ -244,6 +254,11 @@ public class PlayerController : MonoBehaviour
         {
             isJumping = false;
             isFalling = false;
+            // Ensure duck state is cleared on landing unless S is actively pressed
+            if (!Input.GetKey(KeyCode.S))
+            {
+                isDucking = false;
+            }
             if (debugJumpLog) Debug.Log("[Jump] Landed.");
         }
     }
