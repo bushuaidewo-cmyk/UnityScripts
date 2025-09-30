@@ -1,92 +1,73 @@
-﻿using UnityEngine;
-using System.Linq;
+﻿using System.Linq;
+using UnityEngine;
 
 public class PlayerController : MonoBehaviour
 {
+    #region Inspector
     [Header("组件")]
-    private Rigidbody2D rb;
-    private Animator anim;
+    [SerializeField] private Transform flipRoot;
+    [SerializeField] private Transform groundPoint;
+    [SerializeField] private LayerMask groundLayer;
+    [SerializeField] private float groundCheckRadius = 0.1f;
 
-    [Header("翻转节点 (Flip)")]
-    public Transform flipRoot;
-
-    [Header("调试")]
-    public bool debugJumpLog = true;
-    public bool logMissingAnimatorParams = true;
-    public bool debugTurnLog = true;
-    public bool debugAirAttackLog = true;
-
-    [Header("移动参数")]
+    [Header("移动")]
     public float moveSpeed = 5f;
     public float groundAcceleration = 40f;
     public float airAcceleration = 25f;
     public float groundDeceleration = 60f;
     public float airDeceleration = 30f;
-    public float runStopThreshold = 0.05f;
+    public float stopThreshold = 0.05f;
 
-    [Header("跳跃参数")]
+    [Header("跳跃")]
     public float jumpForce = 10f;
     public float maxJumpHeight = 5f;
-    public bool enableVariableJump = true;
-    public float variableJumpCutMultiplier = 0.5f;
+    public bool variableJump = true;
+    public float jumpCutMultiplier = 0.5f;
+    
+    
+    public bool allowAirControlDuringRise = true;
+    
 
-    [Header("转身参数")]
-    public bool turnLocksMovement = false;
-    public TurnFlipMode turnFlipMode = TurnFlipMode.ByEvent;
-    public enum TurnFlipMode { ByEvent, Immediate }
-    public bool allowAirImmediateTurn = true;  // 空中瞬时转向（不播 turn）
+    [Header("下蹲 / 下蹲攻击")]
+    public float crouchActivationDelay = 0.08f;
+    public int crouchIgnoreAfterJumpFrames = 4;
+    public bool allowInstantDuckAttack = true;          // 锁定关闭时可瞬发
+    public bool allowInstantDuckForwardAttack = true;
+    public bool zeroHorizontalOnDuckAttackStart = true;
+    public int duckAttackHorizLockFrames = 4;
 
-    private bool isTurning = false;
-    private bool desiredFacingRight = true;
-    private bool hasFlippedInThisTurn = false;
+    [Header("下蹲锁定 (第 N 帧后才能攻击 / 起身 / 移动)")]
+    public bool useCrouchLock = true;
+    public int crouchActionUnlockFrame = 8;             // 进入 Crouch 后锁定帧数
+    public bool allowInstantDuckDuringLock = false;     // 若为 true 即使锁定期也允许瞬发
 
-    [Header("空中攻击参数（普通 & 下落前倾）")]
-    public bool allowAirMoveDuringAirAttack = true;   // 空中攻击允许水平漂移
+    [Header("地面攻击")]
+    public bool zeroHorizontalOnGroundAttackStart = false;
+    public bool lockFacingDuringGroundAttack = true;
+    public bool lockFacingDuringDuckAttack = true;
 
-    // 为防止在跳起的同一帧就触发空中攻击，加入短延时（秒）
-    [Header("空中攻击时序")]
-    [Tooltip("跳起后多长时间后允许触发空中攻击（秒），防止按键连按在同帧产生误触）")]
-    public float airAttackAllowDelayAfterJump = 0.08f;
-    private float airAttackAllowedTime = 0f;
+    [Header("空中攻击")]
+    public float airAttackMinDuration = 0.12f;
+    public float airAttackAllowDelayAfterJump = 0.0f;
+    public bool allowAirAttackDuringRise = true;
+    public float airAttackRiseMinDelay = 0f;
+    public bool allowAirMoveDuringAirAttack = true;
 
-    private bool isInAirAttack = false;       // 是否处于任一空中攻击（普通/下落）
-    // 不再对 downForward 做特殊重力处理（和普通空中攻击一致）
-    // 保留标志以区分动画/判定差异（若需要）
-    private bool inDownForwardAttack = false;
+    [Header("输入缓冲/脉冲")]
+    public int horizBufferFrames = 2;
+    public int tapImpulseFrames = 3;
 
-    private bool isJumping;
-    private bool isFalling;
-    private float jumpStartY;
+    [Header("空中转向")]
+    public bool allowAirImmediateTurn = true;
+    #endregion
 
-    [Header("状态参数")]
-    private bool isFacingRight = true;
-    private bool isDucking = false;
-    private bool isGettingUp = false;
-    private bool duckCancelable = false;
-    private bool attackLocked = false;
-    private bool inBackFlash = false;
-    private bool inDuckAttack = false;
-
-    [Header("地面检测")]
-    public Transform groundPoint;
-    public float groundCheckRadius = 0.1f;
-    public LayerMask groundLayer;
-    private bool isGrounded;
-    private bool prevIsGrounded;
-
-    // 输入与速度缓存
-    private float rawInputX;
-    private float currentSpeedX;
-    private float targetSpeedX;
-
-    // Animator 参数名
+    #region Animator 常量
     private const string PARAM_MoveSpeed = "MoveSpeed";
     private const string PARAM_IsGrounded = "IsGrounded";
     private const string PARAM_IsDucking = "IsDucking";
     private const string PARAM_IsGettingUp = "IsGettingUp";
     private const string PARAM_IsFalling = "IsFalling";
 
-    // Triggers
     private const string TRIG_JumpUp = "Trig_JumpUp";
     private const string TRIG_JumpForward = "Trig_JumpForward";
     private const string TRIG_DuckAttack = "Trig_DuckAttack";
@@ -94,450 +75,626 @@ public class PlayerController : MonoBehaviour
     private const string TRIG_Attack = "Trig_Attack";
     private const string TRIG_JumpAttack = "Trig_JumpAttack";
     private const string TRIG_JumpDownFwdAttack = "Trig_JumpDownFwdAttack";
-    private const string TRIG_Turn = "Trig_Turn";
 
+    private static readonly string[] AirAttackAnimStates = {
+        "player_jump_attack",
+        "player_jump_downForward_attack"
+    };
+    #endregion
+
+    #region FSM
+    private enum PCState
+    {
+        GroundIdle,
+        GroundMove,
+        CrouchCandidate,
+        Crouch,
+        GroundAttack,
+        DuckAttack,
+        JumpRise,
+        Air,
+        AirAttack,
+        LandingLock
+    }
+    private PCState state;
+    private float stateEnterTime;
+    #endregion
+
+    #region Runtime
+    private Animator anim;
+    private Rigidbody2D rb;
+    private bool isGrounded;
+    private bool prevGrounded;
+    private float rawInputX;
+    private float bufferedInputX;
+    private int bufferedFramesRemain;
+    private float tapImpulseDir;
+    private int tapImpulseRemain;
+    private bool keyDownLeft;
+    private bool keyDownRight;
+    private bool keyDownJump;
+    private bool keyDownAttack;
+    private float lastNonZeroDir;
+    private int framesSinceDirNonZero;
+    private bool jumping;
+    private float jumpStartY;
+    private float jumpStartTime;
+    private int framesSinceJump = 999;
+    private bool airAttackActive;
+    private bool airAttackLocked;
+    private bool airAttackAnimPlaying;
+    private float airAttackStartTime;
+    private bool groundAttackActive;
+    private bool attackFacingLocked;
+    private bool duckAttackFacingLocked;
+    private int duckAttackHorizLockRemain;
+    private float downKeyHoldStart = -100f;
+    private int framesIgnoreCrouch;
+
+    private float currentSpeedX;
+    private float targetSpeedX;
+    private bool facingRight = true;
+
+    // 下蹲锁定
+    private int crouchLockFramesRemain = 0;
+    #endregion
+
+    #region Unity
     private void Awake()
     {
-        rb = GetComponent<Rigidbody2D>();
         anim = GetComponentInChildren<Animator>();
-        if (logMissingAnimatorParams)
-            CheckAnimatorParams();
+        rb = GetComponent<Rigidbody2D>();
+        ChangeState(PCState.GroundIdle);
     }
 
     private void Update()
     {
-        ReadInputs();
+        CaptureInput();
         CheckGrounded();
-        HandleJumpLogic();
-        HandleDuck();
-        HandleAttackInput();        // 包括空中攻击输入
-        HandleTurnInput();          // 空中瞬转 & 地面转身动画
+        UpdateFSM();
+
         UpdateAnimatorParams();
-        HandleAirAttackLandingInterrupt();
-        prevIsGrounded = isGrounded;
+        AutoAirAttackEnd();
+        prevGrounded = isGrounded;
+    }
+    #endregion
+
+    #region FSM 主流程
+    private void UpdateFSM()
+    {
+        TickState();
+        EvaluateTransitions();
+        framesSinceJump++;
+        HandleAutoFlip();
+        if (crouchLockFramesRemain > 0 && state == PCState.Crouch)
+            crouchLockFramesRemain--;
+
+        // 可变跳：松开 K 立刻截掉上升速度
+        if (variableJump && keyDownJump == false && Input.GetKeyUp(KeyCode.K) && rb.velocity.y > 0f)
+        {
+            rb.velocity = new Vector2(rb.velocity.x, rb.velocity.y * jumpCutMultiplier);
+        }
     }
 
-    private void FixedUpdate()
+
+    private void ChangeState(PCState next)
     {
-        HandleHorizontalMovement();
-        // 不再对 down-forward 做特殊连续重力（按你的要求空中攻击与跳跃套用相同物理）
+        if (state == next) return;
+        state = next;
+        stateEnterTime = Time.time;
+
+        if (next == PCState.Crouch)
+        {
+            crouchLockFramesRemain = useCrouchLock ? crouchActionUnlockFrame : 0;
+        }
+        if (next == PCState.CrouchCandidate)
+        {
+            // 进入候选时也准备锁（实际在变成 Crouch 时重置）
+            crouchLockFramesRemain = useCrouchLock ? crouchActionUnlockFrame : 0;
+        }
+        if (next == PCState.GroundIdle || next == PCState.GroundMove)
+        {
+            // 离开下蹲后重置
+            crouchLockFramesRemain = 0;
+        }
+
     }
+
+
+    #endregion
+
+
+    #region Tick
+    private void TickState()
+    {
+        switch (state)
+        {
+            case PCState.GroundIdle: ApplyHorizontal(0); break;
+            case PCState.GroundMove: TickGroundMove(); break;
+            case PCState.CrouchCandidate: TickCrouchCandidate(); break;
+            case PCState.Crouch: ApplyHorizontal(0); break;
+            case PCState.GroundAttack: TickGroundAttack(); break;
+            case PCState.DuckAttack: TickDuckAttack(); break;
+            case PCState.JumpRise: TickJumpRise(); break;
+            case PCState.Air: TickAir(); break;
+            case PCState.AirAttack: TickAirAttack(); break;
+            case PCState.LandingLock: AccelerateHorizontal(true, false); break;
+        }
+    }
+
+    private void TickGroundMove()
+    {
+        float dir = GetEffectiveInputDir();
+        targetSpeedX = dir * moveSpeed;
+        AccelerateHorizontal(true, dir != 0);
+    }
+
+    private void TickCrouchCandidate()
+    {
+        if (Mathf.Abs(currentSpeedX) > 0.01f) AccelerateHorizontal(true, false);
+        else ApplyHorizontal(0);
+    }
+
+    private void TickGroundAttack()
+    {
+        if (zeroHorizontalOnGroundAttackStart) ApplyHorizontal(0);
+        else AccelerateHorizontal(true, false);
+    }
+
+    private void TickDuckAttack()
+    {
+        if (duckAttackHorizLockRemain > 0) { duckAttackHorizLockRemain--; ApplyHorizontal(0); }
+        else ApplyHorizontal(0);
+    }
+
+    private void TickJumpRise()
+    {
+        if (allowAirControlDuringRise)
+        {
+            float dir = GetEffectiveInputDir();
+            if (dir != 0)
+            {
+                targetSpeedX = dir * moveSpeed;
+                AccelerateHorizontal(false, true);
+            }
+            else AccelerateHorizontal(false, false);
+        }
+
+        
+
+        if (allowAirAttackDuringRise && keyDownAttack && !airAttackLocked && !airAttackActive)
+        {
+            if (Time.time - jumpStartTime >= Mathf.Max(airAttackAllowDelayAfterJump, airAttackRiseMinDelay))
+                TryStartAirAttack();
+        }
+    }
+
+
+    private void TickAir()
+    {
+        if (!allowAirMoveDuringAirAttack) return;
+        float dir = GetEffectiveInputDir();
+        if (dir != 0)
+        {
+            targetSpeedX = dir * moveSpeed;
+            AccelerateHorizontal(false, true);
+        }
+        else AccelerateHorizontal(false, false);
+    }
+
+    private void TickAirAttack()
+    {
+        if (allowAirMoveDuringAirAttack)
+        {
+            float dir = GetEffectiveInputDir();
+            if (dir != 0)
+            {
+                targetSpeedX = dir * moveSpeed * 0.8f;
+                AccelerateHorizontal(false, true);
+            }
+            else AccelerateHorizontal(false, false);
+        }
+    }
+    #endregion
+
+    #region 转向
+    private void HandleAutoFlip()
+    {
+        float dir = GetEffectiveInputDir();
+        if (Mathf.Abs(dir) < 0.01f) return;
+        if ((groundAttackActive && lockFacingDuringGroundAttack && state == PCState.GroundAttack) ||
+            (state == PCState.DuckAttack && duckAttackFacingLocked) ||
+            state == PCState.AirAttack ||
+            (!isGrounded && !allowAirImmediateTurn))
+            return;
+
+        bool wantRight = dir > 0;
+        if (wantRight == facingRight) return;
+        facingRight = wantRight;
+        if (flipRoot) flipRoot.localScale = facingRight ? Vector3.one : new Vector3(-1, 1, 1);
+    }
+    #endregion
+
+    #region Transitions
+    private void EvaluateTransitions()
+    {
+        if (!prevGrounded && isGrounded &&
+            (state == PCState.Air || state == PCState.AirAttack || state == PCState.JumpRise))
+        {
+            ChangeState(PCState.LandingLock);
+            framesIgnoreCrouch = crouchIgnoreAfterJumpFrames;
+            jumping = false;
+            airAttackActive = false;
+            airAttackLocked = false;
+            airAttackAnimPlaying = false;
+            return;
+        }
+        if (prevGrounded && !isGrounded && state is not (PCState.JumpRise or PCState.Air or PCState.AirAttack))
+        {
+            ChangeState(PCState.Air);
+            return;
+        }
+
+        switch (state)
+        {
+            case PCState.GroundIdle:
+            case PCState.GroundMove: GroundCommonTransitions(); break;
+            case PCState.CrouchCandidate: CrouchCandidateTransitions(); break;
+            case PCState.Crouch: CrouchTransitions(); break;
+            case PCState.GroundAttack:
+                if (!groundAttackActive) EndGroundAttackReturn(); break;
+            case PCState.DuckAttack:
+                if (!groundAttackActive) ChangeState(PCState.Crouch); break;
+            case PCState.JumpRise:
+                if (rb.velocity.y <= 0f && !airAttackActive) ChangeState(PCState.Air); break;
+            case PCState.Air:
+                AirTransitions(); break;
+            case PCState.AirAttack:
+                if (!airAttackActive) ChangeState(PCState.Air); break;
+            case PCState.LandingLock:
+                if (Time.time - stateEnterTime > 0.05f) ChangeState(PostLandingState()); break;
+        }
+    }
+
+    private void GroundCommonTransitions()
+    {
+        if (keyDownJump && !groundAttackActive) { StartJump(); return; }
+
+        bool instantWant = allowInstantDuckAttack &&
+                           keyDownAttack &&
+                           Input.GetKey(KeyCode.S) &&
+                           !groundAttackActive;
+
+        if (instantWant && (!useCrouchLock || allowInstantDuckDuringLock))
+        {
+            StartDuckAttackInstant(); return;
+        }
+
+        if (keyDownAttack && !groundAttackActive && !Input.GetKey(KeyCode.S))
+        {
+            StartGroundAttack(); return;
+        }
+
+        if (Input.GetKey(KeyCode.S) && framesIgnoreCrouch <= 0)
+        {
+            ChangeState(PCState.CrouchCandidate);
+            downKeyHoldStart = Time.time;
+            return;
+        }
+
+        float dir = GetEffectiveInputDir();
+        ChangeState(Mathf.Abs(dir) > 0.01f ? PCState.GroundMove : PCState.GroundIdle);
+    }
+
+    private void CrouchCandidateTransitions()
+    {
+        if (!Input.GetKey(KeyCode.S)) { ChangeState(PCState.GroundIdle); return; }
+
+        bool instantWant = allowInstantDuckAttack && keyDownAttack && !groundAttackActive;
+        if (instantWant && (!useCrouchLock || allowInstantDuckDuringLock))
+        {
+            StartDuckAttackInstant(); return;
+        }
+
+        if (keyDownJump && !groundAttackActive) { StartJump(); return; }
+
+        if (Time.time - downKeyHoldStart >= crouchActivationDelay)
+        {
+            ChangeState(PCState.Crouch);
+        }
+    }
+
+    private void CrouchTransitions()
+    {
+        // 锁定期：禁止攻击/起身/移动
+        if (useCrouchLock && crouchLockFramesRemain > 0)
+            return;
+
+        // 松开 S：离开下蹲
+        if (!Input.GetKey(KeyCode.S))
+        {
+            // 松开瞬间根据是否有方向决定去 Idle 还是 Move
+            if (Mathf.Abs(GetEffectiveInputDir()) > 0.01f)
+                ChangeState(PCState.GroundMove);
+            else
+                ChangeState(PCState.GroundIdle);
+            return;
+        }
+
+        // 跳跃（如果你也想在锁定期禁止跳跃，把上面锁定期 return 放在这里前面即可）
+        if (keyDownJump && !groundAttackActive)
+        {
+            StartJump();
+            return;
+        }
+
+        // 下蹲攻击（含前进下蹲攻击判定）
+        if (keyDownAttack && !groundAttackActive)
+        {
+            StartDuckAttack();
+            return;
+        }
+
+        // 重要：不再因为水平输入离开下蹲
+        // 朝向翻转依旧由 HandleAutoFlip() 在 UpdateFSM 里处理
+    }
+
+    private void AirTransitions()
+    {
+        if (keyDownAttack && !airAttackLocked && !airAttackActive &&
+            Time.time - jumpStartTime >= airAttackAllowDelayAfterJump)
+            TryStartAirAttack();
+    }
+
+    private void EndGroundAttackReturn()
+    {
+        ChangeState(PostAttackGroundState());
+        attackFacingLocked = false;
+    }
+
+    private PCState PostAttackGroundState()
+    {
+        float dir = GetEffectiveInputDir();
+        return Mathf.Abs(dir) > 0.01f ? PCState.GroundMove : PCState.GroundIdle;
+    }
+
+    private PCState PostLandingState()
+    {
+        float dir = GetEffectiveInputDir();
+        return Mathf.Abs(dir) > 0.01f ? PCState.GroundMove : PCState.GroundIdle;
+    }
+    #endregion
+
+    #region Jump & Attack
+    private void StartJump()
+    {
+        jumping = true;
+        framesSinceJump = 0;
+        jumpStartTime = Time.time;
+        jumpStartY = rb.position.y;
+
+        float dir = DetermineJumpDir();
+        currentSpeedX = dir * moveSpeed;    // 直接采用常规速度（想完全不注入就去掉这一行）
+        ApplyHorizontal(currentSpeedX);
+        rb.velocity = new Vector2(rb.velocity.x, jumpForce);
+
+        string trig = Mathf.Abs(dir) > 0.05f ? TRIG_JumpForward : TRIG_JumpUp;
+        anim.ResetTrigger(TRIG_JumpForward);
+        anim.ResetTrigger(TRIG_JumpUp);
+        anim.SetTrigger(trig);
+
+        framesIgnoreCrouch = crouchIgnoreAfterJumpFrames;
+        airAttackLocked = false;
+        airAttackActive = false;
+        airAttackAnimPlaying = false;
+
+        ChangeState(PCState.JumpRise);
+    }
+
+    private float DetermineJumpDir()
+    {
+        if (keyDownRight) return 1f;
+        if (keyDownLeft) return -1f;
+        float eff = GetEffectiveInputDirRawOrTap();
+        
+        if (Mathf.Abs(eff) > 0.01f) return Mathf.Sign(eff);
+        if (framesSinceDirNonZero <= 3) return lastNonZeroDir;
+        return 0f;
+    }
+
+    private void StartGroundAttack()
+    {
+        groundAttackActive = true;
+        attackFacingLocked = lockFacingDuringGroundAttack;
+        if (zeroHorizontalOnGroundAttackStart) ApplyHorizontal(0);
+        anim.SetTrigger(TRIG_Attack);
+        ChangeState(PCState.GroundAttack);
+    }
+
+    private void StartDuckAttack()
+    {
+        groundAttackActive = true;
+        duckAttackFacingLocked = lockFacingDuringDuckAttack;
+        if (zeroHorizontalOnDuckAttackStart) ApplyHorizontal(0);
+        duckAttackHorizLockRemain = duckAttackHorizLockFrames;
+        anim.SetBool(PARAM_IsDucking, true);
+        bool fwd = allowInstantDuckForwardAttack && Mathf.Abs(GetEffectiveInputDirRawOrTap()) > 0.01f;
+        anim.SetTrigger(fwd ? TRIG_DuckFwdAttack : TRIG_DuckAttack);
+        ChangeState(PCState.DuckAttack);
+    }
+
+    private void StartDuckAttackInstant()
+    {
+        groundAttackActive = true;
+        duckAttackFacingLocked = lockFacingDuringDuckAttack;
+        if (zeroHorizontalOnDuckAttackStart) ApplyHorizontal(0);
+        duckAttackHorizLockRemain = duckAttackHorizLockFrames;
+        anim.SetBool(PARAM_IsDucking, true);
+        bool fwd = allowInstantDuckForwardAttack && Mathf.Abs(GetEffectiveInputDirRawOrTap()) > 0.01f;
+        anim.SetTrigger(fwd ? TRIG_DuckFwdAttack : TRIG_DuckAttack);
+        ChangeState(PCState.DuckAttack);
+    }
+
+    private void TryStartAirAttack()
+    {
+        var st = anim.GetCurrentAnimatorStateInfo(0);
+        for (int i = 0; i < AirAttackAnimStates.Length; i++)
+            if (st.IsName(AirAttackAnimStates[i])) return;
+        if (airAttackAnimPlaying || airAttackActive) return;
+
+        airAttackActive = true;
+        airAttackLocked = true;
+        airAttackAnimPlaying = true;
+        airAttackStartTime = Time.time;
+
+        bool downFwd = Input.GetKey(KeyCode.S);
+        anim.SetTrigger(downFwd ? TRIG_JumpDownFwdAttack : TRIG_JumpAttack);
+        ChangeState(PCState.AirAttack);
+    }
+    #endregion
 
     #region 输入
-    private void ReadInputs()
+    private void CaptureInput()
     {
         rawInputX = Input.GetAxisRaw("Horizontal");
-    }
-    #endregion
-
-    #region 下蹲
-    private void HandleDuck()
-    {
-        bool wantDuck = isGrounded && Input.GetKey(KeyCode.S);
-
-        if (wantDuck && !isDucking)
-        {
-            currentSpeedX = 0f;
-            rb.velocity = new Vector2(0f, rb.velocity.y);
-        }
-
-        isDucking = wantDuck;
-        if (isGettingUp)
-            isDucking = false;
-    }
-    #endregion
-
-    #region 水平移动
-    private void HandleHorizontalMovement()
-    {
-        // 下蹲锁移动
-        if (isDucking && isGrounded && !inDuckAttack && !attackLocked)
-        {
-            currentSpeedX = 0f;
-            rb.velocity = new Vector2(0f, rb.velocity.y);
-            return;
-        }
-
-        // 空中攻击中可漂移
-        if (isInAirAttack && !isGrounded && allowAirMoveDuringAirAttack)
-        {
-            ProcessNormalHorizontal();
-            return;
-        }
-
-        if (IsMovementLocked())
-        {
-            currentSpeedX = 0f;
-            rb.velocity = new Vector2(0f, rb.velocity.y);
-            return;
-        }
-
-        ProcessNormalHorizontal();
-    }
-
-    private void ProcessNormalHorizontal()
-    {
-        targetSpeedX = rawInputX * moveSpeed;
+        keyDownLeft = Input.GetKeyDown(KeyCode.A) || Input.GetKeyDown(KeyCode.LeftArrow);
+        keyDownRight = Input.GetKeyDown(KeyCode.D) || Input.GetKeyDown(KeyCode.RightArrow);
+        keyDownJump = Input.GetKeyDown(KeyCode.K);
+        keyDownAttack = Input.GetKeyDown(KeyCode.J);
 
         if (Mathf.Abs(rawInputX) > 0.01f)
         {
-            float accel = isGrounded ? groundAcceleration : airAcceleration;
-            currentSpeedX = Mathf.MoveTowards(currentSpeedX, targetSpeedX, accel * Time.fixedDeltaTime);
+            bufferedInputX = rawInputX;
+            bufferedFramesRemain = horizBufferFrames;
+            tapImpulseDir = 0; tapImpulseRemain = 0;
+            lastNonZeroDir = Mathf.Sign(rawInputX);
+            framesSinceDirNonZero = 0;
         }
         else
         {
-            float decel = isGrounded ? groundDeceleration : airDeceleration;
-            currentSpeedX = Mathf.MoveTowards(currentSpeedX, 0f, decel * Time.fixedDeltaTime);
+            if (bufferedFramesRemain > 0) bufferedFramesRemain--;
+            else bufferedInputX = 0f;
+            framesSinceDirNonZero++;
         }
 
-        if (Mathf.Abs(currentSpeedX) < runStopThreshold)
-            currentSpeedX = 0f;
+        if (keyDownLeft) { tapImpulseDir = -1; tapImpulseRemain = tapImpulseFrames; }
+        else if (keyDownRight) { tapImpulseDir = 1; tapImpulseRemain = tapImpulseFrames; }
 
-        rb.velocity = new Vector2(currentSpeedX, rb.velocity.y);
+        if (tapImpulseRemain > 0 && Mathf.Abs(rawInputX) > 0.01f)
+        {
+            tapImpulseRemain = 0; tapImpulseDir = 0;
+        }
+
+        if (framesIgnoreCrouch > 0) framesIgnoreCrouch--;
     }
 
-    private bool IsMovementLocked()
+    private float GetEffectiveInputDir()
     {
-        // 不把空中攻击硬锁水平，除非地面 attackLocked 或其它锁
-        if (attackLocked && (isGrounded || !isInAirAttack)) return true;
-        if (inDuckAttack || inBackFlash || isGettingUp) return true;
-        if (isTurning && turnLocksMovement) return true;
-        return false;
+        if (Mathf.Abs(rawInputX) > 0.01f) return rawInputX;
+        if (tapImpulseRemain > 0) return tapImpulseDir;
+        if (Mathf.Abs(bufferedInputX) > 0.01f) return bufferedInputX;
+        return 0f;
+    }
+    private float GetEffectiveInputDirRawOrTap()
+    {
+        if (Mathf.Abs(rawInputX) > 0.01f) return rawInputX;
+        if (tapImpulseRemain > 0) return tapImpulseDir;
+        return 0f;
     }
     #endregion
 
-    #region 跳跃
-    private void HandleJumpLogic()
+    #region Movement
+    private void ApplyHorizontal(float x)
     {
-        if (Input.GetKeyDown(KeyCode.K) && isGrounded && !isJumping && !attackLocked && !inBackFlash && !isDucking)
-        {
-            isJumping = true;
-            isFalling = false;
-            jumpStartY = rb.position.y;
-            rb.velocity = new Vector2(rb.velocity.x, jumpForce);
-
-            // 禁止在刚起跳的很短时间里触发空中攻击（避免 K+D+S+J 连按瞬触发）
-            airAttackAllowedTime = Time.time + airAttackAllowDelayAfterJump;
-
-            string trig = Mathf.Abs(rawInputX) > 0.05f ? TRIG_JumpForward : TRIG_JumpUp;
-            anim.ResetTrigger(TRIG_JumpUp);
-            anim.ResetTrigger(TRIG_JumpForward);
-            anim.SetTrigger(trig);
-
-            if (debugJumpLog) Debug.Log("[Jump] fire trigger: " + trig);
-        }
-
-        if (isJumping && !isGrounded)
-        {
-            float deltaH = rb.position.y - jumpStartY;
-            if (deltaH >= maxJumpHeight && rb.velocity.y > 0f)
-                rb.velocity = new Vector2(rb.velocity.x, 0f);
-        }
-
-        if (enableVariableJump && Input.GetKeyUp(KeyCode.K) && isJumping && rb.velocity.y > 0f)
-            rb.velocity = new Vector2(rb.velocity.x, rb.velocity.y * variableJumpCutMultiplier);
-
-        if (!isGrounded && rb.velocity.y < 0f)
-            isFalling = true;
-
-        if (!prevIsGrounded && isGrounded)
-        {
-            isJumping = false;
-            isFalling = false;
-            if (debugJumpLog) Debug.Log("[Jump] Landed.");
-        }
+        var v = rb.velocity;
+        v.x = x;
+        rb.velocity = v;
+        currentSpeedX = x;
+    }
+    private void AccelerateHorizontal(bool grounded, bool hasInput)
+    {
+        float eff = GetEffectiveInputDir();
+        float target = hasInput ? eff * moveSpeed : 0f;
+        float accel = grounded
+            ? (hasInput ? groundAcceleration : groundDeceleration)
+            : (hasInput ? airAcceleration : airDeceleration);
+        currentSpeedX = Mathf.MoveTowards(currentSpeedX, target, accel * Time.deltaTime);
+        if (grounded && !hasInput && Mathf.Abs(currentSpeedX) < stopThreshold) currentSpeedX = 0f;
+        ApplyHorizontal(currentSpeedX);
     }
     #endregion
 
-    #region 空中攻击
-    private void HandleAttackInput()
-    {
-        if (!Input.GetKeyDown(KeyCode.J)) return;
-        if (attackLocked || inBackFlash) return;
-
-        // 空中
-        if (!isGrounded)
-        {
-            // 防止在刚起跳的那一小段时间被误触发空中攻击
-            if (Time.time < airAttackAllowedTime)
-                return;
-
-            if (isInAirAttack) return;
-
-            bool isDownForward = Input.GetKey(KeyCode.S);
-            if (isDownForward)
-            {
-                anim.SetTrigger(TRIG_JumpDownFwdAttack);
-                StartAirAttack(true);
-            }
-            else
-            {
-                anim.SetTrigger(TRIG_JumpAttack);
-                StartAirAttack(false);
-            }
-            return;
-        }
-
-        // 地面下蹲攻击
-        if (isDucking && isGrounded)
-        {
-            if (Mathf.Abs(rawInputX) > 0.01f)
-                anim.SetTrigger(TRIG_DuckFwdAttack);
-            else
-                anim.SetTrigger(TRIG_DuckAttack);
-        }
-        else
-        {
-            anim.SetTrigger(TRIG_Attack);
-        }
-    }
-
-    private void StartAirAttack(bool isDownForward)
-    {
-        isInAirAttack = true;
-        attackLocked = true;
-        inDownForwardAttack = isDownForward;
-
-        if (debugAirAttackLog) Debug.Log("[AirAttack] Start " + (isDownForward ? "DownForward" : "Normal"));
-
-        // 不再对下落攻击施加特殊重力或强制落地——与普通空中攻击行为一致
-    }
-
-    public void OnAirAttackEnd() // animation event can call this if you have it
-    {
-        FinishAirAttackIfEnded();
-    }
-
-    private void FinishAirAttackIfEnded()
-    {
-        if (!isInAirAttack) return;
-
-        if (!isGrounded)
-        {
-            attackLocked = false;
-            isInAirAttack = false;
-            inDownForwardAttack = false;
-
-            // 空中攻击结束若方向键与朝向相反，立即空中瞬转
-            int dir = GetInputDir();
-            if (dir != 0)
-            {
-                bool wantRight = dir > 0;
-                if (wantRight != isFacingRight && allowAirImmediateTurn)
-                    ImmediateFlip(wantRight);
-            }
-
-            if (debugAirAttackLog) Debug.Log("[AirAttack] End in air -> free");
-        }
-        else
-        {
-            attackLocked = false;
-            isInAirAttack = false;
-            inDownForwardAttack = false;
-        }
-    }
-
-    private void HandleAirAttackLandingInterrupt()
-    {
-        if (isGrounded && isInAirAttack)
-        {
-            if (debugAirAttackLog) Debug.Log("[AirAttack] Force land interrupt");
-            attackLocked = false;
-            isInAirAttack = false;
-            inDownForwardAttack = false;
-        }
-    }
-    #endregion
-
-    #region 地面检测
+    #region Ground / Air
     private void CheckGrounded()
     {
+        if (!groundPoint) { isGrounded = false; return; }
         isGrounded = Physics2D.OverlapCircle(groundPoint.position, groundCheckRadius, groundLayer);
+        if (isGrounded) jumping = false;
     }
     #endregion
 
-    #region 转身（空中瞬转 / 地面动画）
-    private void HandleTurnInput()
+    #region 空攻结束
+    private void AutoAirAttackEnd()
     {
-        int dir = GetInputDir();
-        if (dir == 0) return;
-        bool wantRight = dir > 0;
-
-        if (!isGrounded)
+        if (!airAttackActive) return;
+        var st = anim.GetCurrentAnimatorStateInfo(0);
+        bool inAtk = false;
+        for (int i = 0; i < AirAttackAnimStates.Length; i++)
         {
-            // 空中：允许瞬时转（攻击中禁止）
-            if (isInAirAttack) return;
-            if (wantRight != isFacingRight && allowAirImmediateTurn)
+            if (st.IsName(AirAttackAnimStates[i]))
             {
-                ImmediateFlip(wantRight);
+                inAtk = true;
+                if (st.normalizedTime >= 0.98f &&
+                    Time.time - airAttackStartTime >= airAttackMinDuration)
+                {
+                    airAttackActive = false;
+                    airAttackLocked = false;
+                    airAttackAnimPlaying = false;
+                    ChangeState(PCState.Air);
+                }
+                break;
             }
-            return;
         }
-
-        // 地面：使用转身动画（但只在脚本判断允许时触发）
-        if (wantRight == isFacingRight)
-            return;
-
-        // 只有在 CanTurn() 允许的情况下才触发 Turn 的 Trigger（你删掉 AnyState→Turn，必须通过状态过渡到 Turn）
-        if (!CanTurn()) return;
-
-        // 发起 ground turn（Animator 需要有从地面相关状态到 Turn 的过渡，条件为 Trig_Turn）
-        desiredFacingRight = wantRight;
-        anim.SetTrigger(TRIG_Turn);
-        isTurning = true;
-        hasFlippedInThisTurn = false;
-        if (turnFlipMode == TurnFlipMode.Immediate)
+        if (!inAtk && airAttackAnimPlaying &&
+            Time.time - airAttackStartTime >= airAttackMinDuration)
         {
-            ImmediateFlip(wantRight);
-            hasFlippedInThisTurn = true;
+            airAttackActive = false;
+            airAttackLocked = false;
+            airAttackAnimPlaying = false;
+            ChangeState(PCState.Air);
         }
-        if (debugTurnLog) Debug.Log("[Turn] Ground trigger -> " + (wantRight ? "Right" : "Left"));
-    }
-
-    private bool CanTurn()
-    {
-        // 禁止转向的情况：被锁、下蹲攻击中、起身中、闪避等；空中攻击中也禁止（但空中转向逻辑在上面单独处理）
-        if (attackLocked || inDuckAttack || inBackFlash || isGettingUp) return false;
-        return true;
-    }
-
-    private int GetInputDir()
-    {
-        if (rawInputX > 0.01f) return 1;
-        if (rawInputX < -0.01f) return -1;
-        return 0;
-    }
-
-    private void ImmediateFlip(bool faceRight)
-    {
-        isFacingRight = faceRight;
-        flipRoot.localScale = isFacingRight ? Vector3.one : new Vector3(-1, 1, 1);
     }
     #endregion
 
-    #region 动画参数同步
+    #region 动画事件 (保留)
+    public void OnAttackStart() { groundAttackActive = true; }
+    public void OnAttackEnd() { groundAttackActive = false; attackFacingLocked = false; }
+    public void OnDuckAttackStart() { groundAttackActive = true; }
+    public void OnDuckAttackEnd() { groundAttackActive = false; duckAttackFacingLocked = false; }
+    public void OnDuckFwdAttackStart() { groundAttackActive = true; }
+    public void OnDuckFwdAttackEnd() { groundAttackActive = false; duckAttackFacingLocked = false; }
+    public void OnAirAttackEnd()
+    {
+        if (!airAttackActive) return;
+        if (Time.time - airAttackStartTime < airAttackMinDuration) return;
+        airAttackActive = false;
+        airAttackLocked = false;
+        airAttackAnimPlaying = false;
+        ChangeState(PCState.Air);
+    }
+    #endregion
+
+    #region Animator 参数
     private void UpdateAnimatorParams()
     {
         anim.SetFloat(PARAM_MoveSpeed, Mathf.Abs(currentSpeedX));
         anim.SetBool(PARAM_IsGrounded, isGrounded);
-        anim.SetBool(PARAM_IsDucking, isDucking);
-        anim.SetBool(PARAM_IsGettingUp, isGettingUp);
-        anim.SetBool(PARAM_IsFalling, isFalling);
-    }
-    #endregion
-
-    #region 其它动画 events
-    public void OnDuckCancelable() { duckCancelable = true; }
-
-    public void OnGetUpStart()
-    {
-        isGettingUp = true;
-        anim.SetBool(PARAM_IsGettingUp, true);
-        currentSpeedX = 0f;
-        rb.velocity = new Vector2(0, rb.velocity.y);
-    }
-    public void OnGetUpEnd()
-    {
-        isGettingUp = false;
+        anim.SetBool(PARAM_IsDucking,
+            state == PCState.Crouch ||
+            state == PCState.CrouchCandidate ||
+            state == PCState.DuckAttack);
         anim.SetBool(PARAM_IsGettingUp, false);
-    }
-
-    public void OnJumpStart() { }
-    public void OnJumpEnd() { }
-
-    // 转身动画事件（地面）
-    public void OnTurnStart() { }
-    public void OnTurnFlip()
-    {
-        if (turnFlipMode == TurnFlipMode.ByEvent && !hasFlippedInThisTurn)
-        {
-            ImmediateFlip(desiredFacingRight);
-            hasFlippedInThisTurn = true;
-            if (debugTurnLog) Debug.Log("[Turn] Flip event");
-        }
-    }
-    public void OnTurnEnd()
-    {
-        isTurning = false;
-        hasFlippedInThisTurn = false;
-        if (debugTurnLog) Debug.Log("[Turn] End");
-    }
-
-    // 地面攻击
-    public void OnAttackStart()
-    {
-        attackLocked = true;
-        currentSpeedX = 0f;
-        rb.velocity = new Vector2(0, rb.velocity.y);
-    }
-    public void OnAttackEnd()
-    {
-        attackLocked = false;
-    }
-
-    // 下蹲攻击
-    public void OnDuckAttackStart()
-    {
-        inDuckAttack = true; attackLocked = true;
-        currentSpeedX = 0f; rb.velocity = new Vector2(0, rb.velocity.y);
-    }
-    public void OnDuckAttackEnd() { inDuckAttack = false; attackLocked = false; }
-    public void OnDuckAttackEndStart() { inDuckAttack = true; }
-    public void OnDuckAttackEndEnd() { inDuckAttack = false; attackLocked = false; }
-
-    // 下蹲前进攻击
-    public void OnDuckFwdAttackStart()
-    {
-        inDuckAttack = true; attackLocked = true;
-        currentSpeedX = 0f; rb.velocity = new Vector2(0, rb.velocity.y);
-    }
-    public void OnDuckFwdAttackEnd() { inDuckAttack = false; attackLocked = false; }
-    public void OnDuckFwdAttackEndStart() { inDuckAttack = true; }
-    public void OnDuckFwdAttackEndEnd() { inDuckAttack = false; attackLocked = false; }
-    #endregion
-
-    public void OnAirAttackStart()
-    {
-        // 可选：如果你想用动画事件作为开始锁定点，可以在这里设置：
-        // isInAirAttack = true; attackLocked = true;
-        // 但当前系统在 StartAirAttack 已经做了锁定，所以这里默认留空（兼容）
-    }
-
-    #region 参数自检
-    private void CheckAnimatorParams()
-    {
-        if (anim == null) return;
-        string[] neededTriggers = {
-            TRIG_JumpUp, TRIG_JumpForward,
-            TRIG_Attack, TRIG_DuckAttack, TRIG_DuckFwdAttack,
-            TRIG_JumpAttack, TRIG_JumpDownFwdAttack, TRIG_Turn
-        };
-        string[] neededBools = {
-            PARAM_IsGrounded, PARAM_IsDucking, PARAM_IsGettingUp, PARAM_IsFalling
-        };
-        var missing = neededTriggers
-            .Where(t => !HasParam(t, AnimatorControllerParameterType.Trigger))
-            .Concat(neededBools.Where(b => !HasParam(b, AnimatorControllerParameterType.Bool)))
-            .ToArray();
-        if (missing.Length > 0)
-            Debug.LogWarning("[Animator Param Missing] " + string.Join(", ", missing));
-    }
-    private bool HasParam(string name, AnimatorControllerParameterType type)
-    {
-        return anim.parameters.Any(p => p.type == type && p.name == name);
+        anim.SetBool(PARAM_IsFalling, !isGrounded && rb.velocity.y < 0);
     }
     #endregion
-
-#if UNITY_EDITOR
-    private void OnDrawGizmosSelected()
-    {
-        if (groundPoint)
-        {
-            Gizmos.color = Color.yellow;
-            Gizmos.DrawWireSphere(groundPoint.position, groundCheckRadius);
-        }
-    }
-
-    
-#endif
 }

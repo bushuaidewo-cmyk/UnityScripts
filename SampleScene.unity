@@ -702,26 +702,42 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   flipRoot: {fileID: 432349528}
-  debugJumpLog: 1
-  logMissingAnimatorParams: 1
-  debugTurnLog: 1
+  groundPoint: {fileID: 897052040}
+  groundLayer:
+    serializedVersion: 2
+    m_Bits: 64
+  groundCheckRadius: 0.1
   moveSpeed: 1
   groundAcceleration: 40
   airAcceleration: 25
   groundDeceleration: 60
   airDeceleration: 30
-  runStopThreshold: 0.05
+  stopThreshold: 0.05
   jumpForce: 2.25
   maxJumpHeight: 1
-  enableVariableJump: 1
-  variableJumpCutMultiplier: 0.5
-  turnLocksMovement: 0
-  turnFlipMode: 1
-  groundPoint: {fileID: 897052040}
-  groundCheckRadius: 0.1
-  groundLayer:
-    serializedVersion: 2
-    m_Bits: 64
+  variableJump: 1
+  jumpCutMultiplier: 0.5
+  allowAirControlDuringRise: 1
+  crouchActivationDelay: 0.08
+  crouchIgnoreAfterJumpFrames: 4
+  allowInstantDuckAttack: 1
+  allowInstantDuckForwardAttack: 1
+  zeroHorizontalOnDuckAttackStart: 1
+  duckAttackHorizLockFrames: 4
+  useCrouchLock: 0
+  crouchActionUnlockFrame: 3
+  allowInstantDuckDuringLock: 0
+  zeroHorizontalOnGroundAttackStart: 0
+  lockFacingDuringGroundAttack: 1
+  lockFacingDuringDuckAttack: 1
+  airAttackMinDuration: 0.12
+  airAttackAllowDelayAfterJump: 0.08
+  allowAirAttackDuringRise: 1
+  airAttackRiseMinDelay: 0
+  allowAirMoveDuringAirAttack: 1
+  horizBufferFrames: 2
+  tapImpulseFrames: 0
+  allowAirImmediateTurn: 1
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
