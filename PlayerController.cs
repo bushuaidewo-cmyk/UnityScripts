@@ -5,9 +5,14 @@ public class PlayerController : MonoBehaviour
     #region Inspector (Minimal + Shield + BackFlash)
     [Header("组件")]
     [SerializeField] private Transform flipRoot;
+    [Header("地面检测 (双点带偏移)")]
+    [SerializeField] private Vector2 groundCheckOffset1 = new Vector2(-0.2f, -0.9f);  // 左脚
+    [SerializeField] private Vector2 groundCheckOffset2 = new Vector2(0.2f, -0.9f);   // 右脚
     [SerializeField] private Transform groundPoint;
+    [SerializeField] private Transform groundPoint2;             // 新增：第二个检测点
     [SerializeField] private LayerMask groundLayer;
     [SerializeField] private float groundCheckRadius = 0.1f;      // 新增：用于直接驱动盾Hub
+    [SerializeField] private float groundCheckRadius2 = 0.1f;    // 新增：第二个检测半径
     [SerializeField] private AnimationEventRelay relay;
 
     [Header("移动")]
@@ -178,6 +183,7 @@ public class PlayerController : MonoBehaviour
         anim = GetComponentInChildren<Animator>();
         rb = GetComponent<Rigidbody2D>();
         if (!relay) relay = GetComponentInChildren<AnimationEventRelay>(); // 自动抓取
+
     }
 
     private void Update()
@@ -229,6 +235,24 @@ public class PlayerController : MonoBehaviour
             backFlashLock = false;
 
         UpdateAnimatorParams();
+
+        // ---- 下落动画触发（优先：刚离地；兜底：空中且速度向下）----
+        if (prevGrounded && !isGrounded)
+        {
+            // 刚离开地面，速度可能接近 0，但直接进入下落动画
+            SafeResetTrigger("Trig_JumpDown");
+            SafeSetTrigger("Trig_JumpDown");
+        }
+        else if (!isGrounded && rb.velocity.y <= -0.05f)
+        {
+            // 已在空中且明显向下时，确保处于下落动画
+            var st = anim.GetCurrentAnimatorStateInfo(0);
+            if (!st.IsName("player_jump_down"))
+            {
+                SafeResetTrigger("Trig_JumpDown");
+                SafeSetTrigger("Trig_JumpDown");
+            }
+        }
 
         prevGrounded = isGrounded;
     }
@@ -300,12 +324,28 @@ public class PlayerController : MonoBehaviour
 
         if (!prevGrounded && isGrounded)
         {
+            // ---- 落地瞬间逻辑 ----
             isJumping = false;
             airAttackActive = false;
             airAttackAnimPlaying = false;
+
+            // ✅ 强制刷新地面状态
+            anim.ResetTrigger(TRIG_JumpUp);
+            anim.ResetTrigger(TRIG_JumpForward);
+
+            // 若Animator当前仍在jump系状态，立刻切回IdleStart
+            var st = anim.GetCurrentAnimatorStateInfo(0);
+            if (st.IsName("player_jump_up") || st.IsName("player_jump_forward"))
+            {
+                anim.CrossFadeInFixedTime("player_idle_start", 0f, 0, 0f);
+                anim.Update(0f);
+            }
+
+            // 恢复举盾
             if (shieldHeld && !shieldActiveStanding && !shieldActiveDuck)
                 TryActivateStandingShield(true);
         }
+
     }
 
     private void HandleVariableJumpCut()
@@ -1255,10 +1295,35 @@ public class PlayerController : MonoBehaviour
     #region Ground Check
     private void CheckGrounded()
     {
-        if (!groundPoint) { isGrounded = false; return; }
-        isGrounded = Physics2D.OverlapCircle(groundPoint.position, groundCheckRadius, groundLayer);
+        // 计算两个检测点的世界坐标
+        Vector2 p1 = (Vector2)transform.position + groundCheckOffset1;
+        Vector2 p2 = (Vector2)transform.position + groundCheckOffset2;
+
+        // 分别检测两个检测体是否命中地面层
+        bool grounded1 = Physics2D.OverlapCircle(p1, groundCheckRadius, groundLayer);
+        bool grounded2 = Physics2D.OverlapCircle(p2, groundCheckRadius2, groundLayer);
+
+        // ✅ 规则：必须两个检测体都命中地面层才算落地
+        //isGrounded = grounded1 && grounded2;
+        isGrounded = grounded1 || grounded2;
+    }
+
+    // ✅ Scene 视图中显示两个检测圈（绿色=落地，红色=悬空）
+    private void OnDrawGizmosSelected()
+    {
+        if (!enabled) return;
+
+        Vector2 p1 = (Vector2)transform.position + groundCheckOffset1;
+        Vector2 p2 = (Vector2)transform.position + groundCheckOffset2;
+
+        Gizmos.color = isGrounded ? Color.green : Color.red;
+        Gizmos.DrawWireSphere(p1, groundCheckRadius);
+        Gizmos.DrawWireSphere(p2, groundCheckRadius2);
+
+
     }
     #endregion
+
 
     #region Animator
     // UpdateAnimatorParams：BackFlashInterruptible 用 Safe；其余参数可选也用 Safe
@@ -1283,6 +1348,8 @@ public class PlayerController : MonoBehaviour
             shieldActiveDuck ||
             (groundAttackActive && duckAttackFacingLocked));
         SafeSetBool(PARAM_IsFalling, !isGrounded && rb.velocity.y < 0);
+
+        anim.SetFloat("VelocityY", rb.velocity.y);
     }
     #endregion
 
