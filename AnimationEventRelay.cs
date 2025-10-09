@@ -109,43 +109,13 @@ public class AnimationEventRelay : MonoBehaviour
         shieldHub.PlayWeapon(shieldDuckState);
     }
 
-    // 动画事件：根据当前输入与姿态“纠正”盾的显示
-    // 规则：未按 L -> Stop；按 L -> 仅地面且按 S 时用下蹲盾；空中一律用站立盾
-    // 核心修复：后闪期间（含过渡期）屏蔽 ShieldRefresh 事件，避免“下↑下”抖动
-    public void ShieldRefresh()
-    {
-        if (!shieldHub) return;
-
-        // 后闪动画/过渡期间：由 PlayerController 统一屏蔽，避免“下↑上”
-        if (player && player.IsInBackFlashAnimOrTransition())
-            return;
-
-        bool holdShield = Input.GetKey(KeyCode.L);
-        if (!holdShield)
-        {
-            shieldHub.StopWeapon();
-            return;
-        }
-
-        // 直接读取控制器的地面状态，避免依赖 Animator 参数
-        bool grounded = player ? player.IsGroundedNow : false;
-
-        bool wantDuck = grounded && Input.GetKey(KeyCode.S);
-        string target = wantDuck ? shieldDuckState : shieldStandingState;
-        if (!string.IsNullOrEmpty(target))
-            shieldHub.PlayWeapon(target);
-    }
+    
 
     // ================= 原有：转发角色其它事件（保留） =================
-    public void OnAttackStart() => player?.OnAttackStart();
+    
     public void OnAttackEnd() => player?.OnAttackEnd();
-
-    public void OnDuckAttackStart() => player?.OnDuckAttackStart();
     public void OnDuckAttackEnd() => player?.OnDuckAttackEnd();
-
-    public void OnDuckFwdAttackStart() => player?.OnDuckFwdAttackStart();
-    public void OnDuckFwdAttackEnd() => player?.OnDuckFwdAttackEnd();
-
+   
     // ================= Helpers =================
     private static bool TryParseXY(string input, out float x, out float y)
     {

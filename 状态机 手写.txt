@@ -1,0 +1,222 @@
+帮我把这个按照你的逻辑整理一下
+这是《恶魔城月下幻想曲》推理出来的角色操作、动画、状态
+动画是2D像素，所以动画硬切也没有问题
+
+——————————————————————————————————————————————————————————
+
+动画 英文是文件名字，中文备注说明
+
+站立
+player_idle_start 角色原地颤动到呼吸过度
+player_idle 角色原地呼吸循环
+player_run_start 角色原地停止到跑动过度
+player_run 角色跑动循环
+player_run_end 角色跑动到原地停止的过度
+
+player_attack_start 角色水平攻击
+player_attack_end 角色水平攻击后摇收招
+
+下蹲
+player_duck 角色原地站立到下蹲过度
+player_duck_idle 角色原地下蹲呼吸循环
+player_getUp 角色原地下蹲到站立  
+player_duck_attack 角色原地下蹲水平攻击
+player_duck_attack_end 角色下蹲水平攻击后摇
+player_duckForward_attack 角色下蹲斜下方攻击
+player_duckForward_attack_end 角色下蹲斜下方攻击后摇
+
+跳跃
+player_jump_up 角色原地向上跳跃
+player_jump_forward 角色向前跳跃
+player_jump_down 角色高点落下中（最后一帧保持不变）
+player_jump_ground 角色落到地上缓冲
+player_jump_double 角色二段跳跃
+player_jump_attack 角色跳跃水平攻击
+player_jump_downForward_attack 角色跳跃斜下攻击
+
+魔法
+player_magic_up 角色原地施法准备前摇
+player_magic_idle 角色原地施法准备呼吸循环
+player_magic_attack 角色原地施法攻击
+player_magic_down 角色原地施法结束后摇收招
+
+盾
+player_shield_up 角色原地举盾前摇
+player_shield_idle 角色原地举盾呼吸循环
+
+盾动画属于绑定在角色身上，所以跳跃、下蹲、站立，随角色状态改变不同位置
+
+后移闪避
+player_backFlash 角色后移闪避
+
+受击
+player_backHit1 角色背后受击1
+player_backHit2 角色背后受击2
+player_frontHit1 角色前面受击1
+player_frontHit2 角色前面受击2
+
+死亡
+player_die
+
+击飞
+player_flyHIT角色自转循环
+
+——————————————————————————————————————————————————————————
+
+按键
+PC键盘
+
+键盘对应方向键
+A=left角色向左移动
+S=down角色下蹲
+D=right角色向右移动
+W=up角色施法准备
+
+键盘对应按钮
+J=角色攻击
+K=角色跳跃
+L=角色举盾
+I=角色后移闪避
+
+——————————————————————————————————————————————————————————
+
+基础操作
+默认角色朝右，朝左镜像
+
+休息
+什么都不按：player_idle，默认朝右就向右播放player_idle循环
+
+移动
+按住D键：角色向右移动，从player_idle 硬切到 player_run_start 播完，接 player_run循环，
+松开D键：角色停止移动，从player_run 硬切到 player_run_end 播完，接player_idle_start播完，接player_idle循环
+按住A键：角色向左移动，从player_idle 硬切到 player_run_start 播完，接 player_run循环，
+松开A键：角色停止移动，从player_run 硬切到 player_run_end 播完，接player_idle_start播完，接player_idle循环（把角色镜像）
+松开A键到按住D键：角色由左向右转动，播放player_turn
+松开D键到按住A键：角色由右向左转动，播放player_turn（把角色镜像）
+
+魔法
+按住W键：player_magic_up播完，接player_magic_idle循环
+松开W键：从player_magic_idle硬切到player_magic_down
+按住W键后按下J：播放player_magic_attack（动画2帧）
+
+下蹲
+按住S键：player_duck接player_duck_idle循环
+松开S键：player_duck_idle硬切到player_getUp
+按住S键后按下J键：player_duck_attack播完，接player_duck_attack_end
+按住S键后按住D键再按下J键：player_duckForward_attack播完，接player_duckForward_attack_end
+按住S键后按住A键再按下J键：player_duckForward_attack播完，接player_duckForward_attack_end（把角色镜像）
+
+攻击
+按下J键：player_attack_start播完，接player_attack_end
+
+跳跃
+按住K键：player_jump_up
+松开K键：player_jump_down
+按住D键后再按住K键：player_jump_forward
+按住A键后再按住K键：player_jump_forward（把角色镜像）
+按住K键后按下J键：player_jump_attack
+按住K键后按住S键再按下J键：player_jump_downForward_attack
+
+盾
+按住L键：player_shield_up播完，接player_shield_idle循环
+
+
+后移闪躲
+按下I键：player_backFlash
+
+——————————————————————————————————————————————————————————
+
+进阶操作
+默认角色朝右，朝左镜像
+
+角色原地呼吸到按住D键向右移动：player_idle循环硬切到 - player_run_start - player_run循环
+
+按住D键向右移动中，再player_run_start播放中松开D键：player_run_start硬切到 - player_idle_start - player_idle循环
+
+松开D键停止移动，再player_run_end播放中按住D键向右移动：player_run_end硬切到 - player_run_start
+
+松开D键停止移动，再player_idle_start播放中按住D键向右移动：player_idle_start硬切到 -player_run_start
+
+按住D键向右移动中，不可以同时按A键向左移动，反之按A中不可以同时按D键
+
+播放player_idle、player_run_start、player_run、player_run_end、player_idle_start这些中，按下I键player_backFlash会打断它们，并且player_backFlash播放到某一时刻才可以其它操作
+
+按住L播放player_shield_up中（0-8帧，播放到第5帧），松开L的时刻倒播player_shield_up（第5帧倒播，5-0帧）
+按住L播放player_shield_idle循环中，松开L倒播player_shield_up
+松开L倒播player_shield_up中（8-0帧，播放到第3帧），按住L的时刻播放player_shield_up（第3帧播放，3-8帧）
+播放player_idle、player_run_start、player_run、player_run_end、player_idle_start、player_turn、player_shield_up、player_shield_idle、player_shield_down、player_jump_ground这些中，按下J键player_attack_start会打断它们，并player_attack_start播完才可以其它操作
+
+按下I键播放player_backFlash中，按下J键player_attack_start、按下S键player_duck、按住L键player_shield_up、按住K键player_jump_up或K键+D键player_jump_forward或K键+A键 镜像player_jump_forward会打断它
+播放player_attack_end中，player_idle、player_run_start、player_run、player_run_end、player_idle_start、player_turn、player_shield_up、player_jump_up、player_jump_forward会打断它
+
+按住S键播放player_duck中，松开S键，player_duck播完，才接player_getUp
+松开S键播放player_getUp中，按住S键，player_getUp播完，才接player_duck
+按住S键，同时再按住D键，角色下蹲朝右，不可以同时按A键下蹲朝左，反之按住S键，同时再按住A键，角色下蹲朝左，不可以同时按D键下蹲朝右
+按住S键播放player_duck中，再按下J键，直接播放player_duck_attack，打断player_duck，同理player_duckForward_attack也可以打断player_duck
+松开S键播放player_getUp中，再按下J键，直接播放player_attack_start，打断player_getUp
+播放player_duck、player_duck_idle、player_getUp中，可以被K键player_jump_up 或 K键+D键player_jump_forward  或K键+A键player_jump_forward 镜像打断
+
+按住K键角色垂直上升，松开K键垂直下降
+按住K键+D键角色向右上升，松开K键下降，向右下降
+按住K键+A键角色向左上升，松开K键下降，向左下降
+一直按住K键、K键+D键、K键+A键上升到最高点后自动下降
+按住K键播放player_jump_up上升中，松开K键，角色下降，播放player_jump_down
+按住K键播放player_jump_up最高点，继续按住K键，角色下降，播放player_jump_down
+按住K键再按住D键播放player_jump_forward上升中，松开K键，角色向右下降，播放player_jump_down
+按住K键再按住A键播放player_jump_forward上升中，松开K键，角色向左下降，播放player_jump_down
+按住K键再按住D键，不可以同时按A；反之按住K键再按住A键，不可以同时按D键
+松开K键播放player_jump_down，落地播放player_jump_ground，如果角色不动播放player_idle_start - player_idle循环
+player_jump_up、player_jump_forward可以打断player_duckForward_attack_end、player_duck_attack_end、player_jump_ground
+player_jump_attack和player_jump_downForward_attack可以打断player_jump_up、player_jump_down、player_jump_forward、player_jump_double
+再播放player_jump_up、player_jump_forward、player_jump_down期间，并且没有触发player_jump_ground的时候，再次按住K键播放player_jump_double
+player_jump_ground可以打断player_jump_attack、player_jump_downForward_attack，空中攻击中恰好落地，攻击被打断
+角色还未到达最高点，播放player_jump_up、player_jump_forward动画播到最后一帧保持不变，除非到达最高点或其它操作打断
+在很高的地方落下，播放player_jump_down，动画播到最后一帧保持不变，直到落地播放player_jump_ground
+角色未到达最高点下落，播放player_jump_up、player_jump_forward中可以被player_jump_down打断
+角色空中到落地时间很短，player_jump_down播放中，可以被player_jump_ground打断
+
+按住S键可以打断按住D键、按住A键、按下I键、按住W键
+按下K键可以打断按住W键、按住S键、按住A键、按住D键、按住I键
+按下J键（player_attack_start）中，按住K键、按住L键、按住I键、按住W键、按住A键、按住D键、按住S键要等player_attack_start播完进入player_attack_end生效
+按住K键、按住L键、按住I键、按住W键、按住A键、按住D键、按住S键可以打断player_attack_end
+按下J键可以打断按住W键、按住A键、按住D键、按住L键、按下I键
+按住S键可以被按住K键打断
+按下I键可以打断按住W键、按住D键、按住A键
+按住A键或D键可打断按住W键、按下的I键过程中
+松开A键才可以按住D键，包括空中和下蹲状态
+松开D键才可以按住A键，包括空中和下蹲状态
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

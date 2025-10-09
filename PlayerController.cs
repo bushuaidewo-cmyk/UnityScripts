@@ -174,7 +174,7 @@ public class PlayerController : MonoBehaviour
     private bool magicActive = false;          // 处于施法流程（up/idle/down/attack 任一）
     private bool magicAttackPlaying = false;   // 处于 magic_attack（不可被打断）
     private float magicAttackStartTime = 0f;   // 空中攻击时用时长结束
-    private int magicStillCounter = 0;         // 自动回归的“连续静止帧”计数
+    
     #endregion
 
     #region Unity
@@ -225,6 +225,10 @@ public class PlayerController : MonoBehaviour
         HandleVariableJumpCut();
         HandleFacingFlip();
         EnforceMaxJumpHeight();
+
+        // 新增：空中“转向切前跳”
+        HandleAirJumpForwardSwitch();
+
         AutoEndAirAttack();
         AutoEndBackFlash_ByDistance();      // 按距离结束位移
         AutoExitBackFlashOnStateLeave();    // 离开 backflash 状态就退出 BackFlash
@@ -345,8 +349,27 @@ public class PlayerController : MonoBehaviour
             if (shieldHeld && !shieldActiveStanding && !shieldActiveDuck)
                 TryActivateStandingShield(true);
         }
-
     }
+
+    // 新增：空中“转向切前跳”逻辑（只切动画，不改物理）
+    private void HandleAirJumpForwardSwitch()
+    {
+        if (isGrounded) return;
+
+        // 仍在上升阶段才允许从 jump_up 切到 jump_forward
+        if (rb.velocity.y <= 0f) return;
+
+        // 当前动画是 jump_up，且本帧有横向输入（按下A/D 或 轴有输入）
+        var st = anim.GetCurrentAnimatorStateInfo(0);
+        bool hasHorizInputNow = keyDownLeft || keyDownRight || Mathf.Abs(GetEffectiveInputDir()) > 0.01f;
+
+        if (st.IsName("player_jump_up") && hasHorizInputNow)
+        {
+            SafeResetTrigger(TRIG_JumpUp);
+            SafeSetTrigger(TRIG_JumpForward);
+        }
+    }
+
 
     private void HandleVariableJumpCut()
     {
@@ -709,13 +732,12 @@ public class PlayerController : MonoBehaviour
         // MagicHold 仅在魔法逻辑态激活时为真
         anim.SetBool(PARAM_MagicHold, magicHeldKey && magicActive);
 
-        //魔法攻击阶段：必须播完，期间禁止其它行为接管
+        // 魔法攻击阶段：必须播完，期间禁止其它行为接管
         if (magicAttackPlaying)
         {
             if (isGrounded)
             {
                 var st = anim.GetCurrentAnimatorStateInfo(0);
-                // 修复：只要已经不在 attack（含过渡离开），或已到尾帧，就结束锁定
                 if (!st.IsName(STATE_MagicAttack) || st.normalizedTime >= 0.98f)
                     EndMagicAttack();
             }
@@ -727,12 +749,22 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
-        //W 首次按下：立即尝试进入魔法（动画仅在“未封锁”时播放）
+        // 新增：盾优先 — 只要盾处于按住/激活，就完全忽略“地面施法 up/idle/down”
+        // 避免“本帧 magicActive 置位 → HandleShield 又取消”，造成盾可视闪烁
+        if (shieldHeld || AnyShieldActive())
+        {
+            if (magicActive) // 若已有魔法准备态，直接退出
+            {
+                CancelMagic();
+            }
+            return;
+        }
+
+        // W 首次按下：尝试进入魔法（仅当不被其它行为封锁时）
         if (keyDownMagic)
         {
             magicActive = true;
             anim.SetBool(PARAM_MagicHold, true);
-            magicStillCounter = 0; // 重置去抖计数
 
             if (!IsMagicAnimBlockedByOtherActions())
             {
@@ -741,50 +773,32 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        //W 按住期间：自动回归 & 自动覆盖
+        // W 按住期间：自动回归 & 自动覆盖
         if (magicHeldKey && !magicAttackPlaying)
         {
             bool blocked = IsMagicAnimBlockedByOtherActions();
 
             if (!magicActive)
             {
-                // 不在魔法态且W仍按着：若环境稳定静止连N帧，自动回归Up→Idle
                 if (!blocked)
                 {
-                    magicStillCounter++;
-                    if (magicStillCounter >= magicReenterStillFrames)
-                    {
-                        magicActive = true;
-                        anim.SetBool(PARAM_MagicHold, true);
-                        anim.ResetTrigger(TRIG_MagicUp);
-                        anim.SetTrigger(TRIG_MagicUp);
-                        magicStillCounter = 0;
-                    }
-                }
-                else
-                {
-                    magicStillCounter = 0;
+                    // 简化：不做“静止N帧回归”，需要可再加回
+                    magicActive = true;
+                    anim.SetBool(PARAM_MagicHold, true);
+                    anim.ResetTrigger(TRIG_MagicUp);
+                    anim.SetTrigger(TRIG_MagicUp);
                 }
             }
             else
             {
-                // 已在魔法态，但被其它行为封锁：自动被覆盖（不强制Down），退出逻辑态
                 if (blocked)
                 {
-                    CancelMagic(); // 会关闭Hold并强制切出动画（见下方实现）
-                    magicStillCounter = 0;
+                    CancelMagic();
                 }
             }
         }
 
-        //W按住 + J：触发魔法攻击（消耗J）
-        if (magicActive && magicHeldKey && keyDownAttack)
-        {
-            StartMagicAttack();
-            return;
-        }
-
-        //松开W：退出魔法准备（地面静止时播放Down）
+        // W 松开：退出魔法准备（地面静止时播放Down）
         if (!magicHeldKey && magicActive)
         {
             if (!IsMagicAnimBlockedByOtherActions())
@@ -792,8 +806,14 @@ public class PlayerController : MonoBehaviour
                 anim.ResetTrigger(TRIG_MagicDown);
                 anim.SetTrigger(TRIG_MagicDown);
             }
-            CancelMagic(); // 逻辑层退出
-            magicStillCounter = 0;
+            CancelMagic();
+        }
+
+        // W 按住 + J：触发魔法攻击（消耗J）
+        if (magicActive && magicHeldKey && keyDownAttack)
+        {
+            StartMagicAttack();
+            return;
         }
     }
 
@@ -831,7 +851,7 @@ public class PlayerController : MonoBehaviour
             magicActive = true;
             anim.SetBool(PARAM_MagicHold, true);
         }
-        magicStillCounter = 0;
+        
     }
 
     private void CancelMagic()
@@ -947,7 +967,7 @@ public class PlayerController : MonoBehaviour
     }
 
     // 动画事件
-    public void OnAttackStart() { }
+    
     public void OnAttackEnd()
     {
         groundAttackActive = false;
@@ -958,7 +978,7 @@ public class PlayerController : MonoBehaviour
         else if (shieldHeld && isGrounded && isDucking)
             ActivateDuckShield();
     }
-    public void OnDuckAttackStart() { }
+   
     public void OnDuckAttackEnd()
     {
         groundAttackActive = false;
@@ -966,14 +986,8 @@ public class PlayerController : MonoBehaviour
         if (shieldHeld && isGrounded && isDucking)
             ActivateDuckShield();
     }
-    public void OnDuckFwdAttackStart() { }
-    public void OnDuckFwdAttackEnd()
-    {
-        groundAttackActive = false;
-        duckAttackFacingLocked = false;
-        if (shieldHeld && isGrounded && isDucking)
-            ActivateDuckShield();
-    }
+    
+  
     #endregion
 
     #region 空中攻击
@@ -1199,7 +1213,7 @@ public class PlayerController : MonoBehaviour
     }
     #endregion
 
-    // 供 Relay 查询：是否处于后闪动画或其过渡（稳定屏蔽 ShieldRefresh）
+    
     public bool IsInBackFlashAnimOrTransition()
     {
         var st = anim.GetCurrentAnimatorStateInfo(0);
@@ -1348,8 +1362,6 @@ public class PlayerController : MonoBehaviour
             shieldActiveDuck ||
             (groundAttackActive && duckAttackFacingLocked));
         SafeSetBool(PARAM_IsFalling, !isGrounded && rb.velocity.y < 0);
-
-        anim.SetFloat("VelocityY", rb.velocity.y);
     }
     #endregion
 
