@@ -59,6 +59,29 @@ public class PlayerController : MonoBehaviour
     [Header("魔法 (Magic)")]
     public float magicAttackAirDuration = 0.4f; // 空中魔法攻击锁定时长（无动画时用）
     public int magicReenterStillFrames = 3;     // W按住时自动回归前需要连续静止的帧数（去抖）
+
+
+    [Header("墙面反跳 Wall Jump")]
+    public bool wallJumpEnabled = true;
+    [Tooltip("可踩墙图层（建议墙体的Collider放在这些图层）")]
+    [SerializeField] private LayerMask wallMask;
+    [Tooltip("水平探测距离（从角色左右发射）")]
+    public float wallCheckDistance = 0.4f;
+    [Range(0f, 30f)]
+    [Tooltip("墙面法线相对水平的夹角阈值（度），越小越接近90°竖直墙")]
+    public float wallNormalVerticalToleranceDeg = 15f;
+    [Tooltip("反跳水平速度（0=沿用moveSpeed）")]
+    public float wallJumpSpeedX = 0f;
+    [Tooltip("反跳垂直速度（0=沿用jumpForce）")]
+    public float wallJumpSpeedY = 0f;
+    [Tooltip("反跳最大高度（<=0 使用 maxJumpHeight）")]
+    public float wallJumpMaxHeight = 0f;
+    [Tooltip("二次按K的冷却（秒）")]
+    public float wallJumpCooldown = 0.10f;
+
+    // 探测起点上下偏移（用于两束Ray提升稳定性）
+    [Tooltip("墙面探测的上/下采样偏移Y")]
+    public float wallCheckYOffset = 0.35f;
     #endregion
 
     #region Animator 常量
@@ -103,6 +126,7 @@ public class PlayerController : MonoBehaviour
     private const string STATE_IdleStart = "player_idle_start";  // 强制退出magic时切回的站立状态（按你的Controller调整名字）
 
     private const string TRIG_Land = "Trig_Land";
+    private const string TRIG_WallTurn = "Trig_WallTurn";
 
     private static readonly string[] AirAttackAnimStates = {
         STATE_JumpAttack,
@@ -179,6 +203,21 @@ public class PlayerController : MonoBehaviour
 
     private float landDebounceUntil = 0f;
 
+    //踩墙反跳
+    private bool wallTurnActive = false;            // 转身硬锁
+    private bool wallJumpAutoPhase = false;         // 自动斜跳锁
+    private bool wallJumpControlUnlocked = false;   // 是否解锁可控
+    private float savedGravityScale = 0f;           // 转身时暂存重力
+    private float wallJumpStartY = 0f;              // 本次反跳起点Y
+    private float wallJumpLastTime = -999f;         // 冷却
+    private int wallSide = 0;                       // 墙在左(-1)/右(+1)
+    private bool nearWall = false;                  // 是否检测到可踩墙
+
+    private bool IsAutoPhaseLocked() => wallJumpAutoPhase && !wallJumpControlUnlocked;
+    private bool IsHardLocked() => wallTurnActive;
+
+
+
     #endregion
 
     #region Unity
@@ -192,17 +231,36 @@ public class PlayerController : MonoBehaviour
 
     private void Update()
     {
+        // 1) 先更新墙的贴合情况（法线判定）
+        UpdateWallProximity();
+
         CaptureInput();
         CheckGrounded();
-        HandleJump();         // 跳跃优先（会打断魔法 idle/up/down）
-        HandleShield();       // 举盾优先（会打断魔法 idle/up/down）
-        HandleMagic();        // 新增：处理 W 施法（在攻击/移动等之前拦截 J 触发的魔法）
 
-        // 判断当前是否在 backflash 播放或过渡（用于门禁与清理多余 Trigger）
+        if (isGrounded && (wallTurnActive || wallJumpAutoPhase))
+            ForceExitWallJumpLocks(false);
+
+        HandleJump(); // 跳跃优先
+
+        // 2) 墙跳三件套：必须每帧都跑（即便硬锁/自动锁定）
+        HandleWallJumpInput();       // 本帧是否触发踩墙
+        PollWallTurnAndLaunch();     // 转身播完后发射前跳
+        EnforceMaxWallJumpHeight();  // 反跳限高
+
+        // 3) 子系统门禁：用局部门禁，不要整帧 return
+        // 盾
+        if (!(IsHardLocked() || IsAutoPhaseLocked()))
+            HandleShield();
+
+        // 魔法：锁定中不进入地面施法，但不退出整帧
+        if (IsHardLocked() || IsAutoPhaseLocked())
+            anim.SetBool(PARAM_MagicHold, false);
+        else
+            HandleMagic();
+
+        // BackFlash 触发逻辑（保持不变）
         var stNow = anim.GetCurrentAnimatorStateInfo(0);
         bool inBackflashAnimOrTransition = stNow.IsName(STATE_BackFlash) || anim.IsInTransition(0);
-
-        // 后退闪避触发：地面、非下蹲、非盾、非地面攻击、且不在播、不在过渡、未上锁、且非魔法攻击中
         if (keyDownBackFlash &&
             isGrounded && !isDucking &&
             !AnyShieldActive() &&
@@ -212,48 +270,75 @@ public class PlayerController : MonoBehaviour
             !inBackflashAnimOrTransition &&
             !magicAttackPlaying)
         {
-            // 若处于魔法 up/idle/down，闪避覆盖魔法
             if (magicActive && !magicAttackPlaying) CancelMagic();
             StartBackFlash();
         }
         else if (keyDownBackFlash && (backFlashActive || backFlashLock || inBackflashAnimOrTransition))
         {
-            // 动画期间或上锁期间误触发：吃掉多余 Trigger，避免 Animator 白点二次闪导致再次过渡
-
             SafeResetTrigger(TRIG_BackFlash);
         }
 
+        // 地面攻击
         HandleGroundDuckAndAttacks();
-        HandleAirAttack();
-        HandleHorizontal();
+
+        // 自动斜跳允许用 J 打断：先解锁再走空攻
+        if (IsAutoPhaseLocked() && keyDownAttack)
+        {
+            wallJumpAutoPhase = false;
+            wallJumpControlUnlocked = true;
+        }
+        // 硬锁中不处理空攻；否则照常
+        if (!IsHardLocked())
+            HandleAirAttack();
+
+        // 水平移动：
+        // - 硬锁：完全停住刚体
+        // - 自动斜跳锁定：忽略输入，不改 rb.velocity
+        if (IsHardLocked())
+        {
+            rb.velocity = Vector2.zero;
+            currentSpeedX = 0f;
+        }
+        else if (!IsAutoPhaseLocked())
+        {
+            HandleHorizontal();
+        }
+
+        // 可变跳截断：放到函数内部做门禁（避免整帧 return）
         HandleVariableJumpCut();
-        HandleFacingFlip();
+
+        // 翻转：锁定中不允许翻转
+        if (!IsHardLocked() && !IsAutoPhaseLocked())
+        {
+            HandleFacingFlip();
+        }
+
+        // 常规最大跳高
         EnforceMaxJumpHeight();
 
-        // 新增：空中“转向切前跳”
+        // 空中从 jump_up 切 jump_forward（保留你的逻辑）
         HandleAirJumpForwardSwitch();
 
+        // 收尾
         AutoEndAirAttack();
-        AutoEndBackFlash_ByDistance();      // 按距离结束位移
-        AutoExitBackFlashOnStateLeave();    // 离开 backflash 状态就退出 BackFlash
+        AutoEndBackFlash_ByDistance();
+        AutoExitBackFlashOnStateLeave();
 
-        // 动画真正离开 backflash 才解锁（防止“快结束连按I又后退一次”）
+        // 动画真正离开 backflash 才解锁
         var stAfter = anim.GetCurrentAnimatorStateInfo(0);
         if (backFlashLock && !stAfter.IsName(STATE_BackFlash) && !anim.IsInTransition(0))
             backFlashLock = false;
 
         UpdateAnimatorParams();
 
-        // ---- 下落动画触发（优先：刚离地；兜底：空中且速度向下）----
+        // 下落动画触发（保留）
         if (prevGrounded && !isGrounded)
         {
-            // 刚离开地面，速度可能接近 0，但直接进入下落动画
             SafeResetTrigger("Trig_JumpDown");
             SafeSetTrigger("Trig_JumpDown");
         }
         else if (!isGrounded && rb.velocity.y <= -0.05f)
         {
-            // 已在空中且明显向下时，确保处于下落动画
             var st = anim.GetCurrentAnimatorStateInfo(0);
             if (!st.IsName("player_jump_down"))
             {
@@ -332,6 +417,9 @@ public class PlayerController : MonoBehaviour
 
         if (!prevGrounded && isGrounded)
         {
+            // 先强制结束墙跳锁定并清水平速度
+            ForceExitWallJumpLocks(true);
+
             // ---- 落地瞬间逻辑 ----
             isJumping = false;
             airAttackActive = false;
@@ -379,6 +467,10 @@ public class PlayerController : MonoBehaviour
     private void HandleVariableJumpCut()
     {
         if (!variableJump) return;
+
+        // 墙转身阶段 或 自动斜跳未解锁阶段：禁用截断（松开K不影响发射速度）
+        if (IsHardLocked() || IsAutoPhaseLocked()) return;
+
         if (Input.GetKeyUp(KeyCode.K) && rb.velocity.y > 0f)
             rb.velocity = new Vector2(rb.velocity.x, rb.velocity.y * jumpCutMultiplier);
     }
@@ -1382,6 +1474,171 @@ public class PlayerController : MonoBehaviour
         }
         return false;
     }
+
+    // 工具：检测墙（法线判定）
+    private void UpdateWallProximity()
+    {
+        nearWall = false;
+        wallSide = 0;
+
+        if (!wallJumpEnabled || isGrounded) return;
+
+        // 计算阈值：法线需近水平 → |ny| <= sin(tol)
+        float nyTol = Mathf.Sin(wallNormalVerticalToleranceDeg * Mathf.Deg2Rad);
+
+        Vector2 pos = transform.position;
+        Vector2[] sampleOffsets = {
+        new Vector2(0f, wallCheckYOffset),
+        new Vector2(0f, -wallCheckYOffset),
+    };
+
+        // 右侧探测
+        foreach (var off in sampleOffsets)
+        {
+            var hit = Physics2D.Raycast(pos + off, Vector2.right, wallCheckDistance, wallMask);
+            if (hit && Mathf.Abs(hit.normal.y) <= nyTol && hit.normal.x < 0f)
+            {
+                nearWall = true; wallSide = +1; return;
+            }
+        }
+        // 左侧探测
+        foreach (var off in sampleOffsets)
+        {
+            var hit = Physics2D.Raycast(pos + off, Vector2.left, wallCheckDistance, wallMask);
+            if (hit && Mathf.Abs(hit.normal.y) <= nyTol && hit.normal.x > 0f)
+            {
+                nearWall = true; wallSide = -1; return;
+            }
+        }
+    }
+
+    // 触发踩墙（空中 + 贴墙 + 朝墙方向保持 + 本帧K + 冷却）
+    private void HandleWallJumpInput()
+    {
+        if (!wallJumpEnabled) return;
+        if (IsHardLocked() || IsAutoPhaseLocked()) return;
+        if (isGrounded || !nearWall) return;
+        if (!keyDownJump) return;
+        if (Time.time - wallJumpLastTime < wallJumpCooldown) return;
+
+        // 必须保持朝墙方向输入：墙在右(+1) -> 输入>0；墙在左(-1) -> 输入<0
+        float dir = GetEffectiveInputDir();
+        if (Mathf.Abs(dir) <= 0.01f || Mathf.Sign(dir) != wallSide) return;
+
+        // 进入转身硬锁
+        wallTurnActive = true;
+        wallJumpAutoPhase = false;
+        wallJumpControlUnlocked = false;
+
+        wallJumpStartY = rb.position.y;
+        savedGravityScale = rb.gravityScale;
+        rb.gravityScale = 0f;
+        rb.velocity = Vector2.zero;
+        currentSpeedX = 0f;
+
+        // 朝向立即改为离墙方向
+        bool wantRight = (wallSide == -1);
+        if (facingRight != wantRight)
+        {
+            facingRight = wantRight;
+            if (flipRoot) flipRoot.localScale = facingRight ? Vector3.one : new Vector3(-1, 1, 1);
+        }
+
+        // 播转身动画（不可被打断），用 CrossFade 确保同帧进入
+        anim.ResetTrigger(TRIG_WallTurn);
+        anim.CrossFadeInFixedTime("player_jump_turn_wall", 0f, 0, 0f);
+        anim.Update(0f);
+
+        wallJumpLastTime = Time.time;
+    }
+
+    // 转身播完 → 发射 player_jump_forward + 自动斜跳锁定
+    private void PollWallTurnAndLaunch()
+    {
+        if (!wallTurnActive) return;
+
+        var st = anim.GetCurrentAnimatorStateInfo(0);
+        if (st.IsName("player_jump_turn_wall"))
+        {
+            if (st.normalizedTime < 0.98f) return;
+        }
+        else
+        {
+            if (anim.IsInTransition(0)) return;
+            // 不在该状态且不在过渡，视为已结束
+        }
+
+        // 发射
+        rb.gravityScale = savedGravityScale;
+        float xSpd = (wallJumpSpeedX > 0f ? wallJumpSpeedX : moveSpeed);
+        float ySpd = (wallJumpSpeedY > 0f ? wallJumpSpeedY : jumpForce);
+        int away = (wallSide == +1) ? -1 : +1;
+
+        rb.velocity = new Vector2(away * xSpd, ySpd);
+
+        // 切前跳动画
+        anim.ResetTrigger(TRIG_JumpForward);
+        anim.SetTrigger(TRIG_JumpForward);
+
+        // 状态更新
+        wallTurnActive = false;
+        wallJumpAutoPhase = true;
+        wallJumpControlUnlocked = false;
+        wallJumpStartY = rb.position.y;
+
+        // 标记“正在跳跃”，以配合你的其它跳高限制
+        isJumping = true;
+        jumpStartY = rb.position.y;
+    }
+
+    // 动画事件回调：player_jump_forward 的关键帧调用
+    public void OnWallJumpForwardUnlock()
+    {
+        wallJumpControlUnlocked = true;
+        wallJumpAutoPhase = false;
+    }
+
+    // 反跳高度限制（与普通 maxJumpHeight 类似，但按反跳起点限高）
+    private void EnforceMaxWallJumpHeight()
+    {
+        if (wallTurnActive) return;
+        // 自动斜跳期 或 一般空中跳跃期
+        if ((wallJumpAutoPhase && !wallJumpControlUnlocked) || (!isGrounded && isJumping))
+        {
+            if (rb.velocity.y > 0f)
+            {
+                float maxH = (wallJumpMaxHeight > 0f) ? wallJumpMaxHeight : maxJumpHeight;
+                float deltaH = rb.position.y - wallJumpStartY;
+                if (deltaH >= maxH)
+                    rb.velocity = new Vector2(rb.velocity.x, 0f);
+            }
+        }
+    }
+
+    private void ForceExitWallJumpLocks(bool stopHorizontalImmediately)
+    {
+        if (!wallTurnActive && !wallJumpAutoPhase) return;
+
+        // 清除转身/自动斜跳锁定
+        wallTurnActive = false;
+        wallJumpAutoPhase = false;
+        wallJumpControlUnlocked = false;
+
+        // 恢复重力（若转身阶段被置为0）
+        rb.gravityScale = savedGravityScale;
+
+        // 立即停住水平速度（避免继续滑行）
+        if (stopHorizontalImmediately)
+        {
+            currentSpeedX = 0f;
+            rb.velocity = new Vector2(0f, rb.velocity.y);
+        }
+
+        // 清掉可能残留的动画触发器（保险）
+        SafeResetTrigger(TRIG_WallTurn);
+        SafeResetTrigger(TRIG_JumpForward);
+    }
+
 
     private void SafeSetTrigger(string name)
     {

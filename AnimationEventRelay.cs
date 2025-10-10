@@ -109,10 +109,14 @@ public class AnimationEventRelay : MonoBehaviour
         shieldHub.PlayWeapon(shieldDuckState);
     }
 
-    
 
+    // 追加到类内其它事件旁
+    public void OnWallJumpForwardUnlock()
+    {
+        player?.OnWallJumpForwardUnlock();
+    }
     // ================= 原有：转发角色其它事件（保留） =================
-    
+
     public void OnAttackEnd() => player?.OnAttackEnd();
     public void OnDuckAttackEnd() => player?.OnDuckAttackEnd();
    
