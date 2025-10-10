@@ -102,6 +102,8 @@ public class PlayerController : MonoBehaviour
     private const string STATE_MagicDown = "player_magic_down";
     private const string STATE_IdleStart = "player_idle_start";  // 强制退出magic时切回的站立状态（按你的Controller调整名字）
 
+    private const string TRIG_Land = "Trig_Land";
+
     private static readonly string[] AirAttackAnimStates = {
         STATE_JumpAttack,
         STATE_JumpDownFwdAttack
@@ -174,7 +176,9 @@ public class PlayerController : MonoBehaviour
     private bool magicActive = false;          // 处于施法流程（up/idle/down/attack 任一）
     private bool magicAttackPlaying = false;   // 处于 magic_attack（不可被打断）
     private float magicAttackStartTime = 0f;   // 空中攻击时用时长结束
-    
+
+    private float landDebounceUntil = 0f;
+
     #endregion
 
     #region Unity
@@ -333,19 +337,20 @@ public class PlayerController : MonoBehaviour
             airAttackActive = false;
             airAttackAnimPlaying = false;
 
-            // ✅ 强制刷新地面状态
-            anim.ResetTrigger(TRIG_JumpUp);
-            anim.ResetTrigger(TRIG_JumpForward);
+            // 清理跳跃相关 Trigger，避免残留导致回跳
+            SafeResetTrigger(TRIG_JumpUp);
+            SafeResetTrigger(TRIG_JumpForward);
+            SafeResetTrigger("Trig_JumpDown");
 
-            // 若Animator当前仍在jump系状态，立刻切回IdleStart
-            var st = anim.GetCurrentAnimatorStateInfo(0);
-            if (st.IsName("player_jump_up") || st.IsName("player_jump_forward"))
+            // 只发一次“落地”触发器，由 Animator 统一进 player_jump_ground
+            if (Time.time >= landDebounceUntil)
             {
-                anim.CrossFadeInFixedTime("player_idle_start", 0f, 0, 0f);
-                anim.Update(0f);
+                landDebounceUntil = Time.time + 0.05f; // 50ms 去抖，防止连发
+                SafeResetTrigger(TRIG_Land);
+                SafeSetTrigger(TRIG_Land);
             }
 
-            // 恢复举盾
+            // 不要在这里 CrossFade 到 player_idle_start，交给 Animator 从 jump_ground 退出
             if (shieldHeld && !shieldActiveStanding && !shieldActiveDuck)
                 TryActivateStandingShield(true);
         }
