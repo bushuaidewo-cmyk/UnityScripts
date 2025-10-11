@@ -5,15 +5,42 @@ public class PlayerController : MonoBehaviour
     #region Inspector (Minimal + Shield + BackFlash)
     [Header("组件")]
     [SerializeField] private Transform flipRoot;
-    [Header("地面检测 (双点带偏移)")]
-    [SerializeField] private Vector2 groundCheckOffset1 = new Vector2(-0.2f, -0.9f);  // 左脚
-    [SerializeField] private Vector2 groundCheckOffset2 = new Vector2(0.2f, -0.9f);   // 右脚
+    [SerializeField] private AnimationEventRelay relay;
+
+    [Header("地面检测")]
+    [SerializeField] private LayerMask groundLayer;
     [SerializeField] private Transform groundPoint;
     [SerializeField] private Transform groundPoint2;             // 新增：第二个检测点
-    [SerializeField] private LayerMask groundLayer;
-    [SerializeField] private float groundCheckRadius = 0.1f;      // 新增：用于直接驱动盾Hub
-    [SerializeField] private float groundCheckRadius2 = 0.1f;    // 新增：第二个检测半径
-    [SerializeField] private AnimationEventRelay relay;
+    [SerializeField] private Vector2 groundCheckOffset = new Vector2(-0.2f, -0.9f);  // 左脚
+    [SerializeField] private Vector2 groundCheckOffset2 = new Vector2(0.2f, -0.9f);   // 右脚
+    [SerializeField] private Vector2 groundCheckSize = new Vector2(0.28f, 0.12f);
+    [SerializeField] private Vector2 groundCheckSize2 = new Vector2(0.28f, 0.12f);
+
+    [Header("天空检测")]
+    [Tooltip("SkyPoint 命中 groundLayer 时屏蔽地面双点检测")]
+    [SerializeField] private Transform SkyPoint;
+    [SerializeField] private Transform SkyPoint2;
+    [Tooltip("SkyPoint 的本地偏移(XY)")]
+    [SerializeField] private Vector2 SkyCheckOffset = Vector2.zero;
+    [Tooltip("SkyPoint2 的本地偏移(XY)")]
+    [SerializeField] private Vector2 SkyCheckOffset2 = Vector2.zero;
+    [SerializeField] private Vector2 SkyCheckSize1 = new Vector2(0.28f, 0.12f);
+    [SerializeField] private Vector2 SkyCheckSize2 = new Vector2(0.28f, 0.12f);
+
+    [Header("落地抗抖/记忆")]
+    [Tooltip("离地后需要连续多少帧都不命中脚下地面，才真正判定为离地（防止边缘抖动）")]
+    [SerializeField] private int groundReleaseFrames = 2;
+
+    [Header("踩墙层")]
+    [Tooltip("可踩墙图层（建议墙体的Collider放在这些图层）")]
+    [SerializeField] private LayerMask wallMask;
+
+    [Header("碰撞体切换")]
+    [Tooltip("站立形态使用的碰撞体（建议 BoxCollider2D 或 CapsuleCollider2D）")]
+    [SerializeField] private Collider2D standingCollider;
+    [Tooltip("下蹲形态使用的碰撞体（建议 BoxCollider2D 或 CapsuleCollider2D）")]
+    [SerializeField] private Collider2D duckCollider;
+
 
     [Header("移动")]
     public float moveSpeed = 5f;
@@ -26,6 +53,18 @@ public class PlayerController : MonoBehaviour
     public float maxJumpHeight = 5f;
     public bool variableJump = true;
     [Range(0.1f, 1f)] public float jumpCutMultiplier = 0.5f;
+
+    [Header("二段跳 Double Jump")]
+    [Tooltip("是否启用二段跳")]
+    public bool doubleJumpEnabled = true;
+    [Tooltip("二段跳起跳赋予的向上速度")]
+    public float doubleJumpForceY = 9f;
+    [Tooltip("二段跳最大升高（从二段起跳点起算）；<=0 不限制")]
+    public float doubleJumpMaxHeight = 0f;
+    [Tooltip("二段跳时的横向速度（0=沿用 moveSpeed；有输入按左右方向，无输入保持当前X速度）")]
+    public float doubleJumpSpeedX = 0f;
+    [Tooltip("本次离地期间可用的“额外跳跃”次数（1=二段跳；2=三段跳）；落地重置")]
+    public int extraJumpsPerAir = 1;
 
     [Header("下蹲攻击")]
     public bool allowInstantDuckAttack = true;
@@ -47,6 +86,8 @@ public class PlayerController : MonoBehaviour
     public bool shieldInstantVisual = true;
     [Tooltip("勾选：空中举盾会屏蔽空中攻击；取消勾选：按 J 会优先打断空中盾并执行空中攻击")]
     public bool airShieldBlocksAttack = false;
+    // 新增：站立举盾（player_shield_up）冷却（由 player_shield_down 结束开始计时）
+
 
     [Header("后退闪避 (BackFlash)")]     // 不再暴露按键，固定 I 作为后退闪避键
     public float backFlashSpeed = 7f;           // 后退速度
@@ -58,13 +99,13 @@ public class PlayerController : MonoBehaviour
 
     [Header("魔法 (Magic)")]
     public float magicAttackAirDuration = 0.4f; // 空中魔法攻击锁定时长（无动画时用）
-    public int magicReenterStillFrames = 3;     // W按住时自动回归前需要连续静止的帧数（去抖）
+    // public int magicReenterStillFrames = 3;   // 已删除：未使用
+    [Tooltip("player_magic_attack 结束后到下一次允许施放的冷却秒数")]
+    public float magicAttackCooldown = 0.35f;
 
 
     [Header("墙面反跳 Wall Jump")]
     public bool wallJumpEnabled = true;
-    [Tooltip("可踩墙图层（建议墙体的Collider放在这些图层）")]
-    [SerializeField] private LayerMask wallMask;
     [Tooltip("水平探测距离（从角色左右发射）")]
     public float wallCheckDistance = 0.4f;
     [Range(0f, 30f)]
@@ -78,60 +119,66 @@ public class PlayerController : MonoBehaviour
     public float wallJumpMaxHeight = 0f;
     [Tooltip("二次按K的冷却（秒）")]
     public float wallJumpCooldown = 0.10f;
-
-    // 探测起点上下偏移（用于两束Ray提升稳定性）
     [Tooltip("墙面探测的上/下采样偏移Y")]
     public float wallCheckYOffset = 0.35f;
+
+
     #endregion
 
     #region Animator 常量
+    //移动
     private const string PARAM_MoveSpeed = "MoveSpeed";
+    private const string TRIG_Attack = "Trig_Attack";
+    private const string STATE_IdleStart = "player_idle_start";  // 强制退出magic时切回的站立状态（按你的Controller调整名字）
+
+    //下蹲
     private const string PARAM_IsGrounded = "IsGrounded";
     private const string PARAM_IsDucking = "IsDucking";
-    private const string PARAM_IsFalling = "IsFalling";
-    private const string PARAM_ShieldHold = "ShieldHold";
-    private const string PARAM_BackFlashInterruptible = "BackFlashInterruptible";
-    private const string PARAM_BackFlashActive = "BackFlashActive"; // 新增：给 Relay 用于屏蔽事件
-    private const string PARAM_MagicHold = "MagicHold"; // W 按住
-
-    private const string TRIG_JumpUp = "Trig_JumpUp";
-    private const string TRIG_JumpForward = "Trig_JumpForward";
-    private const string TRIG_Attack = "Trig_Attack";
     private const string TRIG_DuckAttack = "Trig_DuckAttack";
     private const string TRIG_DuckFwdAttack = "Trig_DuckFwdAttack";
-    private const string TRIG_JumpAttack = "Trig_JumpAttack";
-    private const string TRIG_JumpDownFwdAttack = "Trig_JumpDownFwdAttack";
-
-    private const string TRIG_ShieldUp = "Trig_ShieldUp";
-    private const string TRIG_ShieldDown = "Trig_ShieldDown";
     private const string TRIG_DuckShieldUp = "Trig_DuckShieldUp";
     private const string TRIG_DuckShieldDown = "Trig_DuckShieldDown";
 
-    private const string TRIG_BackFlash = "Trig_BackFlash";
+    //空中
+    private const string PARAM_IsFalling = "IsFalling";
+    private const string TRIG_JumpUp = "Trig_JumpUp";
+    private const string TRIG_JumpForward = "Trig_JumpForward";
+    private const string TRIG_JumpAttack = "Trig_JumpAttack";
+    private const string TRIG_JumpDownFwdAttack = "Trig_JumpDownFwdAttack";
+    private const string STATE_JumpAttack = "player_jump_attack";
+    private const string STATE_JumpDownFwdAttack = "player_jump_downForward_attack";
 
-    // Magic
+    //二段跳
+    // private const string TRIG_JumpDouble = "Trig_JumpDouble"; // 已删除：未使用
+    private const string STATE_JumpDouble = "player_jump_double";
+
+    //盾
+    private const string PARAM_ShieldHold = "ShieldHold";
+
+    private const string TRIG_ShieldUp = "Trig_ShieldUp";
+    private const string TRIG_ShieldDown = "Trig_ShieldDown";
+
+    //魔法
+    private const string PARAM_MagicHold = "MagicHold"; // W 按住
     private const string TRIG_MagicUp = "Trig_MagicUp";
     private const string TRIG_MagicDown = "Trig_MagicDown";
     private const string TRIG_MagicAttack = "Trig_MagicAttack";
-
-    private const string STATE_JumpAttack = "player_jump_attack";
-    private const string STATE_JumpDownFwdAttack = "player_jump_downForward_attack";
-    private const string STATE_BackFlash = "player_backflash";
-
-    // Magic states
     private const string STATE_MagicUp = "player_magic_up";
     private const string STATE_MagicIdle = "player_shield_idle";
     private const string STATE_MagicAttack = "player_magic_attack";
     private const string STATE_MagicDown = "player_magic_down";
-    private const string STATE_IdleStart = "player_idle_start";  // 强制退出magic时切回的站立状态（按你的Controller调整名字）
 
+    //闪避后退
+    private const string PARAM_BackFlashInterruptible = "BackFlashInterruptible";
+    // private const string PARAM_BackFlashActive = "BackFlashActive"; // 已删除：未使用
+    private const string TRIG_BackFlash = "Trig_BackFlash";
+    private const string STATE_BackFlash = "player_backflash";
+
+    //踩墙反跳
     private const string TRIG_Land = "Trig_Land";
     private const string TRIG_WallTurn = "Trig_WallTurn";
-
-    private static readonly string[] AirAttackAnimStates = {
-        STATE_JumpAttack,
-        STATE_JumpDownFwdAttack
-    };
+    private static readonly string[]
+        AirAttackAnimStates = { STATE_JumpAttack, STATE_JumpDownFwdAttack };
     #endregion
 
     #region Runtime
@@ -157,6 +204,13 @@ public class PlayerController : MonoBehaviour
     private bool isJumping;
     private float jumpStartY;
 
+
+    //二段跳
+    private int extraJumpsUsed = 0; // 用“已用额外跳次数”计数器
+    private bool doubleJumpActive = false;   // 当前是否处于二段跳的上升/保持阶段
+    private float doubleJumpStartY = 0f;     // 二段跳起跳高度（用于相对限高）
+    private bool doubleJumpPoseHold = false; // 动画播完但仍在上升：保持最后一帧
+
     // 输入
     private float rawInputX;
     private bool keyDownLeft;
@@ -167,8 +221,9 @@ public class PlayerController : MonoBehaviour
 
     // W 魔法输入
     private bool keyDownMagic;
-    private bool keyUpMagic;
+    // private bool keyUpMagic; // 已删除：未使用
     private bool magicHeldKey;
+    private float magicAttackAvailableAt = 0f;   // 早于该时间不允许再次施放魔法攻击
 
     // 方向脉冲
     private float tapImpulseDir;
@@ -213,10 +268,16 @@ public class PlayerController : MonoBehaviour
     private int wallSide = 0;                       // 墙在左(-1)/右(+1)
     private bool nearWall = false;                  // 是否检测到可踩墙
 
+    // 当前是否启用的是下蹲碰撞体
+    private bool colliderDuckActive = false;
+
     private bool IsAutoPhaseLocked() => wallJumpAutoPhase && !wallJumpControlUnlocked;
     private bool IsHardLocked() => wallTurnActive;
 
-
+    // === Runtime: 抗抖/状态缓存 ===
+    private int groundReleaseCounter = 0;   // 离地计数（用于延时释放）
+    private bool skyBlockingActive = false; // 仅 Sky 命中但脚下未命中（本帧）                                      
+    public bool IsSkyBlockingNow => skyBlockingActive; // 可选：对外可读
 
     #endregion
 
@@ -227,11 +288,15 @@ public class PlayerController : MonoBehaviour
         rb = GetComponent<Rigidbody2D>();
         if (!relay) relay = GetComponentInChildren<AnimationEventRelay>(); // 自动抓取
 
+        // 只启用站立碰撞体，禁用下蹲碰撞体（很关键）
+        if (standingCollider) standingCollider.enabled = true;
+        if (duckCollider) duckCollider.enabled = false;
+        colliderDuckActive = false;
     }
 
     private void Update()
     {
-        // 1) 先更新墙的贴合情况（法线判定）
+        //先更新墙的贴合情况（法线判定）
         UpdateWallProximity();
 
         CaptureInput();
@@ -242,23 +307,29 @@ public class PlayerController : MonoBehaviour
 
         HandleJump(); // 跳跃优先
 
-        // 2) 墙跳三件套：必须每帧都跑（即便硬锁/自动锁定）
+        //墙跳三件套：必须每帧都跑（即便硬锁/自动锁定）
         HandleWallJumpInput();       // 本帧是否触发踩墙
         PollWallTurnAndLaunch();     // 转身播完后发射前跳
         EnforceMaxWallJumpHeight();  // 反跳限高
 
-        // 3) 子系统门禁：用局部门禁，不要整帧 return
         // 盾
         if (!(IsHardLocked() || IsAutoPhaseLocked()))
             HandleShield();
 
-        // 魔法：锁定中不进入地面施法，但不退出整帧
+        //魔法：锁定中不进入地面施法，但不退出整帧
         if (IsHardLocked() || IsAutoPhaseLocked())
             anim.SetBool(PARAM_MagicHold, false);
         else
             HandleMagic();
 
-        // BackFlash 触发逻辑（保持不变）
+        // ===== 在空中攻击之前插入这四行 =====
+        HandleDoubleJump();               // 处理按K触发二段跳（空中一次）
+        EnforceMaxDoubleJumpHeight();     // 限制二段跳相对高度
+        HoldDoubleJumpPoseWhileAscending();// 动画播完仍上升则钉住最后一帧
+        AutoExitDoubleJumpOnFall();       // 过顶点开始下落则退出二段跳保持
+
+
+        //BackFlash 触发逻辑（保持不变）
         var stNow = anim.GetCurrentAnimatorStateInfo(0);
         bool inBackflashAnimOrTransition = stNow.IsName(STATE_BackFlash) || anim.IsInTransition(0);
         if (keyDownBackFlash &&
@@ -278,8 +349,11 @@ public class PlayerController : MonoBehaviour
             SafeResetTrigger(TRIG_BackFlash);
         }
 
-        // 地面攻击
+        // 地面攻击与下蹲逻辑
         HandleGroundDuckAndAttacks();
+
+        // 同步站立/下蹲碰撞体（无顶头门禁）
+        SyncCrouchColliders();
 
         // 自动斜跳允许用 J 打断：先解锁再走空攻
         if (IsAutoPhaseLocked() && keyDownAttack)
@@ -299,7 +373,7 @@ public class PlayerController : MonoBehaviour
             rb.velocity = Vector2.zero;
             currentSpeedX = 0f;
         }
-        else if (!IsAutoPhaseLocked())
+        else if (!IsAutoPhaseLocked() || doubleJumpActive)
         {
             HandleHorizontal();
         }
@@ -324,7 +398,7 @@ public class PlayerController : MonoBehaviour
         AutoEndBackFlash_ByDistance();
         AutoExitBackFlashOnStateLeave();
 
-        // 动画真正离开 backflash 才解锁
+        // 关键：动画真正离开 backflash 才解锁（恢复这段）
         var stAfter = anim.GetCurrentAnimatorStateInfo(0);
         if (backFlashLock && !stAfter.IsName(STATE_BackFlash) && !anim.IsInTransition(0))
             backFlashLock = false;
@@ -337,7 +411,8 @@ public class PlayerController : MonoBehaviour
             SafeResetTrigger("Trig_JumpDown");
             SafeSetTrigger("Trig_JumpDown");
         }
-        else if (!isGrounded && rb.velocity.y <= -0.05f)
+
+        if (!isGrounded && rb.velocity.y <= -0.01f)
         {
             var st = anim.GetCurrentAnimatorStateInfo(0);
             if (!st.IsName("player_jump_down"))
@@ -345,6 +420,12 @@ public class PlayerController : MonoBehaviour
                 SafeResetTrigger("Trig_JumpDown");
                 SafeSetTrigger("Trig_JumpDown");
             }
+        }
+        else if (prevGrounded && !isGrounded && !isJumping)
+        {
+            // 从平台边走落（不是主动起跳），允许直接进入下落
+            SafeResetTrigger("Trig_JumpDown");
+            SafeSetTrigger("Trig_JumpDown");
         }
 
         prevGrounded = isGrounded;
@@ -365,7 +446,7 @@ public class PlayerController : MonoBehaviour
         shieldHeld = Input.GetKey(KeyCode.L);
 
         keyDownMagic = Input.GetKeyDown(KeyCode.W);
-        keyUpMagic = Input.GetKeyUp(KeyCode.W);
+        // keyUpMagic = Input.GetKeyUp(KeyCode.W); // 已删除：未使用
         magicHeldKey = Input.GetKey(KeyCode.W);
 
         if (keyDownLeft) { tapImpulseDir = -1; tapImpulseRemain = tapImpulseFrames; }
@@ -441,6 +522,11 @@ public class PlayerController : MonoBehaviour
             // 不要在这里 CrossFade 到 player_idle_start，交给 Animator 从 jump_ground 退出
             if (shieldHeld && !shieldActiveStanding && !shieldActiveDuck)
                 TryActivateStandingShield(true);
+
+            // 重置额外跳配额（落地才恢复）
+            extraJumpsUsed = 0;
+            doubleJumpActive = false;
+            doubleJumpPoseHold = false;
         }
     }
 
@@ -510,12 +596,9 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
-        // BackFlash 非可打断区间：屏蔽盾/下蹲（修复 I→L→S 卡死与盾抖动）
+        // BackFlash 非可打断区间：屏蔽盾/下蹲
         if (backFlashActive && !IsBackFlashInterruptibleNow())
-        {
-            // 可选：若已有盾在显示，可以在此隐藏可视层，但通常不必
             return;
-        }
 
         // BackFlash 可打断后：按 L 允许先打断 BackFlash，再进入举盾逻辑
         if (backFlashActive && IsBackFlashInterruptibleNow() && shieldHeld && !magicAttackPlaying)
@@ -524,17 +607,14 @@ public class PlayerController : MonoBehaviour
             // 继续走举盾流程
         }
 
-        // 新增：空中攻击期间禁止盾（关键修复）
-        // 说明：空中攻击一旦开始（airAttackActive/airAttackAnimPlaying），
-        // 每帧都取消空中盾，且不允许因 L 按住而重新举起
+        // 空中攻击期间禁止盾
         if (airAttackActive || airAttackAnimPlaying)
         {
-            if (shieldActiveAir) CancelShieldAir(); // 内部会 relay?.StopShield()
-                                                    // 此处直接返回，避免下面空中/地面分支重新举盾
+            if (shieldActiveAir) CancelShieldAir();
             return;
         }
 
-        // 盾随时打断后退闪避 / 魔法 up idle down
+        // 盾随时打断魔法/后退闪避（up/idle/down）
         if ((backFlashActive || magicActive) && shieldHeld && !magicAttackPlaying)
         {
             if (backFlashActive) CancelBackFlash();
@@ -551,16 +631,17 @@ public class PlayerController : MonoBehaviour
                     shieldActiveAir = true;
                     CancelShieldStanding(false);
                     CancelShieldDuck(false);
-                    relay?.PlayShieldStanding();   // 空中也显示盾（若希望与站立同款，可直接用 PlayShieldStanding）
+                    relay?.PlayShieldStanding();
                 }
             }
             else if (shieldActiveAir)
             {
-                CancelShieldAir(); // 里面会 StopShield
+                CancelShieldAir();
             }
             return;
         }
 
+        // 地面
         bool duckKey = Input.GetKey(KeyCode.S);
         if (duckKey)
         {
@@ -571,7 +652,7 @@ public class PlayerController : MonoBehaviour
                 {
                     CancelShieldStanding(false);
                     CancelShieldAir();
-                    ActivateDuckShield(); // 内部已处理“立即/延迟”
+                    ActivateDuckShield();
                 }
                 else if (!shieldAnimUpPlayed)
                 {
@@ -584,7 +665,7 @@ public class PlayerController : MonoBehaviour
             else
             {
                 if (shieldActiveDuck)
-                    CancelShieldDuck(true); // 内部已处理“立即/延迟”
+                    CancelShieldDuck(true);
             }
             return;
         }
@@ -600,7 +681,7 @@ public class PlayerController : MonoBehaviour
             {
                 CancelShieldDuck(false);
                 CancelShieldAir();
-                TryActivateStandingShield(true); // 内部已处理“立即/延迟”
+                TryActivateStandingShield(true);
             }
             else if (!shieldAnimUpPlayed)
             {
@@ -625,6 +706,7 @@ public class PlayerController : MonoBehaviour
             }
         }
 
+        // 消费 pending
         if (pendingShieldUp && (shieldInstantVisual || IsStationaryHorizontally()) && shieldHeld)
         {
             pendingShieldUp = false;
@@ -637,7 +719,6 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    //允许“立即”播放盾Up
     private void TryActivateStandingShield(bool playAnimationIfStill)
     {
         shieldActiveStanding = true;
@@ -645,7 +726,6 @@ public class PlayerController : MonoBehaviour
         shieldActiveAir = false;
         shieldAnimUpPlayed = false;
 
-        // 关键改动：只要打开 shieldInstantVisual 就不再等静止
         if (shieldInstantVisual || (playAnimationIfStill && IsStationaryHorizontally()))
             PlayStandingShieldUp();
         else
@@ -683,7 +763,7 @@ public class PlayerController : MonoBehaviour
         relay?.PlayShieldDuck();
     }
 
-    // 收站立盾（需要 Down）
+    //在“收站立盾”时，触发 Down 动画的同时武装冷却
     private void CancelShieldStanding(bool playDownAnim)
     {
         if (!shieldActiveStanding) return;
@@ -707,6 +787,7 @@ public class PlayerController : MonoBehaviour
         pendingShieldUp = false;
         relay?.StopShield();
     }
+
 
     private void CancelShieldAir()
     {
@@ -829,7 +910,7 @@ public class PlayerController : MonoBehaviour
         // MagicHold 仅在魔法逻辑态激活时为真
         anim.SetBool(PARAM_MagicHold, magicHeldKey && magicActive);
 
-        // 魔法攻击阶段：必须播完，期间禁止其它行为接管
+        // 魔法攻击阶段：必须播完/到时长结束
         if (magicAttackPlaying)
         {
             if (isGrounded)
@@ -846,18 +927,27 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
-        // 新增：盾优先 — 只要盾处于按住/激活，就完全忽略“地面施法 up/idle/down”
-        // 避免“本帧 magicActive 置位 → HandleShield 又取消”，造成盾可视闪烁
-        if (shieldHeld || AnyShieldActive())
+        // 冷却判定：未到可施放时间则忽略本帧 W+J
+        if (magicHeldKey && keyDownAttack)
         {
-            if (magicActive) // 若已有魔法准备态，直接退出
+            if (Time.time >= magicAttackAvailableAt)
             {
-                CancelMagic();
+                magicActive = true;                      // 标记进入魔法逻辑，阻断普通攻击
+                anim.SetBool(PARAM_MagicHold, true);
+                StartMagicAttack();                      // 内部不触发角色魔法攻击动画
             }
+            // 无论是否成功施放，这里都 return，避免后续分支覆盖
             return;
         }
 
-        // W 首次按下：尝试进入魔法（仅当不被其它行为封锁时）
+        // 盾优先：屏蔽 up/idle/down（不影响上面的 W+J 立即施放）
+        if (shieldHeld || AnyShieldActive())
+        {
+            if (magicActive) CancelMagic();
+            return;
+        }
+
+        // W 首次按下：尝试进入魔法准备（仅当不被其它行为封锁时）
         if (keyDownMagic)
         {
             magicActive = true;
@@ -879,7 +969,6 @@ public class PlayerController : MonoBehaviour
             {
                 if (!blocked)
                 {
-                    // 简化：不做“静止N帧回归”，需要可再加回
                     magicActive = true;
                     anim.SetBool(PARAM_MagicHold, true);
                     anim.ResetTrigger(TRIG_MagicUp);
@@ -905,13 +994,6 @@ public class PlayerController : MonoBehaviour
             }
             CancelMagic();
         }
-
-        // W 按住 + J：触发魔法攻击（消耗J）
-        if (magicActive && magicHeldKey && keyDownAttack)
-        {
-            StartMagicAttack();
-            return;
-        }
     }
 
     private void StartMagicAttack()
@@ -919,17 +1001,19 @@ public class PlayerController : MonoBehaviour
         magicAttackPlaying = true;
         magicAttackStartTime = Time.time;
 
-        //地面才播动画；空中无表现，但会锁定到时长结束
-        if (isGrounded && CanPlayMagicAnimOnGround())
-        {
-            anim.ResetTrigger(TRIG_MagicAttack);
-            anim.SetTrigger(TRIG_MagicAttack);
-        }
+        // 不播放角色魔法攻击动画（无论空中还是地面）
+        // 仅进入“魔法攻击逻辑/锁定”。地面原地的 up/idle/down（盾动画）仍由 HandleMagic 的准备态门禁决定。
+
+        if (isGrounded && CanPlayMagicAnimOnGround()) { anim.ResetTrigger(TRIG_MagicAttack); anim.SetTrigger(TRIG_MagicAttack); }
     }
 
+    // ====== 4) EndMagicAttack：结束时启动冷却计时 ======
     private void EndMagicAttack()
     {
         magicAttackPlaying = false;
+
+        // 新增：设置下次可施放时间
+        magicAttackAvailableAt = Time.time + magicAttackCooldown;
 
         if (!magicHeldKey)
         {
@@ -948,7 +1032,6 @@ public class PlayerController : MonoBehaviour
             magicActive = true;
             anim.SetBool(PARAM_MagicHold, true);
         }
-        
     }
 
     private void CancelMagic()
@@ -993,7 +1076,12 @@ public class PlayerController : MonoBehaviour
     #region 下蹲 & 地面攻击
     private void HandleGroundDuckAndAttacks()
     {
-        if (!isGrounded) return;
+        if (!isGrounded)
+        {
+            isDucking = false; // 空中绝不保留地面下蹲状态
+            return;
+        }
+
 
         // 本帧刚起跳，不要再用 S 把 isDucking 设回 true，避免空中移动被地面下蹲锁住
         if (isJumping)
@@ -1064,7 +1152,7 @@ public class PlayerController : MonoBehaviour
     }
 
     // 动画事件
-    
+
     public void OnAttackEnd()
     {
         groundAttackActive = false;
@@ -1075,7 +1163,7 @@ public class PlayerController : MonoBehaviour
         else if (shieldHeld && isGrounded && isDucking)
             ActivateDuckShield();
     }
-   
+
     public void OnDuckAttackEnd()
     {
         groundAttackActive = false;
@@ -1083,8 +1171,8 @@ public class PlayerController : MonoBehaviour
         if (shieldHeld && isGrounded && isDucking)
             ActivateDuckShield();
     }
-    
-  
+
+
     #endregion
 
     #region 空中攻击
@@ -1106,6 +1194,10 @@ public class PlayerController : MonoBehaviour
             var st = anim.GetCurrentAnimatorStateInfo(0);
             foreach (var a in AirAttackAnimStates)
                 if (st.IsName(a)) return;
+
+            // 打断二段跳姿势保持，但不改变刚体速度（满足“空攻不打断上升速度”）
+            doubleJumpActive = false;
+            doubleJumpPoseHold = false;
 
             airAttackActive = true;
             airAttackAnimPlaying = true;
@@ -1159,6 +1251,15 @@ public class PlayerController : MonoBehaviour
             airAttackAnimPlaying = false;
             if (shieldHeld && !isGrounded) shieldActiveAir = true;
         }
+    }
+
+    // 立即结束空中攻击（不等动画事件/最小时长）——用于被墙跳覆盖
+    private void ForceEndAirAttack()
+    {
+        if (!airAttackActive && !airAttackAnimPlaying) return;
+        airAttackActive = false;
+        airAttackAnimPlaying = false;
+        // 如需强制打断动画，可按需加入 CrossFade 到 jump_turn_wall 前的安全态，但通常直接 CrossFade 到转身即可覆盖
     }
     #endregion
 
@@ -1249,7 +1350,7 @@ public class PlayerController : MonoBehaviour
         }
 
         // 魔法攻击阶段：锁水平移动
-        if (magicAttackPlaying)
+        if (magicAttackPlaying && isGrounded)
         {
             ApplyHorizontal(0f);
             return;
@@ -1310,7 +1411,7 @@ public class PlayerController : MonoBehaviour
     }
     #endregion
 
-    
+
     public bool IsInBackFlashAnimOrTransition()
     {
         var st = anim.GetCurrentAnimatorStateInfo(0);
@@ -1323,26 +1424,23 @@ public class PlayerController : MonoBehaviour
     }
 
     // 被动保活：不在后闪时，只要按着 L，每帧把盾Hub纠正到正确的可视层
+    // ====== 6) LateUpdate：被动重举盾同样需要冷却已到 ======
     private void LateUpdate()
     {
-        // 后闪动画/过渡期间完全不动盾Hub，避免抖动
         if (IsInBackFlashAnimOrTransition()) return;
 
         if (shieldHeld)
         {
             if (isGrounded)
             {
-                // 地面：S=蹲盾；否则站盾
                 if (Input.GetKey(KeyCode.S))
                 {
-                    // 标记逻辑态（不触发可视切换抖动）
                     if (!shieldActiveDuck)
                     {
                         shieldActiveDuck = true;
                         shieldActiveStanding = false;
                         shieldActiveAir = false;
                     }
-                    // 可视层：确保是下蹲盾
                     relay?.PlayShieldDuck();
                 }
                 else
@@ -1358,7 +1456,6 @@ public class PlayerController : MonoBehaviour
             }
             else
             {
-                // 空中：一律用站立盾的可视层
                 if (!shieldActiveAir)
                 {
                     shieldActiveAir = true;
@@ -1383,8 +1480,9 @@ public class PlayerController : MonoBehaviour
     {
         var st = anim.GetCurrentAnimatorStateInfo(0);
 
-        // 后退位移中、魔法攻击中禁止翻转
-        if ((backFlashActive && backFlashMoving) || magicAttackPlaying) return;
+        // 后退位移中、(地面)魔法攻击中禁止翻转
+        // 原来：if ((backFlashActive && backFlashMoving) || magicAttackPlaying) return;
+        if ((backFlashActive && backFlashMoving) || (magicAttackPlaying && isGrounded)) return;
 
         if (airAttackActive || st.IsName(STATE_JumpAttack) || st.IsName(STATE_JumpDownFwdAttack)) return;   // 空中攻击期间禁止翻转朝向
 
@@ -1404,42 +1502,116 @@ public class PlayerController : MonoBehaviour
     #endregion
 
     #region Ground Check
+    // 用 BoxCast + 法线过滤 的“脚底判地”，Sky 保持 OverlapBox
     private void CheckGrounded()
     {
-        // 计算两个检测点的世界坐标
-        Vector2 p1 = (Vector2)transform.position + groundCheckOffset1;
-        Vector2 p2 = (Vector2)transform.position + groundCheckOffset2;
+        // 本地小工具：把“锚点 + 本地偏移”换算到世界坐标
+        Vector2 W(Transform anchor, Vector2 localOffset) =>
+            anchor ? (Vector2)anchor.TransformPoint((Vector3)localOffset)
+                   : (Vector2)transform.TransformPoint((Vector3)localOffset);
 
-        // 分别检测两个检测体是否命中地面层
-        bool grounded1 = Physics2D.OverlapCircle(p1, groundCheckRadius, groundLayer);
-        bool grounded2 = Physics2D.OverlapCircle(p2, groundCheckRadius2, groundLayer);
+        // 采样点（世界）
+        Vector2 p1 = W(groundPoint, groundCheckOffset);
+        Vector2 p2 = W(groundPoint2, groundCheckOffset2);
+        Vector2 s1 = W(SkyPoint, SkyCheckOffset);
+        Vector2 s2 = W(SkyPoint2, SkyCheckOffset2);
 
-        // ✅ 规则：必须两个检测体都命中地面层才算落地
-        //isGrounded = grounded1 && grounded2;
-        isGrounded = grounded1 || grounded2;
+        // 脚底“只认下面”的地面检测：向下 BoxCast 少量距离，并筛法线
+        const float feetProbe = 0.08f;      // 向下探测距离（根据像素可调到 0.05~0.12）
+        const float floorNyMin = 0.5f;      // 只接受“相对水平”的地面（ny >= 0.5）
+        bool g1 = false, g2 = false;
+
+        // 左脚
+        {
+            var hit = Physics2D.BoxCast(p1, groundCheckSize, 0f, Vector2.down, feetProbe, groundLayer);
+            g1 = hit && hit.normal.y >= floorNyMin;
+        }
+        // 右脚
+        {
+            var hit = Physics2D.BoxCast(p2, groundCheckSize2, 0f, Vector2.down, feetProbe, groundLayer);
+            g2 = hit && hit.normal.y >= floorNyMin;
+        }
+
+        // 2) Sky：仍用 OverlapBox（你需要“膝侧/头侧碰到墙就视为空中”的门禁）
+        bool sH1 = Physics2D.OverlapBox(s1, SkyCheckSize1, 0f, groundLayer);
+        bool sH2 = Physics2D.OverlapBox(s2, SkyCheckSize2, 0f, groundLayer);
+
+        bool groundHit = g1 || g2;
+        bool skyHit = sH1 || sH2;
+
+        // 规则：脚下命中优先；只有 Sky 命中时强制空中
+        skyBlockingActive = skyHit && !groundHit;
+
+        if (groundHit)
+        {
+            isGrounded = true;
+            groundReleaseCounter = 0;
+            return;
+        }
+        if (skyBlockingActive)
+        {
+            isGrounded = false;
+            groundReleaseCounter = Mathf.Max(groundReleaseCounter, 1);
+            return;
+        }
+
+        // 抗抖：进入地面即时、离地延迟 N 帧
+        if (isGrounded)
+        {
+            groundReleaseCounter++;
+            if (groundReleaseCounter >= groundReleaseFrames) isGrounded = false;
+        }
+        else
+        {
+            groundReleaseCounter = Mathf.Max(groundReleaseCounter, 1);
+            isGrounded = false;
+        }
     }
 
-    // ✅ Scene 视图中显示两个检测圈（绿色=落地，红色=悬空）
+    // Gizmos：用 TransformPoint 计算位置；同时画出 BoxCast 的探测线，便于校准
     private void OnDrawGizmosSelected()
     {
         if (!enabled) return;
 
-        Vector2 p1 = (Vector2)transform.position + groundCheckOffset1;
-        Vector2 p2 = (Vector2)transform.position + groundCheckOffset2;
+        Vector2 W(Transform anchor, Vector2 localOffset) =>
+            anchor ? (Vector2)anchor.TransformPoint((Vector3)localOffset)
+                   : (Vector2)transform.TransformPoint((Vector3)localOffset);
 
-        Gizmos.color = isGrounded ? Color.green : Color.red;
-        Gizmos.DrawWireSphere(p1, groundCheckRadius);
-        Gizmos.DrawWireSphere(p2, groundCheckRadius2);
+        Vector2 p1 = W(groundPoint, groundCheckOffset);
+        Vector2 p2 = W(groundPoint2, groundCheckOffset2);
+        Vector2 s1 = W(SkyPoint, SkyCheckOffset);
+        Vector2 s2 = W(SkyPoint2, SkyCheckOffset2);
 
+        const float feetProbe = 0.08f;
 
+        // 实时检测结果（场景里能看到颜色变化）
+        bool g1 = Physics2D.BoxCast(p1, groundCheckSize, 0f, Vector2.down, feetProbe, groundLayer) is RaycastHit2D h1 && h1 && h1.normal.y >= 0.5f;
+        bool g2 = Physics2D.BoxCast(p2, groundCheckSize2, 0f, Vector2.down, feetProbe, groundLayer) is RaycastHit2D h2 && h2 && h2.normal.y >= 0.5f;
+        bool sH1 = Physics2D.OverlapBox(s1, SkyCheckSize1, 0f, groundLayer);
+        bool sH2 = Physics2D.OverlapBox(s2, SkyCheckSize2, 0f, groundLayer);
+
+        // Ground 可视
+        Gizmos.color = g1 ? Color.green : Color.red;
+        Gizmos.DrawWireCube(p1, groundCheckSize);
+        Gizmos.DrawLine(p1, p1 + Vector2.down * feetProbe); // 探测线
+        Gizmos.color = g2 ? Color.green : Color.red;
+        Gizmos.DrawWireCube(p2, groundCheckSize2);
+        Gizmos.DrawLine(p2, p2 + Vector2.down * feetProbe);
+
+        // Sky 可视
+        Gizmos.color = sH1 ? Color.yellow : Color.cyan;
+        Gizmos.DrawWireCube(s1, SkyCheckSize1);
+        Gizmos.color = sH2 ? Color.yellow : Color.cyan;
+        Gizmos.DrawWireCube(s2, SkyCheckSize2);
     }
     #endregion
 
 
     #region Animator
-    // UpdateAnimatorParams：BackFlashInterruptible 用 Safe；其余参数可选也用 Safe
+    // UpdateAnimatorParams：把 Sky 阻断也喂给 Animator（可选，不存在该参数会被 SafeSetBool 忽略）
     private void UpdateAnimatorParams()
     {
+
         SafeSetBool(PARAM_ShieldHold, shieldHeld);
 
         bool bfInterruptible = false;
@@ -1451,7 +1623,6 @@ public class PlayerController : MonoBehaviour
         }
         SafeSetBool(PARAM_BackFlashInterruptible, bfInterruptible);
 
-        // 下列参数如果 Animator 一定存在，可保留原 SetX；若也可能被清理，改用 SafeSet*
         SafeSetFloat(PARAM_MoveSpeed, Mathf.Abs(currentSpeedX));
         SafeSetBool(PARAM_IsGrounded, isGrounded);
         SafeSetBool(PARAM_IsDucking,
@@ -1517,13 +1688,22 @@ public class PlayerController : MonoBehaviour
     {
         if (!wallJumpEnabled) return;
         if (IsHardLocked() || IsAutoPhaseLocked()) return;
+
+        // 新增：空中攻击期间禁止踩墙反跳
+        if (airAttackActive || airAttackAnimPlaying) return;
+        // 可选兜底（更稳）：检查 Animator 当前是否在空攻状态
+        // var st = anim.GetCurrentAnimatorStateInfo(0);
+        // if (st.IsName("player_jump_attack") || st.IsName("player_jump_downForward_attack")) return;
+
         if (isGrounded || !nearWall) return;
         if (!keyDownJump) return;
         if (Time.time - wallJumpLastTime < wallJumpCooldown) return;
 
-        // 必须保持朝墙方向输入：墙在右(+1) -> 输入>0；墙在左(-1) -> 输入<0
         float dir = GetEffectiveInputDir();
         if (Mathf.Abs(dir) <= 0.01f || Mathf.Sign(dir) != wallSide) return;
+
+        // 新增：如当前处于空中攻击，先立即结束空中攻击（由墙跳覆盖）
+        ForceEndAirAttack();
 
         // 进入转身硬锁
         wallTurnActive = true;
@@ -1536,7 +1716,6 @@ public class PlayerController : MonoBehaviour
         rb.velocity = Vector2.zero;
         currentSpeedX = 0f;
 
-        // 朝向立即改为离墙方向
         bool wantRight = (wallSide == -1);
         if (facingRight != wantRight)
         {
@@ -1544,7 +1723,6 @@ public class PlayerController : MonoBehaviour
             if (flipRoot) flipRoot.localScale = facingRight ? Vector3.one : new Vector3(-1, 1, 1);
         }
 
-        // 播转身动画（不可被打断），用 CrossFade 确保同帧进入
         anim.ResetTrigger(TRIG_WallTurn);
         anim.CrossFadeInFixedTime("player_jump_turn_wall", 0f, 0, 0f);
         anim.Update(0f);
@@ -1589,6 +1767,10 @@ public class PlayerController : MonoBehaviour
         // 标记“正在跳跃”，以配合你的其它跳高限制
         isJumping = true;
         jumpStartY = rb.position.y;
+
+        // 墙反跳发射后，结束二段跳的“姿势保持”，但不恢复配额
+        doubleJumpActive = false;
+        doubleJumpPoseHold = false;
     }
 
     // 动画事件回调：player_jump_forward 的关键帧调用
@@ -1637,6 +1819,119 @@ public class PlayerController : MonoBehaviour
         // 清掉可能残留的动画触发器（保险）
         SafeResetTrigger(TRIG_WallTurn);
         SafeResetTrigger(TRIG_JumpForward);
+    }
+
+    // 二段跳触发后，立即解除墙反跳自动锁，恢复水平控制
+    private void HandleDoubleJump()
+    {
+        if (!doubleJumpEnabled) return;
+        if (isGrounded) { doubleJumpActive = false; return; }
+        if (IsHardLocked()) return;            // 墙转身硬锁期禁用
+        if (magicAttackPlaying) return;        // 魔法攻击期间禁用
+
+        // 还有配额才允许触发
+        if (keyDownJump && extraJumpsUsed < extraJumpsPerAir)
+        {
+            // 空攻动画进行中不触发，避免冲突
+            if (airAttackActive || airAttackAnimPlaying) return;
+
+            extraJumpsUsed++;                  // 消耗一次配额
+            doubleJumpActive = true;
+            doubleJumpPoseHold = true;
+            doubleJumpStartY = rb.position.y;
+
+            float dir = GetEffectiveInputDir();
+            float xSpd = Mathf.Abs(dir) > 0.01f
+                ? (doubleJumpSpeedX > 0f ? doubleJumpSpeedX : moveSpeed) * Mathf.Sign(dir)
+                : rb.velocity.x;
+
+            rb.velocity = new Vector2(xSpd, doubleJumpForceY);
+            currentSpeedX = xSpd;
+            isJumping = true;
+
+            SafeResetTrigger(TRIG_JumpUp);
+            SafeResetTrigger(TRIG_JumpForward);
+            SafeResetTrigger("Trig_JumpDown");
+            SafeResetTrigger(TRIG_JumpAttack);
+            SafeResetTrigger(TRIG_JumpDownFwdAttack);
+            anim.CrossFadeInFixedTime(STATE_JumpDouble, 0f, 0, 0f);
+            anim.Update(0f);
+
+            if (shieldHeld) relay?.PlayShieldStanding();
+
+            // 若正处在墙反跳自动锁定，二段跳触发后立即解除，允许A/D控制
+            if (wallJumpAutoPhase && !wallJumpControlUnlocked)
+            {
+                wallJumpAutoPhase = false;
+                wallJumpControlUnlocked = true;
+            }
+        }
+    }
+
+    // 二段跳相对高度限制（从二段起跳点起算） =====
+    private void EnforceMaxDoubleJumpHeight()
+    {
+        if (!doubleJumpActive) return;
+        if (doubleJumpMaxHeight <= 0f) return;
+        if (rb.velocity.y > 0f)
+        {
+            float deltaH = rb.position.y - doubleJumpStartY;
+            if (deltaH >= doubleJumpMaxHeight)
+                rb.velocity = new Vector2(rb.velocity.x, 0f);
+        }
+    }
+
+    // 二段跳动画保持：动画播完但仍在上升，钉住最后一帧 =====
+    private void HoldDoubleJumpPoseWhileAscending()
+    {
+        if (!doubleJumpActive) return;
+        if (rb.velocity.y <= 0f) { doubleJumpPoseHold = false; return; }
+
+        var st = anim.GetCurrentAnimatorStateInfo(0);
+        if (st.IsName(STATE_JumpDouble) && !anim.IsInTransition(0) && st.normalizedTime >= 0.98f && doubleJumpPoseHold)
+        {
+            // 将动画钉在末帧
+            anim.CrossFade(STATE_JumpDouble, 0f, 0, 0.98f);
+            anim.Update(0f);
+        }
+    }
+
+    // 过顶点开始下落 -> 退出二段跳保持（下落由你现有 Trig_JumpDown 触发） =====
+    private void AutoExitDoubleJumpOnFall()
+    {
+        if (!doubleJumpActive) return;
+        if (rb.velocity.y <= 0f)
+        {
+            doubleJumpActive = false;
+            doubleJumpPoseHold = false;
+        }
+    }
+
+    // 仅按 isDucking 切换启停；不做任何“头顶空间”门禁检查
+    private void SyncCrouchColliders()
+    {
+        if (!standingCollider || !duckCollider) return;
+
+        bool wantDuck = isDucking;
+
+        // 状态未变化就不重复切换
+        if (wantDuck == colliderDuckActive) return;
+
+        if (wantDuck)
+        {
+            standingCollider.enabled = false;
+            duckCollider.enabled = true;
+            colliderDuckActive = true;
+        }
+        else
+        {
+            duckCollider.enabled = false;
+            standingCollider.enabled = true;
+            colliderDuckActive = false;
+        }
+
+        // 立即同步物理，避免一帧延迟
+        Physics2D.SyncTransforms();
     }
 
 
