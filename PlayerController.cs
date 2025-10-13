@@ -38,22 +38,26 @@ public class PlayerController : MonoBehaviour
     [Header("斜坡防滑（无输入时）")]
     [Tooltip("向下速度小于该阈值时钳为0，阻止极慢的下滑（负数，靠近0更“粘”）")]
     [SerializeField] private float slopeStopVyThreshold = -0.05f;
-    [Tooltip("沿斜面切向速度绝对值小于该阈值则清零（米/秒）")]
+    [Tooltip("沿斜面切向速度绝对值小于该阈值则清零（米/秒）；目前仅用于平地兜底")]
     [SerializeField] private float horizontalStopThresholdOnSlope = 0.02f;
-
-    [SerializeField] private bool slopeIdleFreezeGravity = true;// 斜坡停驻锁（无输入时冻结重力，彻底止滑）
-    [SerializeField] private float slopeEnterIdleSpeedEpsilon = 0.5f; // 进入锁时的速度门槛
+    [Tooltip("斜坡停驻锁（无输入时冻结重力，彻底止滑）")]
+    [SerializeField] private bool slopeIdleFreezeGravity = true;      
+    [Tooltip("进入锁时的速度门槛（米/秒）")]
+    [SerializeField] private float slopeEnterIdleSpeedEpsilon = 0.50f;
 
     [Header("接地稳定")]
     [SerializeField] private float groundedExitCoyote = 0.08f;
 
     [Header("台阶抬步 Step Up")]
     [SerializeField] private bool stepUpEnabled = true;
-    // 允许抬步的最大台阶高度（米），典型 0.10~0.18；过大容易“爬墙”
-    [SerializeField, Range(0.01f, 0.30f)] private float stepUpMaxHeight = 0.14f;
-    // 前方横向探测距离（米），用于确认抬到该高度后前方不再被墙阻挡
-    [SerializeField, Range(0.02f, 0.20f)] private float stepUpForwardProbe = 0.08f;
-    // 抬步高度离散次数（越大越细，但稍增开销）
+    
+    [Tooltip("允许抬步的最大台阶高度（米），典型 0.10~0.18；过大容易“爬墙")]
+    [SerializeField] private float stepUpMaxHeight = 0.14f;
+
+    [Tooltip("前方横向探测距离（米），用于确认抬到该高度后前方不再被墙阻挡")]
+    [SerializeField] private float stepUpForwardProbe = 0.08f;
+
+    [Tooltip("抬步高度离散次数（越大越细，但稍增开销）")]
     [SerializeField, Range(1, 6)] private int stepUpChecks = 3;
 
     [Header("移动")]
@@ -1457,6 +1461,11 @@ public class PlayerController : MonoBehaviour
     // PATCH: 粘地 Ray 的“兜底长度”加大，快速站/蹲切换时更容易重新挂住地面
     private void CheckGrounded()
     {
+        // 先缓存上一帧“接地外观”信息，用于 coyote 或锁定时维持稳定
+        var prevN = groundNormal;
+        var prevTouchSide = touchingGroundSide;
+        var prevSideNx = groundSideNormalX;
+
         touchingGroundSide = false;
         bool groundedByBody = false;
         bool groundedByRay = false;
@@ -1511,11 +1520,39 @@ public class PlayerController : MonoBehaviour
             }
         }
 
+        // 有真实命中就刷新“最后接地时间”
         if (groundedByBody || groundedByRay) lastGroundedAt = Time.time;
+
+        // 基础的稳定接地判定
         bool groundedStable = groundedByBody || groundedByRay || (Time.time - lastGroundedAt <= groundedExitCoyote);
 
+        // 关键1：处于斜坡静止锁时，一律视为接地，且刷新“最后接地时间”，避免锁内掉出接地
+        if (slopeIdleLocked)
+        {
+            groundedStable = true;
+            lastGroundedAt = Time.time;
+        }
+
         isGrounded = groundedStable;
-        groundNormal = isGrounded ? bestGroundNormal : Vector2.up;
+
+        // 关键2：仅凭 coyote/锁定而“接地”时，沿用上一帧地面法线与侧墙信息，避免瞬间变平地导致抖动
+        bool hasAnyHitThisFrame = groundedByBody || groundedByRay;
+        if (hasAnyHitThisFrame)
+        {
+            groundNormal = bestGroundNormal;
+            // touchingGroundSide/groundSideNormalX 已在上面按命中更新
+        }
+        else if (groundedStable)
+        {
+            groundNormal = prevN;
+            touchingGroundSide = prevTouchSide;
+            groundSideNormalX = prevSideNx;
+        }
+        else
+        {
+            groundNormal = Vector2.up;
+            // touchingGroundSide 已是 false
+        }
 
         // 粘地窗口期间：加长 Ray，进一步兜底挂地（长度从原 3x/0.06 提升到 4.5x/0.10）
         if (!isGrounded && crouchGroundStickyFrames > 0)
@@ -1605,13 +1642,14 @@ public class PlayerController : MonoBehaviour
     // FreezeOnSlopeWhenNoInput：在“无水平输入 + 斜坡”时，直接清掉切向分量，避免落坡后一帧沿斜面滑动
     private void FreezeOnSlopeWhenNoInput()
     {
-        // BackFlash 期间：位移进行中不做斜坡止滑干预
+        // BackFlash 位移中不干预
         if (backFlashActive && backFlashMoving)
         {
             ExitSlopeIdleLock();
             return;
         }
 
+        // 未接地/锁定中则退出锁
         if (!isGrounded || IsHardLocked() || IsAutoPhaseLocked())
         {
             ExitSlopeIdleLock();
@@ -1628,16 +1666,17 @@ public class PlayerController : MonoBehaviour
 
         if (!noHorizInput)
         {
+            // 有输入时确保释放停驻锁
             ExitSlopeIdleLock();
             return;
         }
 
         bool onSlope = groundNormal.y < 0.999f;
 
-        // 刚起跳上升期不锁
+        // 起跳上升期不处理
         if (isJumping && rb.velocity.y > 0f) return;
 
-        // 斜坡停驻：无输入时直接锁重力（下蹲或静止足够慢）
+        // 斜坡停驻锁：无输入且速度很小时，冻结重力并清零速度
         if (slopeIdleFreezeGravity && onSlope)
         {
             if (!slopeIdleLocked)
@@ -1659,10 +1698,10 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        // 常规防滑：落地那一帧可能带较大的切向速度，直接清掉切向分量，杜绝“滑一步”
+        // 常规防滑：清掉切向速度，并对很小的下滑 vy 做钳制
         var v = rb.velocity;
 
-        // 钳下滑（vy 过小的负数设为 0）
+        // 轻微下滑钳制：vy 在一个很小的负数以下就压回 0，避免慢慢“溜坡”
         if (v.y < slopeStopVyThreshold) v.y = 0f;
 
         Vector2 tangent = new Vector2(groundNormal.y, -groundNormal.x).normalized;
@@ -1670,14 +1709,14 @@ public class PlayerController : MonoBehaviour
 
         if (onSlope)
         {
-            // 核心变化：无输入时不再用阈值，直接去掉切向速度
+            // 无输入时直接去掉切向分量
             v -= vTan * tangent;
-            // 同时清除可能的上抬
+            // 同时不允许出现向上的小抬头
             if (v.y > 0f) v.y = 0f;
         }
         else
         {
-            // 平地维持原来“很小才清”的策略
+            // 平地兜底（可保留/可去掉）
             if (Mathf.Abs(vTan) < horizontalStopThresholdOnSlope) v -= vTan * tangent;
         }
 
