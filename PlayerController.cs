@@ -476,7 +476,7 @@ public class PlayerController : MonoBehaviour
         if (keyDownJump && isGrounded && !isJumping && !groundAttackActive && !magicAttackPlaying)
         {
             if (backFlashActive) CancelBackFlash();                // 随时打断
-            if (magicActive && !magicAttackPlaying) CancelMagic();
+            
 
             ExitSlopeIdleLock();
             justJumpedFrames = 2;
@@ -524,6 +524,9 @@ public class PlayerController : MonoBehaviour
             // 就在 SafeSetTrigger(trig); 的下一行插入这两句（关键点）
             anim.CrossFadeInFixedTime(STATE_JumpUp, 0f, 0, 0f);
             anim.Update(0f);
+
+            // 最后再把魔法彻底清掉（现在状态已是 jump_up，不会被切回 idle）
+            if (magicActive && !magicAttackPlaying) CancelMagic();
         }
 
         if (!prevGrounded && isGrounded)
@@ -1069,6 +1072,9 @@ public class PlayerController : MonoBehaviour
 
     private bool IsMagicAnimBlockedByOtherActions()
     {
+        // 起跳当帧一律屏蔽魔法可视
+        if (isJumping /* 或者 justJumpedFrames > 0 */) return true;
+
         if (!isGrounded) return true;
         if (Mathf.Abs(currentSpeedX) > shieldStationaryThreshold) return true;
         if (Mathf.Abs(GetEffectiveInputDir()) > 0.01f) return true;
@@ -2103,6 +2109,38 @@ private void SyncCrouchColliders()
             Physics2D.SyncTransforms();
             return true;
         }
+
+        // --- 尖角补偿逻辑：用于“走不上尖角”情况 ---
+        {
+            // 从角色脚前方略高一点的位置，向前发射一条射线
+            Vector2 origin = rb.position + Vector2.up * 0.05f;
+            Vector2 dir = Vector2.right * dirSign;
+
+            // 发射探测，确认前方有没有短距离内可抬上的面
+            RaycastHit2D hit = Physics2D.Raycast(origin, dir, stepUpForwardProbe, groundLayer);
+
+            if (hit && hit.collider != null)
+            {
+                float deltaY = hit.point.y - rb.position.y;
+
+                // 命中面法线有一定“上向”分量且高度差在允许范围内
+                if (hit.normal.y > 0.2f && deltaY < stepUpMaxHeight * 1.5f)
+                {
+                    // 微抬角色位置（防止被卡在尖角）
+                    rb.position = new Vector2(
+                        rb.position.x,
+                        rb.position.y + deltaY + 0.02f
+                    );
+
+                    // 同时轻推前进一点点，帮助顺利跨上去
+                    rb.velocity = new Vector2(dirSign * moveSpeed * 0.3f, rb.velocity.y);
+                    return true;
+                }
+            }
+        }
+        // --- 尖角补偿逻辑结束 ---
+
+
 
         return false;
     }
