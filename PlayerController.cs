@@ -170,6 +170,9 @@ public class PlayerController : MonoBehaviour
     private Animator anim;
     private Rigidbody2D rb;
 
+    // 受伤
+    private float currentHP;
+
     // 基础状态
     private bool isGrounded;
     private bool prevGrounded;
@@ -2065,6 +2068,15 @@ private void SyncCrouchColliders()
     }
 
     // TryStepUpSmallLedge：要求前方有落脚面才抬步，避免“抬到空气里”；同时消除未使用变量警告
+
+    public void TakeDamage(int damage)
+    {
+        // 你的受伤逻辑
+        currentHP -= damage;
+        Debug.Log($"玩家受到 {damage} 点伤害，剩余 HP: {currentHP}");
+    }
+
+
     private bool TryStepUpSmallLedge(float dirSign)
     {
         if (!stepUpEnabled) return false;
@@ -2139,6 +2151,8 @@ private void SyncCrouchColliders()
             }
         }
         // --- 尖角补偿逻辑结束 ---
+
+
 
 
 
