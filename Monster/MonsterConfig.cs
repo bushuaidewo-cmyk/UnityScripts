@@ -1,5 +1,6 @@
-using UnityEngine;
 using System.Collections.Generic;
+using UnityEngine;
+using static MonsterController;
 
 /// <summary>
 /// 怪物配置 ScriptableObject，包含怪物各阶段的参数配置。
@@ -150,6 +151,10 @@ public class PatrolMovement
     public float moveDuration;
     [Tooltip("休息停顿时间")]
     public float restDuration;
+
+    [Header("直线遇障碍/悬崖行为")]
+    [Tooltip("仅在直线移动生效：遇墙/悬崖时的行为（转向 或 自动跳过去）")]
+    public ObstacleBehavior obstacleBehavior = ObstacleBehavior.Turn;
 
     [Header("移动动画配置")]
     [Tooltip("移动动画名称")]

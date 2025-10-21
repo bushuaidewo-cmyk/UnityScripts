@@ -20,7 +20,7 @@ public class MonsterController : MonoBehaviour
     private int patrolIndex = 0;
     private bool isResting = false;
     private Transform flip;
-    private int facingDir = 1; // 1=右，-1=左
+
     private List<PatrolMovement> patrolRuntimeMoves;
 
     // === 地形检测参数 ===
@@ -45,6 +45,20 @@ public class MonsterController : MonoBehaviour
     private bool hasAlignedToGround = false;
     private int spawnStableFrames = 6; // 约等于 0.1 秒（按60fps计）
 
+    [Header("AutoJump 许可区")]
+    public string autoJumpPermitTag = "AutoJumpPermit";
+
+    private bool inAutoJumpPermitZone = false;
+
+    // AutoJump 触发的“上膛/保险”机制：
+    // - 进入许可区即上膛（armed = true）
+    // - 一次自动跳后上保险（disarmUntilExit = true），必须先离开许可区才能再次上膛
+    private bool autoJumpArmed = false;
+    private bool autoJumpDisarmUntilExit = false;
+
+    // 来自直线分支的临时跳跃：落地休息后不切到下一段
+    private bool autoJumpFromStraight = false;
+    private bool keepSameMoveAfterRest = false;
 
     private enum MonsterState { Idle, Patrol, Discovery, Attack, Dead }
     private MonsterState state = MonsterState.Idle;
@@ -54,6 +68,13 @@ public class MonsterController : MonoBehaviour
                                                     // 四通道各自独立的“当前段”引用
     private PatrolMovement activeStraightMove = null;
     private PatrolMovement activeJumpMove = null;
+    public enum ObstacleBehavior { Turn, AutoJump }  // Turn=转向；AutoJump=自动跳过去
+
+    [Header("AutoJump 落地后抑制")]
+    [Tooltip("自动跳落地→休息结束后，忽略多少帧“悬崖检测”，避免刚落地又把自己当成悬崖前沿而转向。60FPS下8≈0.13秒。")]
+    public int autoJumpIgnoreCliffFrames = 8;
+    private int ignoreCliffFramesLeft = 0;
+
 
 
     void Start()
@@ -100,6 +121,9 @@ public class MonsterController : MonoBehaviour
                     deceleration = m.deceleration,
                     moveDuration = m.moveDuration,
                     restDuration = m.restDuration,
+                    // ✅ 加上这行：把遇障碍行为也拷贝到运行时
+                    obstacleBehavior = m.obstacleBehavior,
+
                     moveAnimation = m.moveAnimation,
                     restAnimation = m.restAnimation,
                     moveEffectOnlyFirst = m.moveEffectOnlyFirst,
@@ -138,7 +162,7 @@ public class MonsterController : MonoBehaviour
 
     IEnumerator StateMachine()
     {
-        
+
         int spawnLoops = Mathf.Max(1, config.spawnConfig.spawnLoopCount);
 
         for (int i = 0; i < spawnLoops; i++)
@@ -197,6 +221,8 @@ public class MonsterController : MonoBehaviour
     // === 核心：巡逻逻辑 ===
     void PatrolUpdate()
     {
+        if (ignoreCliffFramesLeft > 0) ignoreCliffFramesLeft--;
+
         // 出生稳定帧：直接播放动画+位移，不做任何墙/悬崖/转向判定
         // 出生稳定帧：直接播放动画+位移，不做任何墙/悬崖/转向判定
         if (spawnStableFrames > 0)
@@ -238,16 +264,56 @@ public class MonsterController : MonoBehaviour
         {
             if (move.type == MovementType.Straight)
             {
-                if (CheckWallAhead() || CheckCliffAhead())
-                    TurnAround();
-
-                if (!string.IsNullOrEmpty(move.moveAnimation) &&
-    !animator.GetCurrentAnimatorStateInfo(0).IsName(move.moveAnimation))
+                // 正在执行来自直线的自动跳：本帧只走 Jump 内核
+                if (isJumping)
                 {
-                    animator.Play(move.moveAnimation);
-                    activeStraightMove = move; // 绑定本段直线移动给“移动通道/休息通道”
+                    JumpUpdate(move);
+                    return;
                 }
 
+                bool wallAhead = CheckWallAhead();
+                bool cliffAhead = (ignoreCliffFramesLeft <= 0) && CheckCliffAhead();
+                bool hitObstacle = wallAhead || cliffAhead;
+
+
+                if (hitObstacle)
+                {
+                    bool canAutoJump =
+                        move.obstacleBehavior == ObstacleBehavior.AutoJump &&
+                        inAutoJumpPermitZone &&
+                        autoJumpArmed &&
+                        CheckGrounded() &&
+                        !isJumping &&
+                        turnCooldown <= 0f;
+
+                    if (canAutoJump)
+                    {
+                        // 自动跳：用本 movement 的 jump* 参数 + 你的 Jump 内核
+                        BeginOneJump(move);
+
+                        // 直线段“从新开始计算”
+                        move.moveDuration = config.patrolConfig.movements[patrolIndex].moveDuration;
+
+                        autoJumpFromStraight = true;
+                        autoJumpArmed = false;            // 消耗一次触发
+                        autoJumpDisarmUntilExit = true;   // 必须先离开许可区才能再次触发
+                        return; // 本帧不再做直线位移
+                    }
+                    else
+                    {
+                        // 不满足自动跳条件 —— 按老规矩转向（避免顶墙抖动/卡住）
+                        if (turnCooldown <= 0f)
+                            TurnAround();
+                    }
+                }
+
+                // ↓↓↓ 保持你原有的直线动画/位移/计时逻辑 ↓↓↓
+                if (!string.IsNullOrEmpty(move.moveAnimation) &&
+                    !animator.GetCurrentAnimatorStateInfo(0).IsName(move.moveAnimation))
+                {
+                    animator.Play(move.moveAnimation);
+                    activeStraightMove = move;
+                }
 
                 transform.Translate(Vector3.right * move.moveSpeed * Time.deltaTime, Space.Self);
 
@@ -258,6 +324,8 @@ public class MonsterController : MonoBehaviour
                     move.moveDuration = config.patrolConfig.movements[patrolIndex].moveDuration;
                 }
             }
+
+
             else // Jump 模式
             {
                 if (!isJumping)
@@ -331,10 +399,22 @@ public class MonsterController : MonoBehaviour
                 isResting = false;
                 move.restDuration = config.patrolConfig.movements[patrolIndex].restDuration;
                 move.jumpRestDuration = config.patrolConfig.movements[patrolIndex].jumpRestDuration;
-                patrolIndex = (patrolIndex + 1) % patrolRuntimeMoves.Count;
-                activeStraightMove = null;
-                activeJumpMove = null;
+
+                if (keepSameMoveAfterRest)
+                {
+                    keepSameMoveAfterRest = false;
+
+                    // ★ 开启悬崖检测抑制窗口（只抑制悬崖，不抑制墙）
+                    ignoreCliffFramesLeft = Mathf.Max(0, autoJumpIgnoreCliffFrames);
+                }
+                else
+                {
+                    patrolIndex = (patrolIndex + 1) % patrolRuntimeMoves.Count;
+                    activeStraightMove = null;
+                    activeJumpMove = null;
+                }
             }
+
         }
     }
 
@@ -346,34 +426,24 @@ public class MonsterController : MonoBehaviour
         return BestVerticalHit(0.12f, true).collider != null;
     }
 
-
-
-
     bool CheckWallAhead()
     {
         if (col == null) return false;
         Bounds b = col.bounds;
 
-        // 改：从“身体中心略上”高度发射，避免扫到台阶/地面侧面厚度
-        float castY = b.center.y + Mathf.Clamp(wallCheckHeightOffset, -b.extents.y * 0.5f, b.extents.y * 0.5f);
+        // ✅ 改为从脚底偏移，直观控制高度
+        float castY = b.min.y + wallCheckHeightOffset;
         Vector2 origin = new Vector2(b.center.x, castY);
         Vector2 dir = (Vector2)transform.right;
 
-        // 使用较短的距离，减少误判
         float dist = Mathf.Max(0.1f, wallCheckDistance);
-
         RaycastHit2D hit = Physics2D.Raycast(origin, dir, dist, groundLayer);
         Debug.DrawLine(origin, origin + dir * dist, hit.collider ? Color.red : Color.yellow);
 
         if (!hit.collider) return false;
-
-        // 只在“真正挡住去路”的情况下才算墙：法线要朝向我们的移动反方向
-        // 例如向右移动时，命中表面的法线 x 分量应该 < -0.4 才算“墙”
         if (Vector2.Dot(hit.normal, dir) < -0.4f) return true;
-
         return false;
     }
-
 
     bool CheckCliffAhead()
     {
@@ -423,6 +493,28 @@ public class MonsterController : MonoBehaviour
         Debug.Log($"怪物攻击造成伤害：{atk.damage}");
         state = MonsterState.Discovery;
     }
+
+    void OnTriggerEnter2D(Collider2D other)
+    {
+        if (other.CompareTag(autoJumpPermitTag))
+        {
+            inAutoJumpPermitZone = true;
+            if (!autoJumpDisarmUntilExit)
+                autoJumpArmed = true; // 进入许可区，上膛
+        }
+    }
+
+    void OnTriggerExit2D(Collider2D other)
+    {
+        if (other.CompareTag(autoJumpPermitTag))
+        {
+            inAutoJumpPermitZone = false;
+            autoJumpDisarmUntilExit = false; // 离开许可区，解除保险
+            autoJumpArmed = true;            // 下次再进入可再次触发
+        }
+    }
+
+
 
     void Die()
     {
@@ -516,6 +608,13 @@ public class MonsterController : MonoBehaviour
             isResting = true;
             move.restDuration = move.jumpRestDuration;
 
+            // 来自直线的自动跳：休息完仍回到本直线段
+            if (autoJumpFromStraight)
+            {
+                keepSameMoveAfterRest = true;
+                autoJumpFromStraight = false;
+            }
+
             if (!string.IsNullOrEmpty(move.jumpRestAnimation) &&
                 !animator.GetCurrentAnimatorStateInfo(0).IsName(move.jumpRestAnimation))
                 animator.Play(move.jumpRestAnimation);
@@ -570,7 +669,7 @@ public class MonsterController : MonoBehaviour
         Bounds b = col.bounds;
 
         Vector2 left, center, right, dir;
-       
+
 
         if (down)
         {
@@ -591,7 +690,7 @@ public class MonsterController : MonoBehaviour
         var hitC = Physics2D.Raycast(center, dir, rayLen, groundLayer);
         var hitR = Physics2D.Raycast(right, dir, rayLen, groundLayer);
 
-        
+
 
         RaycastHit2D best = default;
         float bestDist = float.MaxValue;

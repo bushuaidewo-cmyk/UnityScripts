@@ -1,17 +1,25 @@
 ﻿using UnityEngine;
-using System.Collections.Generic;
 using System.Collections;
+using System.Collections.Generic;
 
 /// <summary>
-/// 怪物生成器：负责周期生成怪物，并自动检测Prefab完整性
+/// 怪物生成器（批量 + 间隔）：
+/// - maxSpawnCount == 0  => 不出生
+/// - 首批立即刷（按 spawnBatchCount，受剩余额度截断）
+/// - 每 spawnInterval 秒再刷一批，直到“总出生数”达到 maxSpawnCount
+/// - Points：同一批里若只有 1 个点，则同点重叠生成；多点则按顺序/随机分配
+/// - Area：同一批在区域内随机散点
 /// </summary>
 public class MonsterSpawner : MonoBehaviour
 {
     [Header("怪物配置 ScriptableObject")]
     public MonsterConfig monsterConfig;
 
-    // 当前场景已生成的怪物实例列表
-    private List<GameObject> spawnedMonsters = new List<GameObject>();
+    // 运行时
+    private readonly List<GameObject> alive = new List<GameObject>(); // 当前场景仍存活
+    private int spawnedTotal = 0;                                      // 累计已出生（总量上限依据此计）
+    private bool loopRunning = false;                                  // 防止重复开协程
+    private int nextPointIndex = 0;                                    // 顺序模式下的点序号
 
     void Start()
     {
@@ -22,113 +30,147 @@ public class MonsterSpawner : MonoBehaviour
             return;
         }
 
-        // 初次生成
-        SpawnMonsters(monsterConfig.spawnConfig.spawnBatchCount);
+        var spawn = monsterConfig.spawnConfig;
 
-        // 循环生成
-        if (monsterConfig.spawnConfig.spawnInterval > 0)
+        // maxSpawnCount == 0 表示不出生
+        if (spawn.maxSpawnCount == 0)
+        {
+            Debug.Log("[MonsterSpawner] maxSpawnCount == 0，跳过出生。");
+            return;
+        }
+
+        // ✅ 首批：立即刷一次（受剩余额度截断）
+        int firstBatch = CalcBatchToSpawn();
+        if (firstBatch > 0) SpawnBatch(firstBatch);
+
+        // ✅ 循环：先等一个间隔，再刷下一批（避免和首批叠在同一帧）
+        if (spawn.spawnInterval > 0f && spawnedTotal < spawn.maxSpawnCount && !loopRunning)
             StartCoroutine(SpawnLoop());
     }
 
     IEnumerator SpawnLoop()
     {
-        while (true)
-        {
-            if (monsterConfig.spawnConfig.maxSpawnCount > 0 &&
-                spawnedMonsters.Count >= monsterConfig.spawnConfig.maxSpawnCount)
-            {
-                yield return new WaitForSeconds(1f);
-                continue;
-            }
+        loopRunning = true;
+        var spawn = monsterConfig.spawnConfig;
 
-            SpawnMonsters(monsterConfig.spawnConfig.spawnBatchCount);
-            yield return new WaitForSeconds(monsterConfig.spawnConfig.spawnInterval);
+        while (enabled && monsterConfig != null)
+        {
+            yield return new WaitForSeconds(spawn.spawnInterval);
+
+            if (spawn.maxSpawnCount == 0) break; // 0 表示不出生，保险判断
+            if (spawnedTotal >= spawn.maxSpawnCount) continue;
+
+            int toSpawn = CalcBatchToSpawn();
+            if (toSpawn > 0) SpawnBatch(toSpawn);
         }
+
+        loopRunning = false;
     }
 
-    void SpawnMonsters(int count)
+    /// <summary>
+    /// 计算本批应刷数量（受剩余名额截断）
+    /// </summary>
+    private int CalcBatchToSpawn()
     {
-        for (int i = 0; i < count; ++i)
+        var spawn = monsterConfig.spawnConfig;
+        if (spawn.maxSpawnCount == 0) return 0;
+
+        int remain = Mathf.Max(0, spawn.maxSpawnCount - spawnedTotal);
+        if (remain == 0) return 0;
+
+        int batch = Mathf.Max(1, spawn.spawnBatchCount);
+        return Mathf.Min(batch, remain);
+    }
+
+    /// <summary>
+    /// 刷一批
+    /// </summary>
+    private void SpawnBatch(int count)
+    {
+        var spawn = monsterConfig.spawnConfig;
+
+        for (int i = 0; i < count; i++)
         {
-            Vector2 spawnPos = GetSpawnPosition();
+            Vector3 pos = GetSpawnPosition(spawn);
 
             // 朝向
             bool faceRight = true;
-            if (monsterConfig.spawnConfig.spawnOrientation == Orientation.FacePlayer)
+            if (spawn.spawnOrientation == Orientation.FacePlayer)
             {
-                GameObject player = GameObject.FindWithTag("Player");
-                if (player && player.transform.position.x < spawnPos.x)
-                    faceRight = false;
+                var player = GameObject.FindWithTag("Player")?.transform;
+                if (player) faceRight = player.position.x >= pos.x;
             }
-            else if (monsterConfig.spawnConfig.spawnOrientation == Orientation.FaceLeft)
+            else if (spawn.spawnOrientation == Orientation.FaceLeft)
             {
                 faceRight = false;
             }
 
-            // ✅ 检查Prefab合法性
+            // Prefab 校验
             if (monsterConfig.monsterPrefab == null)
             {
-                Debug.LogError("[MonsterSpawner] MonsterConfig 未分配 Monster Prefab！");
+                Debug.LogError("[MonsterSpawner] 未配置 monsterPrefab！");
                 return;
             }
 
-            // 实例化怪物
-            GameObject newMonster = Instantiate(monsterConfig.monsterPrefab, spawnPos, Quaternion.identity);
+            // 实例化
+            GameObject go = Instantiate(monsterConfig.monsterPrefab, pos, Quaternion.identity);
 
-            // 朝向翻转
-            // 朝向翻转（仅旋转，不改scale）
-            if (faceRight)
-                newMonster.transform.rotation = Quaternion.identity;
-            else
-                newMonster.transform.rotation = Quaternion.Euler(0, 180f, 0);
+            // 设定朝向（仅用旋转，不改 scale）
+            go.transform.rotation = faceRight ? Quaternion.identity : Quaternion.Euler(0, 180f, 0);
 
-            // ✅ 检查 MonsterController 是否存在
-            // ✅ 优先在子节点中查找 MonsterController（支持 Monster_test_Root 层级结构）
-            MonsterController controller = newMonster.GetComponentInChildren<MonsterController>();
-
-            if (controller == null)
+            // 确保 MonsterController
+            var ctrl = go.GetComponentInChildren<MonsterController>();
+            if (ctrl == null)
             {
-                Debug.LogWarning($"[MonsterSpawner] {newMonster.name} 及其子节点均未找到 MonsterController，自动添加到根节点。");
-                controller = newMonster.AddComponent<MonsterController>();
+                Debug.LogWarning($"[MonsterSpawner] {go.name} 未找到 MonsterController，自动挂到根节点。");
+                ctrl = go.AddComponent<MonsterController>();
             }
 
+            // 注入配置 & 回调
+            ctrl.config = monsterConfig;
+            ctrl.spawner = this;
 
-            // ✅ 自动赋值配置
-            if (controller != null)
-            {
-                controller.config = monsterConfig;
-                controller.spawner = this;
-                Debug.Log($"[Spawner] 已生成怪物：{newMonster.name}，已赋值 Config：{(controller.config != null ? "✅成功" : "❌失败")}");
-            }
-            else
-            {
-                Debug.LogError($"[MonsterSpawner] {newMonster.name} 未能添加 MonsterController，请检查Prefab。");
-            }
+            alive.Add(go);
+            spawnedTotal++;
 
-            spawnedMonsters.Add(newMonster);
+            // 达到总上限后直接结束本批
+            if (spawnedTotal >= spawn.maxSpawnCount) break;
         }
     }
 
-    Vector2 GetSpawnPosition()
+    /// <summary>
+    /// 取本次生成坐标
+    /// Points：若仅 1 个点 -> 同一批所有都会用这个点（重叠）
+    ///          多个点时按 sequentialSpawn 顺序/随机挑点
+    /// Area：   在范围内随机
+    /// </summary>
+    private Vector3 GetSpawnPosition(SpawnConfig spawn)
     {
-        var spawn = monsterConfig.spawnConfig;
         if (spawn.positionType == SpawnPositionType.Area)
         {
-            float x = Random.Range(spawn.areaCenter.x - spawn.areaSize.x / 2, spawn.areaCenter.x + spawn.areaSize.x / 2);
-            float y = Random.Range(spawn.areaCenter.y - spawn.areaSize.y / 2, spawn.areaCenter.y + spawn.areaSize.y / 2);
-            return new Vector2(x, y);
+            Vector2 c = spawn.areaCenter;
+            Vector2 s = spawn.areaSize;
+            return new Vector3(
+                Random.Range(c.x - s.x * 0.5f, c.x + s.x * 0.5f),
+                Random.Range(c.y - s.y * 0.5f, c.y + s.y * 0.5f),
+                0f
+            );
         }
         else
         {
-            if (spawn.spawnPoints.Count == 0)
+            // Points
+            if (spawn.spawnPoints == null || spawn.spawnPoints.Count == 0)
                 return transform.position;
 
+            if (spawn.spawnPoints.Count == 1)
+                return spawn.spawnPoints[0];   // 单点：同批全部重叠在此点
+
+            // 多点：顺序或随机
             if (spawn.sequentialSpawn)
             {
-                Vector2 pos = spawn.spawnPoints[0];
-                spawn.spawnPoints.RemoveAt(0);
-                spawn.spawnPoints.Add(pos);
-                return pos;
+                int idx = nextPointIndex % spawn.spawnPoints.Count;
+                nextPointIndex++;
+                return spawn.spawnPoints[idx];
             }
             else
             {
@@ -138,21 +180,33 @@ public class MonsterSpawner : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 被 MonsterController 在 Die() 时调用
+    /// （当前逻辑下 maxSpawnCount 是“总出生数上限”，不是“存活上限”，
+    ///  因此这里不影响后续是否继续刷，只做清理。）
+    /// </summary>
     public void NotifyMonsterDeath(GameObject monster)
     {
-        spawnedMonsters.Remove(monster);
+        if (monster) alive.Remove(monster);
     }
 
 #if UNITY_EDITOR
-    // 可视化出生区域调试
     void OnDrawGizmosSelected()
     {
         if (monsterConfig == null) return;
-        Gizmos.color = Color.red;
-        var area = monsterConfig.spawnConfig;
-        if (area.positionType == SpawnPositionType.Area)
+
+        var spawn = monsterConfig.spawnConfig;
+        if (spawn.positionType == SpawnPositionType.Area)
         {
-            Gizmos.DrawWireCube(area.areaCenter, area.areaSize);
+            Gizmos.color = Color.red;
+            Gizmos.DrawWireCube(spawn.areaCenter, spawn.areaSize);
+        }
+        else
+        {
+            Gizmos.color = Color.green;
+            if (spawn.spawnPoints != null)
+                foreach (var p in spawn.spawnPoints)
+                    Gizmos.DrawWireSphere(p, 0.1f);
         }
     }
 #endif
