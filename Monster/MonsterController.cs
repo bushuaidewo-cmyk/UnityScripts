@@ -80,6 +80,33 @@ public class MonsterController : MonoBehaviour
     private bool slopeIdleLockedMC = false;
     private float slopeSavedGravityMC = 0f;
 
+    // 路点巡逻（启用 patrolPoints 时）
+    private int patrolPointIndex = 0;
+    [SerializeField, Tooltip("接近路点的判定半径")] private float pointArriveRadius = 0.05f;
+
+    // 路点 ping-pong 状态（仅做方向锚点）
+    private int waypointIndex = 0;           // 当前已抵达/所在的路点
+    private int waypointTargetIndex = 0;     // 当前要前往的目标路点
+    private int waypointDir = +1;            // +1 正向，-1 反向（0..N..0 ping-pong）
+
+    // 落地后短暂抑制“向上分量”叠加（单位：帧）
+    private int suppressUpwardOnGroundFrames = 0;
+
+    // 直线当前朝向（基于 transform.rotation.y：0=向右,180=向左）
+    private int FacingSign() => (transform.rotation.eulerAngles.y == 0f) ? +1 : -1;
+
+    // 用于 Straight 的期望速度（米/秒；正负含朝向）
+    private float desiredSpeedX = 0f;
+
+    // AutoJump 运行时标记
+    private bool isAutoJumping = false;
+
+    private readonly Dictionary<string, GameObject> fxLookup = new Dictionary<string, GameObject>();
+
+    private List<int> moveOrder = null;
+    private int moveOrderPos = 0;
+
+
     [Header("AutoJump 落地后抑制")]
     [Tooltip("自动跳落地→休息结束后，忽略多少帧“悬崖检测”，避免刚落地又把自己当成悬崖前沿而转向。60FPS下8≈0.13秒。")]
     public int autoJumpIgnoreCliffFrames = 8;
@@ -101,26 +128,6 @@ public class MonsterController : MonoBehaviour
     // NEW: 斜坡上保持“世界X速度”一致（视觉不变慢）
     [Tooltip("斜坡上放大切向速度，保持世界X速度≈moveSpeed")]
     [SerializeField] private bool preserveWorldXOnSlopeMC = true;
-
-    // 路点巡逻（启用 patrolPoints 时）
-    private int patrolPointIndex = 0;
-    [SerializeField, Tooltip("接近路点的判定半径")] private float pointArriveRadius = 0.05f;
-
-    // 落地后短暂抑制“向上分量”叠加（单位：帧）
-    private int suppressUpwardOnGroundFrames = 0;
-
-    // 直线当前朝向（基于 transform.rotation.y：0=向右,180=向左）
-    private int FacingSign() => (transform.rotation.eulerAngles.y == 0f) ? +1 : -1;
-
-    // 用于 Straight 的期望速度（米/秒；正负含朝向）
-    private float desiredSpeedX = 0f;
-
-    // AutoJump 运行时标记
-    private bool isAutoJumping = false;
-
-    private readonly Dictionary<string, GameObject> fxLookup = new Dictionary<string, GameObject>();
-
-
 
     void Start()
     {
@@ -173,6 +180,11 @@ public class MonsterController : MonoBehaviour
 
         // 统一构建特效名索引（基于克隆体）
         BuildFxLookup();
+        //基于当前 movements 和 randomOrder 初始化播放顺序
+        BuildMoveOrderFromConfig();
+
+        // 初始化路点（若有），并对齐初始朝向
+        InitWaypointsIfAny();
 
         currentHP = config.maxHP;
         turnCooldown = 1f;
@@ -277,66 +289,19 @@ public class MonsterController : MonoBehaviour
             return;
         }
 
-        // ============= 路点模式（有点就启用。完全靠点） =============
-        var pts = config?.patrolConfig?.patrolPoints;
-        if (pts != null && pts.Count > 0)
-        {
-            Vector2 target = pts[patrolPointIndex];
-            Vector2 to = target - (Vector2)transform.position;
-            float dist = to.magnitude;
-
-            // 到点：切下一个（循环）
-            if (dist <= Mathf.Max(0.01f, pointArriveRadius))
-            {
-                patrolPointIndex = (patrolPointIndex + 1) % pts.Count;
-                // 到点停顿：用 restDuration=0 的“无移动”，自然触发斜坡停驻锁
-                desiredSpeedX = 0f;
-                ApplySlopeIdleStopIfNoMove();
-                return;
-            }
-
-            // 朝目标点决定 facing
-            int wantSign = (to.x >= 0f) ? +1 : -1;
-            if (wantSign != FacingSign()) TurnAround();
-
-            // 以“恒定速度”：取当前活动直线段或默认速度
-            float spd = 0f;
-            if (patrolRuntimeMoves != null && patrolRuntimeMoves.Count > 0)
-            {
-                var mv = patrolRuntimeMoves[Mathf.Clamp(patrolIndex, 0, patrolRuntimeMoves.Count - 1)];
-                spd = Mathf.Max(0.01f, (mv.type == MovementType.Straight && mv.moveSpeed > 0f) ? mv.moveSpeed : 1.0f);
-                if (!string.IsNullOrEmpty(mv.moveAnimation) &&
-                    !animator.GetCurrentAnimatorStateInfo(0).IsName(mv.moveAnimation))
-                    PlayAnimIfNotCurrent(mv.moveAnimation);
-            }
-            else
-            {
-                spd = 1.0f;
-            }
-
-            desiredSpeedX = spd * FacingSign();
-
-            // 接地则沿斜坡投影，否则维持空中 X
-            if (isGroundedMC)
-                ApplyProjectedVelocityAlongSlope(Mathf.Abs(desiredSpeedX), FacingSign());
-            else
-                rb.velocity = new Vector2(desiredSpeedX, rb.velocity.y);
-
-            return;
-        }
-
-        // ============= Movements 模式 =============
+        // ============= Movements 模式（路点仅作为“方向锚点”） =============
         if (patrolRuntimeMoves == null || patrolRuntimeMoves.Count == 0) return;
 
         PatrolMovement move = patrolRuntimeMoves[patrolIndex];
 
-        // 直线逻辑（加速 -> 匀速 -> 减速 -> 休息）
 
+        // ============== Straight 分支 ==============
+        // 直线逻辑（加速 -> 匀速 -> 减速 -> 休息）
         if (!isResting && move.type == MovementType.Straight)
         {
             // 保证“移动阶段的动画”始终在播（覆盖 加速/匀速/减速）
             PlayAnimIfNotCurrent(move.moveAnimation);
-            
+
             activeStraightMove = move;
 
             // 初始化三段计时（仅在进入该 movement 的第一次）
@@ -373,7 +338,7 @@ public class MonsterController : MonoBehaviour
                     move.rtRestTimer = Mathf.Max(0f, move.restDuration);
                     // 切休息动画
                     PlayAnimIfNotCurrent(move.restAnimation);
-                    
+
                     // 停驻逻辑
                     desiredSpeedX = 0f;
                     ApplySlopeIdleStopIfNoMove();
@@ -457,7 +422,6 @@ public class MonsterController : MonoBehaviour
 
                         // 播休息动画（并保证持续播放）
                         PlayAnimIfNotCurrent(move.restAnimation);
-                        
 
                         // 斜坡停驻锁辅助（冻结重力/清切向）
                         ApplySlopeIdleStopIfNoMove();
@@ -475,6 +439,9 @@ public class MonsterController : MonoBehaviour
                     TurnAround();
             }
 
+            // NEW: 路点仅作为“方向锚点”→ 到点推进（ping-pong），并在允许转向时朝目标点纠正朝向
+            WaypointUpdateAndMaybeTurn(canTurnNow);
+
             // 施加速度（接地沿斜坡投影）
             desiredSpeedX = move.rtCurrentSpeed * FacingSign();
             if (isGroundedMC)
@@ -485,22 +452,23 @@ public class MonsterController : MonoBehaviour
             return;
         }
 
-        // 跳跃逻辑 1
+        // ============== Jump 分支：新增“路点方向锚点”调用 ==============
         if (!isResting && move.type == MovementType.Jump)
         {
-            // 起跳（仅在“确认接地”时才触发）
+            bool canTurnNow = !inAutoJumpPermitZone && !isAutoJumping && (ignoreCliffFramesLeft <= 0);
+
+            // 起跳前，用路点锚点纠正/推进（接地才执行，不在空中转向）
+            if (CheckGrounded()) WaypointUpdateAndMaybeTurn(canTurnNow);
+
             if (!isJumping)
             {
                 if (CheckGrounded())
                 {
-                    // 仅在真正接地时规划并起跳，避免落地边缘抖动导致的“原地小跳”
                     EnsureJumpPlan(move, useAutoParams: false);
                     BeginOneJump(move, useAutoParams: false);
                 }
                 else
                 {
-                    // 未接地：不要做“空中过渡推进”，等待下一帧接地稳定后再起跳
-                    // 这样可以避免你观察到的：前跳落地后又在原地弹一下
                     return;
                 }
             }
@@ -511,21 +479,27 @@ public class MonsterController : MonoBehaviour
             return;
         }
 
-        // 休息期
+        // ============== 休息期：新增“路点方向锚点”调用 ==============
         if (isResting)
         {
+            
+            
             string restAnim =
                 (move.type == MovementType.Jump && !string.IsNullOrEmpty(move.jumpRestAnimation))
                     ? move.jumpRestAnimation
                     : move.restAnimation;
 
             PlayAnimIfNotCurrent(restAnim);
+
+            // NEW: 休息中也用路点锚点（接地）纠正朝向，下一次出发/起跳方向正确
+            bool canTurnNow = !inAutoJumpPermitZone && !isAutoJumping && (ignoreCliffFramesLeft <= 0);
+            WaypointUpdateAndMaybeTurn(canTurnNow);
+
             
 
-            // 每帧保持水平速度为 0（防止物理残留或斜坡微滑）
+            // 每帧保持水平速度为 0
             rb.velocity = new Vector2(0f, rb.velocity.y);
 
-            // 计时
             float restLeft =
                 (move.type == MovementType.Jump)
                     ? (move.rtRestTimer > 0f ? move.rtRestTimer : move.jumpRestDuration)
@@ -534,15 +508,14 @@ public class MonsterController : MonoBehaviour
             restLeft -= Time.deltaTime;
             move.rtRestTimer = restLeft;
 
-            // 停驻锁（无移动时防斜坡下滑）
             desiredSpeedX = 0f;
             ApplySlopeIdleStopIfNoMove();
 
             if (restLeft <= 0f)
             {
                 isResting = false;
-                inJumpRestPhase = false;         // 休息窗口关闭
-                activeJumpMove = null;           // 避免后续用跳跃资源误判
+                inJumpRestPhase = false;
+                activeJumpMove = null;
                 move.rtStraightPhase = StraightPhase.None;
                 move.rtMoveTimer = 0f;
                 move.rtRestTimer = 0f;
@@ -554,10 +527,78 @@ public class MonsterController : MonoBehaviour
                     ignoreCliffFramesLeft = Mathf.Max(0, autoJumpIgnoreCliffFrames);
                 }
 
-                
+                AdvancePatrolIndex();
             }
             return;
         }
+    }
+
+    // 出生：若配置了路点，则设定初始目标并朝向它
+    private void InitWaypointsIfAny()
+    {
+        var pts = config?.patrolConfig?.patrolPoints;
+        if (pts == null || pts.Count == 0) return;
+
+        waypointIndex = 0;
+        waypointDir = +1;
+        waypointTargetIndex = (pts.Count > 1) ? 1 : 0;
+
+        Vector2 pos = transform.position;
+        Vector2 target = pts[waypointTargetIndex];
+        int want = (target.x - pos.x >= 0f) ? +1 : -1;
+        if (want != FacingSign()) TurnAround();
+    }
+
+    // 路点仅作“方向锚点”：到点（或越点）则按 ping-pong 推进；接地且允许转向时纠正朝向
+    private void WaypointUpdateAndMaybeTurn(bool canTurnNow)
+    {
+        var pts = config?.patrolConfig?.patrolPoints;
+        if (pts == null || pts.Count == 0) return;
+        if (!isGroundedMC) return; // 只在接地时生效：空中允许越过路点
+
+        int count = pts.Count;
+        waypointTargetIndex = Mathf.Clamp(waypointTargetIndex, 0, count - 1);
+        waypointIndex = Mathf.Clamp(waypointIndex, 0, count - 1);
+
+        Vector2 pos = transform.position;
+        float arriveR = Mathf.Max(0.01f, pointArriveRadius);
+
+        // 可能一次落地跨过多个路点：循环消费
+        int guard = 0;
+        while (guard++ < count)
+        {
+            Vector2 start = pts[waypointIndex];
+            Vector2 target = pts[waypointTargetIndex];
+
+            bool arrived = Vector2.Distance(pos, target) <= arriveR;
+
+            // 沿当前段的X方向是否“越过”目标
+            float segDirX = Mathf.Sign(target.x - start.x);
+            bool overshot = false;
+            if (Mathf.Abs(segDirX) > 0f)
+            {
+                if (segDirX > 0f) overshot = pos.x >= target.x - arriveR;
+                else overshot = pos.x <= target.x + arriveR;
+            }
+
+            if (!(arrived || overshot)) break;
+
+            // 到达/越点：推进到下一目标（0..N..0 ping-pong）
+            waypointIndex = waypointTargetIndex;
+            int next = waypointIndex + waypointDir;
+            if (next < 0 || next >= count)
+            {
+                waypointDir = -waypointDir;
+                next = waypointIndex + waypointDir;
+            }
+            waypointTargetIndex = Mathf.Clamp(next, 0, count - 1);
+        }
+
+        // 允许转向时再纠正面朝目标
+        Vector2 curTarget = pts[waypointTargetIndex];
+        int wantSign = (curTarget.x - pos.x >= 0f) ? +1 : -1;
+        if (canTurnNow && turnCooldown <= 0f && wantSign != FacingSign())
+            TurnAround();
     }
 
     // === 地形检测模块 ===
@@ -681,9 +722,7 @@ public class MonsterController : MonoBehaviour
     {
         if (!other.CompareTag(autoJumpPermitTag)) return;
 
-        var pts = config?.patrolConfig?.patrolPoints;
-        if (pts != null && pts.Count > 0) return;
-
+        // 注意：路点模式不再早退，保持与非路点一致的自动跳逻辑
         inAutoJumpPermitZone = true;
 
         // 忽略帧期间 或 未上膛 -> 不触发
@@ -711,7 +750,7 @@ public class MonsterController : MonoBehaviour
         }
     }
 
-    
+
     void Die()
     {
         isDead = true;
@@ -810,7 +849,6 @@ public class MonsterController : MonoBehaviour
 
         // 仅竖直方向“安全位移”；是否“真正落地”由 groundedAfterVerticalMove 决定
         SafeMoveVertical(vY * Time.deltaTime, groundLayer);
-        
 
         // 垂直位移后，强制写回水平速度（确保空中全程有 X 速度）
         rb.velocity = new Vector2(spdX * FacingSign(), rb.velocity.y);
@@ -848,7 +886,7 @@ public class MonsterController : MonoBehaviour
                 else
                 {
                     isResting = false;
-                    inJumpRestPhase = false; 
+                    inJumpRestPhase = false;
                 }
                 ignoreCliffFramesLeft = Mathf.Max(0, autoJumpIgnoreCliffFrames);
                 move.rtUsingAutoJumpParams = false;
@@ -858,7 +896,7 @@ public class MonsterController : MonoBehaviour
                 // 普通跳：进入休息
                 move.rtExecuteRemain = 0;
                 isResting = true;
-                inJumpRestPhase = true;       
+                inJumpRestPhase = true;
 
                 if (!string.IsNullOrEmpty(move.jumpRestAnimation) &&
                     !animator.GetCurrentAnimatorStateInfo(0).IsName(move.jumpRestAnimation))
@@ -873,7 +911,6 @@ public class MonsterController : MonoBehaviour
 
     /// 安全的竖直位移：在位移前用三条射线预判，若将与地面相撞则把位移夹到地面上方（或下方）
     /// 仅用于跳跃分支，避免直接 Translate 穿透
-    
     private void SafeMoveVertical(float dy, LayerMask groundMask)
     {
         groundedAfterVerticalMove = false;
@@ -1209,7 +1246,68 @@ public class MonsterController : MonoBehaviour
         }
     }
 
-    
+    // Fisher–Yates 洗牌
+    private void Shuffle(List<int> list)
+    {
+        for (int i = list.Count - 1; i > 0; i--)
+        {
+            int j = Random.Range(0, i + 1);
+            (list[i], list[j]) = (list[j], list[i]);
+        }
+    }
+
+    // 根据 patrolRuntimeMoves 和 randomOrder 初始化顺序表
+    private void BuildMoveOrderFromConfig()
+    {
+        moveOrder = new List<int>();
+        int count = (patrolRuntimeMoves != null) ? patrolRuntimeMoves.Count : 0;
+        for (int i = 0; i < count; i++) moveOrder.Add(i);
+
+        moveOrderPos = 0;
+
+        // 启用随机：每一轮（完整播完所有元素）打乱一次
+        bool rnd = (config?.patrolConfig != null) && (bool)config.patrolConfig.randomOrder;
+        if (rnd && count > 1) Shuffle(moveOrder);
+
+        // 设置当前 patrolIndex
+        patrolIndex = (moveOrder.Count > 0) ? moveOrder[0] : 0;
+    }
+
+    // 在“一个 movement 完整结束（休息期结束）”时推进到下一个
+    private void AdvancePatrolIndex()
+    {
+        if (patrolRuntimeMoves == null || patrolRuntimeMoves.Count == 0) return;
+
+        // movements 数量变化时重建一次
+        if (moveOrder == null || moveOrder.Count != patrolRuntimeMoves.Count)
+            BuildMoveOrderFromConfig();
+
+        // 仅 1 个元素：天然自循环
+        if (moveOrder.Count <= 1)
+        {
+            patrolIndex = moveOrder[0];
+            return;
+        }
+
+        // 若有“保持同一段”的需求，可在此尊重 keepSameMoveAfterRest（目前默认 false）
+        if (keepSameMoveAfterRest)
+        {
+            keepSameMoveAfterRest = false; // 消耗标记
+            return;
+        }
+
+        // 前进到下一个
+        moveOrderPos = (moveOrderPos + 1) % moveOrder.Count;
+
+        // 如果走完一轮，且勾选了 randomOrder，则重洗下一轮
+        bool rnd = (config?.patrolConfig != null) && (bool)config.patrolConfig.randomOrder;
+        if (moveOrderPos == 0 && rnd && moveOrder.Count > 1)
+            Shuffle(moveOrder);
+
+        patrolIndex = moveOrder[moveOrderPos];
+    }
+
+
 
     // 动画特效关键帧
     private bool IsCurrentState(string stateName)
