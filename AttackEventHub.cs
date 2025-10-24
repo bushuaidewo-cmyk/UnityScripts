@@ -4,34 +4,34 @@ using UnityEngine;
 public class AttackEventHub : MonoBehaviour
 {
     [Header("Animators")]
-    [SerializeField] private Animator weaponAnimator;   // °ó¶¨£º±¾ÎïÌåµÄ Animator£¨¿ÉÓÃÓÚÎäÆ÷»òÌØĞ§£©
-    [SerializeField] private Animator bodyAnimator;     // ¿ÉÑ¡£º½ÇÉ« Animator£¨ËÙ¶ÈÍ¬²½£©
+    [SerializeField] private Animator weaponAnimator;   // ç»‘å®šï¼šæœ¬ç‰©ä½“çš„ Animatorï¼ˆå¯ç”¨äºæ­¦å™¨æˆ–ç‰¹æ•ˆï¼‰
+    [SerializeField] private Animator bodyAnimator;     // å¯é€‰ï¼šè§’è‰² Animatorï¼ˆé€Ÿåº¦åŒæ­¥ï¼‰
 
     [Header("Offset Root")]
-    [Tooltip("Æ«ÒÆ¸ù£¨½¨Òé HandSocket ÏÂ½¨Ò»¸ö Offset ¿ÕÎïÌå£¬°Ñ±¾¶ÔÏó·ÅÔÚÆäÏÂ£©")]
+    [Tooltip("åç§»æ ¹ï¼ˆå»ºè®® HandSocket ä¸‹å»ºä¸€ä¸ª Offset ç©ºç‰©ä½“ï¼ŒæŠŠæœ¬å¯¹è±¡æ”¾åœ¨å…¶ä¸‹ï¼‰")]
     [SerializeField] private Transform weaponOffsetRoot;
 
-    [Header("Idle ×´Ì¬Ãû£¨Í¸Ã÷¿ÕÖ¡£©")]
+    [Header("Idle çŠ¶æ€åï¼ˆé€æ˜ç©ºå¸§ï¼‰")]
     [SerializeField] private string weaponIdleState = "player_weapon_idle";
 
-    [Header("Ñ¡Ïî")]
-    [Tooltip("StopWeapon Ê±ÊÇ·ñ°ÑÆ«ÒÆ¸´Î»Îª (0,0)")]
+    [Header("é€‰é¡¹")]
+    [Tooltip("StopWeapon æ—¶æ˜¯å¦æŠŠåç§»å¤ä½ä¸º (0,0)")]
     [SerializeField] private bool resetOffsetOnStop = true;
 
-    [Header("¸úËæ/ÍÑÀë")]
-    [Tooltip("¹´Ñ¡£ºÊ¼ÖÕ¸úËæ½ÇÉ«£¨±£³ÖÔÚ½ÇÉ«²ã¼¶ÄÚ£©¡£È¡Ïû¹´Ñ¡£º²¥·ÅÊ±ÁÙÊ±½«Æ«ÒÆ¸ùÍÑÀë½ÇÉ«²ã¼¶£¬²»ÔÙ¸úËæ¡£Í£Ö¹Ê±×Ô¶¯»¹Ô­¡£")]
+    [Header("è·Ÿéš/è„±ç¦»")]
+    [Tooltip("å‹¾é€‰ï¼šå§‹ç»ˆè·Ÿéšè§’è‰²ï¼ˆä¿æŒåœ¨è§’è‰²å±‚çº§å†…ï¼‰ã€‚å–æ¶ˆå‹¾é€‰ï¼šæ’­æ”¾æ—¶ä¸´æ—¶å°†åç§»æ ¹è„±ç¦»è§’è‰²å±‚çº§ï¼Œä¸å†è·Ÿéšã€‚åœæ­¢æ—¶è‡ªåŠ¨è¿˜åŸã€‚")]
     [SerializeField] private bool followBody = true;
-    [Tooltip("µ±²»¸úËæÊ±£¬ÁÙÊ±ÍÑÀëÊ±¹Òµ½ÄÄ¸ö¸¸ÎïÌå£¨Áô¿Õ=³¡¾°¸ù£©¡£")]
+    [Tooltip("å½“ä¸è·Ÿéšæ—¶ï¼Œä¸´æ—¶è„±ç¦»æ—¶æŒ‚åˆ°å“ªä¸ªçˆ¶ç‰©ä½“ï¼ˆç•™ç©º=åœºæ™¯æ ¹ï¼‰ã€‚")]
     [SerializeField] private Transform detachedParent;
 
-    // ÔËĞĞÊ±»º´æ£¨ÓÃÓÚÍÑÀë/»¹Ô­£©
+    // è¿è¡Œæ—¶ç¼“å­˜ï¼ˆç”¨äºè„±ç¦»/è¿˜åŸï¼‰
     private Transform cachedParent;
     private Vector3 cachedLocalPos;
     private Quaternion cachedLocalRot;
     private Vector3 cachedLocalScale;
     private bool isDetached;
 
-    // ÉèÖÃ X/Y Æ«ÒÆ£¨µ¥Î» = world units£¬ÏñËØ/PPU£©
+    // è®¾ç½® X/Y åç§»ï¼ˆå•ä½ = world unitsï¼Œåƒç´ /PPUï¼‰
     public void SetWeaponXYOffset(float x, float y)
     {
         if (!weaponOffsetRoot) return;
@@ -40,7 +40,7 @@ public class AttackEventHub : MonoBehaviour
         weaponOffsetRoot.localPosition = p;
     }
 
-    // ´ÓÍ·²¥·Å£¨²»¸ÄÆ«ÒÆ£©
+    // ä»å¤´æ’­æ”¾ï¼ˆä¸æ”¹åç§»ï¼‰
     public void PlayWeapon(string stateName)
     {
         DetachIfNeededOnPlay();
@@ -48,7 +48,7 @@ public class AttackEventHub : MonoBehaviour
 
         int hash = Animator.StringToHash(stateName);
 
-        // ±ÜÃâÖØ¸´ Play ÏàÍ¬×´Ì¬µ¼ÖÂÊÓ¾õ¶¶¶¯
+        // é¿å…é‡å¤ Play ç›¸åŒçŠ¶æ€å¯¼è‡´è§†è§‰æŠ–åŠ¨
         var st = weaponAnimator.GetCurrentAnimatorStateInfo(0);
         if (st.shortNameHash == hash && !weaponAnimator.IsInTransition(0))
         {
@@ -62,7 +62,7 @@ public class AttackEventHub : MonoBehaviour
         if (bodyAnimator) weaponAnimator.speed = bodyAnimator.speed;
     }
 
-    // Í£Ö¹/»Ø Idle£¬²¢¸´Î»Æ«ÒÆ + »¹Ô­¸¸×Ó¹ØÏµ
+    // åœæ­¢/å› Idleï¼Œå¹¶å¤ä½åç§» + è¿˜åŸçˆ¶å­å…³ç³»
     public void StopWeapon()
     {
         if (weaponAnimator)
@@ -89,13 +89,13 @@ public class AttackEventHub : MonoBehaviour
         if (!weaponOffsetRoot) return;
         if (isDetached) return;
 
-        // »º´æµ±Ç°¸¸¼¶Óë¾Ö²¿ TRS
+        // ç¼“å­˜å½“å‰çˆ¶çº§ä¸å±€éƒ¨ TRS
         cachedParent = weaponOffsetRoot.parent;
         cachedLocalPos = weaponOffsetRoot.localPosition;
         cachedLocalRot = weaponOffsetRoot.localRotation;
         cachedLocalScale = weaponOffsetRoot.localScale;
 
-        // ÍÑÀëµ½Ä¿±ê¸¸¼¶£¨±£³ÖÊÀ½çÎ»×Ë£©
+        // è„±ç¦»åˆ°ç›®æ ‡çˆ¶çº§ï¼ˆä¿æŒä¸–ç•Œä½å§¿ï¼‰
         weaponOffsetRoot.SetParent(detachedParent, true);
         isDetached = true;
     }
@@ -105,7 +105,7 @@ public class AttackEventHub : MonoBehaviour
         if (!isDetached) return;
         if (!weaponOffsetRoot) { isDetached = false; return; }
 
-        // »¹Ô­¸¸×Ó£¨±£³ÖÊÀ½çÎ»×Ë£©£¬Ëæºó»Ö¸´Ô­¾Ö²¿ TRS
+        // è¿˜åŸçˆ¶å­ï¼ˆä¿æŒä¸–ç•Œä½å§¿ï¼‰ï¼Œéšåæ¢å¤åŸå±€éƒ¨ TRS
         weaponOffsetRoot.SetParent(cachedParent, true);
         weaponOffsetRoot.localPosition = cachedLocalPos;
         weaponOffsetRoot.localRotation = cachedLocalRot;
@@ -117,7 +117,7 @@ public class AttackEventHub : MonoBehaviour
 
     private void OnDisable()
     {
-        // ×é¼ş±»½ûÓÃ/Ïú»ÙÇ°£¬¾¡Á¿»¹Ô­¸¸×Ó¹ØÏµ
+        // ç»„ä»¶è¢«ç¦ç”¨/é”€æ¯å‰ï¼Œå°½é‡è¿˜åŸçˆ¶å­å…³ç³»
         ReattachIfNeededOnStop();
     }
 }

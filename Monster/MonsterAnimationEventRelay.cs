@@ -1,29 +1,58 @@
 using UnityEngine;
 
 /// <summary>
-/// ¶¯»­ÊÂ¼şÖĞ¼ÌÆ÷£º¹ÒÔÚ Animator ½Úµã£¨Monster_test£©ÉÏ£¬
-/// ÓÃÓÚ°Ñ¶¯»­ÊÂ¼ş×ª·¢¸ø MonsterController¡£
+/// åŠ¨ç”»äº‹ä»¶ä¸­ç»§å™¨ï¼šæŒ‚åœ¨ Animator èŠ‚ç‚¹ï¼ˆMonster_testï¼‰ä¸Šï¼Œ
+/// æ”¹ä¸ºä½¿ç”¨å›ºå®šçš„æ— å‚äº‹ä»¶æ–¹æ³•ï¼Œé¿å…å­—ç¬¦ä¸² key å¸¦æ¥çš„æ­§ä¹‰ã€‚
 /// </summary>
 public class MonsterAnimationEventRelay : MonoBehaviour
 {
+    [SerializeField] private bool debugEvents = false;
+
     private MonsterController controller;
 
     void Awake()
     {
-        // ×Ô¶¯ÔÚ¸¸²ãÖĞ²éÕÒ MonsterController£¨Ö§³Ö¶à²ãÇ¶Ì×£©
         controller = GetComponentInParent<MonsterController>();
         if (controller == null)
-            Debug.LogWarning($"[MonsterAnimationEventRelay] Î´ÕÒµ½ MonsterController£¡Â·¾¶£º{transform.name}");
+            Debug.LogWarning($"[MonsterAnimationEventRelay] æœªæ‰¾åˆ° MonsterControllerï¼è·¯å¾„ï¼š{transform.name}");
     }
 
-    // === ÒÔÏÂº¯ÊıÃû³Æ±ØĞëÓë¶¯»­ÊÂ¼şÒ»ÖÂ ===
-    public void OnSpawnEffect() => controller?.OnSpawnEffect();
-    public void OnIdleEffect() => controller?.OnIdleEffect();
-    public void OnPatrolMoveEffect() => controller?.OnPatrolMoveEffect();
-    public void OnPatrolRestEffect() => controller?.OnPatrolRestEffect();
-    public void OnPatrolJumpEffect() => controller?.OnPatrolJumpEffect();
-    public void OnPatrolJumpRestEffect() => controller?.OnPatrolJumpRestEffect();
+    // å‡ºç”Ÿé˜¶æ®µ
+    public void spawnEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] spawnEffectPrefab()");
+        controller?.OnFxSpawn();
+    }
 
+    public void idleEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] idleEffectPrefab()");
+        controller?.OnFxIdle();
+    }
 
+    // å·¡é€»ç›´çº¿é˜¶æ®µ
+    public void moveEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] moveEffectPrefab()");
+        controller?.OnFxMove();
+    }
 
+    public void restEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] restEffectPrefab()");
+        controller?.OnFxRest();
+    }
+
+    // è·³è·ƒï¼ˆæ™®é€š/è‡ªåŠ¨å…±ç”¨èµ„æºï¼‰
+    public void jumpEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] jumpEffectPrefab()");
+        controller?.OnFxJump();
+    }
+
+    public void jumpRestEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] jumpRestEffectPrefab()");
+        controller?.OnFxJumpRest();
+    }
 }

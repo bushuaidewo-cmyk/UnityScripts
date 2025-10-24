@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-/// <summary>
+
 /// 怪物控制器：出生 → 巡逻 → 发现 → 攻击 → 死亡
 /// 支持墙/悬崖检测 + 空中状态屏蔽 + 特效事件 + 可视化调试
 /// </summary>
@@ -36,8 +36,9 @@ public class MonsterController : MonoBehaviour
     private float jumpTimeLeft = 0f;
     private float vY = 0f;
     private const float BASE_G = 25f;
-    private bool hasPlayedJumpEffect = false;
-    private bool hasPlayedJumpRestEffect = false;
+    // 当前是否处于“跳跃落地后的休息窗口”
+    private bool inJumpRestPhase = false;
+
     private float turnCooldown = 0f;
     private const float SKIN = 0.02f;
     // 新增：本帧通过安全位移判定到的“是否着地”
@@ -49,6 +50,9 @@ public class MonsterController : MonoBehaviour
     public string autoJumpPermitTag = "AutoJumpPermit";
 
     private bool inAutoJumpPermitZone = false;
+
+    private bool autoJumpReady = true;                // 是否允许触发自动跳
+    private bool autoJumpRearmAfterLanding = false;   // 等待“落地+忽略帧结束”后才重新上膛
 
     // AutoJump 触发的“上膛/保险”机制：
     // - 进入许可区即上膛（armed = true）
@@ -63,17 +67,58 @@ public class MonsterController : MonoBehaviour
     private enum MonsterState { Idle, Patrol, Discovery, Attack, Dead }
     private MonsterState state = MonsterState.Idle;
 
-    //FX 播放策略
-    private bool fxOnlyFromAnimationEvents = true;  // 默认：只由动画事件触发
-                                                    // 四通道各自独立的“当前段”引用
+    // 四通道各自独立的“当前段”引用
     private PatrolMovement activeStraightMove = null;
     private PatrolMovement activeJumpMove = null;
-    public enum ObstacleBehavior { Turn, AutoJump }  // Turn=转向；AutoJump=自动跳过去
+
+    // === Rigidbody & 斜坡物理（对齐 PlayerController） ===
+    private Rigidbody2D rb;
+
+    // 接地/斜坡判定输出
+    private bool isGroundedMC = false;        // 避免与已有 isDead 混淆，MC 表 MonsterController
+    private Vector2 groundNormalMC = Vector2.up;
+    private bool slopeIdleLockedMC = false;
+    private float slopeSavedGravityMC = 0f;
 
     [Header("AutoJump 落地后抑制")]
     [Tooltip("自动跳落地→休息结束后，忽略多少帧“悬崖检测”，避免刚落地又把自己当成悬崖前沿而转向。60FPS下8≈0.13秒。")]
     public int autoJumpIgnoreCliffFrames = 8;
     private int ignoreCliffFramesLeft = 0;
+
+    // 可调参数（与玩家保持一致的手感）
+    [Header("斜坡/地面移动（怪物）")]
+    [Tooltip("接地判定所需的最小法线Y。0.7≈允许到45°斜坡")]
+    [SerializeField, Range(0f, 1f)] private float groundMinNormalYMC = 0.70f;
+    [Tooltip("沿斜面切向速度绝对值小于该阈值则清零（米/秒）")]
+    [SerializeField] private float horizontalStopThresholdOnSlopeMC = 0.02f;
+    [Tooltip("斜坡停驻锁（无主动移动时冻结重力，止滑）")]
+    [SerializeField] private bool slopeIdleFreezeGravityMC = true;
+    [Tooltip("进入停驻锁所需的速度门槛（米/秒）")]
+    [SerializeField] private float slopeEnterIdleSpeedEpsilonMC = 0.50f;
+    [Tooltip("向下速度小于该阈值时钳为0，阻止极慢的下滑（负数，靠近0更“粘”）")]
+    [SerializeField] private float slopeStopVyThresholdMC = -0.05f;
+
+    // NEW: 斜坡上保持“世界X速度”一致（视觉不变慢）
+    [Tooltip("斜坡上放大切向速度，保持世界X速度≈moveSpeed")]
+    [SerializeField] private bool preserveWorldXOnSlopeMC = true;
+
+    // 路点巡逻（启用 patrolPoints 时）
+    private int patrolPointIndex = 0;
+    [SerializeField, Tooltip("接近路点的判定半径")] private float pointArriveRadius = 0.05f;
+
+    // 落地后短暂抑制“向上分量”叠加（单位：帧）
+    private int suppressUpwardOnGroundFrames = 0;
+
+    // 直线当前朝向（基于 transform.rotation.y：0=向右,180=向左）
+    private int FacingSign() => (transform.rotation.eulerAngles.y == 0f) ? +1 : -1;
+
+    // 用于 Straight 的期望速度（米/秒；正负含朝向）
+    private float desiredSpeedX = 0f;
+
+    // AutoJump 运行时标记
+    private bool isAutoJumping = false;
+
+    private readonly Dictionary<string, GameObject> fxLookup = new Dictionary<string, GameObject>();
 
 
 
@@ -82,6 +127,15 @@ public class MonsterController : MonoBehaviour
         player = GameObject.FindWithTag("Player")?.transform;
         animator = GetComponentInChildren<Animator>();
         col = GetComponent<Collider2D>();
+
+        rb = GetComponent<Rigidbody2D>();
+        if (rb == null)
+        {
+            Debug.LogError($"[MonsterController] {name} 未找到 Rigidbody2D！");
+            enabled = false;
+            return;
+        }
+
         if (col == null)
             Debug.LogWarning($"[MonsterController] {name} 未找到 Collider2D，将无法进行地面检测。");
 
@@ -107,47 +161,18 @@ public class MonsterController : MonoBehaviour
         if (animator.GetComponent<MonsterAnimationEventRelay>() == null)
             animator.gameObject.AddComponent<MonsterAnimationEventRelay>();
 
-        // 克隆巡逻配置（避免修改 ScriptableObject 原始值）
+        // 关键：自动克隆整份配置，避免修改到资产本体（一次到位，无需手写逐字段复制）
+        if (config != null)
+            config = ScriptableObject.Instantiate(config);
+
+        // 直接使用克隆体中的 movements 作为运行态列表
         if (config && config.patrolConfig != null && config.patrolConfig.movements != null)
-        {
+            patrolRuntimeMoves = config.patrolConfig.movements;
+        else
             patrolRuntimeMoves = new List<PatrolMovement>();
-            foreach (var m in config.patrolConfig.movements)
-            {
-                var clone = new PatrolMovement
-                {
-                    type = m.type,
-                    moveSpeed = m.moveSpeed,
-                    acceleration = m.acceleration,
-                    deceleration = m.deceleration,
-                    moveDuration = m.moveDuration,
-                    restDuration = m.restDuration,
-                    // ✅ 加上这行：把遇障碍行为也拷贝到运行时
-                    obstacleBehavior = m.obstacleBehavior,
 
-                    moveAnimation = m.moveAnimation,
-                    restAnimation = m.restAnimation,
-                    moveEffectOnlyFirst = m.moveEffectOnlyFirst,
-                    moveEffectPrefab = m.moveEffectPrefab,
-                    restEffectOnlyFirst = m.restEffectOnlyFirst,
-                    restEffectPrefab = m.restEffectPrefab,
-
-                    jumpSpeed = m.jumpSpeed,
-                    jumpHeight = m.jumpHeight,
-                    gravityScale = m.gravityScale,
-                    jumpDuration = m.jumpDuration,
-                    jumpRestDuration = m.jumpRestDuration,
-                    jumpAnimation = m.jumpAnimation,
-                    jumpRestAnimation = m.jumpRestAnimation,
-                    jumpEffectOnlyFirst = m.jumpEffectOnlyFirst,
-                    jumpEffectPrefab = m.jumpEffectPrefab,
-                    jumpRestEffectOnlyFirst = m.jumpRestEffectOnlyFirst,
-                    jumpRestEffectPrefab = m.jumpRestEffectPrefab,
-
-                    executeCount = m.executeCount
-                };
-                patrolRuntimeMoves.Add(clone);
-            }
-        }
+        // 统一构建特效名索引（基于克隆体）
+        BuildFxLookup();
 
         currentHP = config.maxHP;
         turnCooldown = 1f;
@@ -158,34 +183,52 @@ public class MonsterController : MonoBehaviour
     {
         if (turnCooldown > 0f)
             turnCooldown -= Time.deltaTime;
+
+        // 退出触发器 + 落地 + 忽略帧结束 才重新允许自动跳
+        if (autoJumpRearmAfterLanding && !isJumping && !inAutoJumpPermitZone && ignoreCliffFramesLeft <= 0)
+        {
+            autoJumpReady = true;
+            autoJumpRearmAfterLanding = false;
+        }
     }
 
     IEnumerator StateMachine()
     {
+        int spawnLoops = Mathf.Max(0, config.spawnConfig.spawnLoopCount);
 
-        int spawnLoops = Mathf.Max(1, config.spawnConfig.spawnLoopCount);
-
-        for (int i = 0; i < spawnLoops; i++)
+        // 出生阶段：严格依赖关键帧事件；仅等待动画按 speed 播放完成，再等 idleDelay
+        if (spawnLoops > 0)
         {
-            if (!string.IsNullOrEmpty(config.spawnConfig.spawnAnimation))
+            for (int i = 0; i < spawnLoops; i++)
             {
-                animator.Play(config.spawnConfig.spawnAnimation);
-                Debug.Log($"[Spawn] 播放出生动画第 {i + 1}/{spawnLoops}");
+                if (!string.IsNullOrEmpty(config.spawnConfig.spawnAnimation))
+                {
+                    animator.CrossFadeInFixedTime(config.spawnConfig.spawnAnimation, 0f, 0, 0f);
+                    animator.Update(0f);
+                    Debug.Log($"[Spawn] 播放出生动画第 {i + 1}/{spawnLoops}");
+                    // 等待 spawn 动画本轮结束（normalizedTime 随 Animator.speed 缩放）
+                    yield return WaitForStateFinished(config.spawnConfig.spawnAnimation, 0);
+                }
+
+                // 出生动画结束后等待 idleDelay
+                if (config.spawnConfig.idleDelay > 0f)
+                    yield return new WaitForSeconds(config.spawnConfig.idleDelay);
+
+                // 播放并等待 idle 动画“完成一轮”，再进入下一轮/巡逻
+                if (!string.IsNullOrEmpty(config.spawnConfig.idleAnimation))
+                {
+                    animator.CrossFadeInFixedTime(config.spawnConfig.idleAnimation, 0f, 0, 0f);
+                    animator.Update(0f);
+                    yield return WaitForStateFinished(config.spawnConfig.idleAnimation, 0);
+                }
+
+                if (i < spawnLoops - 1)
+                    yield return new WaitForSeconds(1f);
             }
-
-            yield return new WaitForSeconds(Mathf.Max(0.1f, config.spawnConfig.idleDelay));
-
-            if (!string.IsNullOrEmpty(config.spawnConfig.idleAnimation))
-                animator.Play(config.spawnConfig.idleAnimation);
-
-            if (i < spawnLoops - 1)
-                yield return new WaitForSeconds(1f);
         }
 
         state = MonsterState.Patrol;
         Debug.Log($"[Spawn] 出生阶段完成，进入巡逻阶段");
-
-
 
         while (!isDead)
         {
@@ -214,7 +257,7 @@ public class MonsterController : MonoBehaviour
         {
             AnimatorStateInfo info = animator.GetCurrentAnimatorStateInfo(0);
             if (!info.IsName(config.spawnConfig.idleAnimation))
-                animator.Play(config.spawnConfig.idleAnimation);
+                PlayAnimIfNotCurrent(config.spawnConfig.idleAnimation);
         }
     }
 
@@ -223,198 +266,297 @@ public class MonsterController : MonoBehaviour
     {
         if (ignoreCliffFramesLeft > 0) ignoreCliffFramesLeft--;
 
-        // 出生稳定帧：直接播放动画+位移，不做任何墙/悬崖/转向判定
-        // 出生稳定帧：直接播放动画+位移，不做任何墙/悬崖/转向判定
-        if (spawnStableFrames > 0)
+        // 刷接地/斜坡
+        UpdateGroundedAndSlope();
+
+        // NEW: 跳跃优先级（自动/正常共用）
+        // 只要在跳，就交给 JumpUpdate 管空中运动，跳过 Straight 的相位机/速度写入，避免空中被清 X 速度
+        if (isJumping && activeJumpMove != null)
         {
-            spawnStableFrames--;
-
-            var curMove = patrolRuntimeMoves?[patrolIndex]; // ← 改名
-            if (curMove != null)
-            {
-                if (curMove.type == MovementType.Straight)
-                {
-                    if (!string.IsNullOrEmpty(curMove.moveAnimation) &&
-                        !animator.GetCurrentAnimatorStateInfo(0).IsName(curMove.moveAnimation))
-                        animator.Play(curMove.moveAnimation);
-
-                    transform.Translate(Vector3.right * curMove.moveSpeed * Time.deltaTime, Space.Self);
-                }
-                else
-                {
-                    // Jump 稳定帧：只做重力与半速前进，避免贴地/起跳抖
-                    float g = curMove.gravityScale * BASE_G;
-                    vY = Mathf.Max(-2f, vY - g * Time.deltaTime);
-                    SafeMoveVertical(vY * Time.deltaTime, groundLayer);
-                    // 若被夹住落地，清零速度
-                    if (groundedAfterVerticalMove && vY <= 0f) vY = 0f;
-                    transform.Translate(Vector3.right * (curMove.jumpSpeed * 0.5f) * Time.deltaTime, Space.Self);
-                }
-            }
+            JumpUpdate(activeJumpMove);
             return;
         }
 
+        // ============= 路点模式（有点就启用。完全靠点） =============
+        var pts = config?.patrolConfig?.patrolPoints;
+        if (pts != null && pts.Count > 0)
+        {
+            Vector2 target = pts[patrolPointIndex];
+            Vector2 to = target - (Vector2)transform.position;
+            float dist = to.magnitude;
 
-        if (patrolRuntimeMoves == null || patrolRuntimeMoves.Count == 0)
+            // 到点：切下一个（循环）
+            if (dist <= Mathf.Max(0.01f, pointArriveRadius))
+            {
+                patrolPointIndex = (patrolPointIndex + 1) % pts.Count;
+                // 到点停顿：用 restDuration=0 的“无移动”，自然触发斜坡停驻锁
+                desiredSpeedX = 0f;
+                ApplySlopeIdleStopIfNoMove();
+                return;
+            }
+
+            // 朝目标点决定 facing
+            int wantSign = (to.x >= 0f) ? +1 : -1;
+            if (wantSign != FacingSign()) TurnAround();
+
+            // 以“恒定速度”：取当前活动直线段或默认速度
+            float spd = 0f;
+            if (patrolRuntimeMoves != null && patrolRuntimeMoves.Count > 0)
+            {
+                var mv = patrolRuntimeMoves[Mathf.Clamp(patrolIndex, 0, patrolRuntimeMoves.Count - 1)];
+                spd = Mathf.Max(0.01f, (mv.type == MovementType.Straight && mv.moveSpeed > 0f) ? mv.moveSpeed : 1.0f);
+                if (!string.IsNullOrEmpty(mv.moveAnimation) &&
+                    !animator.GetCurrentAnimatorStateInfo(0).IsName(mv.moveAnimation))
+                    PlayAnimIfNotCurrent(mv.moveAnimation);
+            }
+            else
+            {
+                spd = 1.0f;
+            }
+
+            desiredSpeedX = spd * FacingSign();
+
+            // 接地则沿斜坡投影，否则维持空中 X
+            if (isGroundedMC)
+                ApplyProjectedVelocityAlongSlope(Mathf.Abs(desiredSpeedX), FacingSign());
+            else
+                rb.velocity = new Vector2(desiredSpeedX, rb.velocity.y);
+
             return;
+        }
+
+        // ============= Movements 模式 =============
+        if (patrolRuntimeMoves == null || patrolRuntimeMoves.Count == 0) return;
 
         PatrolMovement move = patrolRuntimeMoves[patrolIndex];
 
-        if (!isResting)
+        // 直线逻辑（加速 -> 匀速 -> 减速 -> 休息）
+
+        if (!isResting && move.type == MovementType.Straight)
         {
-            if (move.type == MovementType.Straight)
+            // 保证“移动阶段的动画”始终在播（覆盖 加速/匀速/减速）
+            PlayAnimIfNotCurrent(move.moveAnimation);
+            
+            activeStraightMove = move;
+
+            // 初始化三段计时（仅在进入该 movement 的第一次）
+            if (move.rtStraightPhase == StraightPhase.None)
             {
-                // 正在执行来自直线的自动跳：本帧只走 Jump 内核
-                if (isJumping)
+                move.rtCurrentSpeed = 0f;
+
+                // 这里的 move.moveDuration 仅作为“匀速时间”
+                move.rtCruiseTimer = Mathf.Max(0f, move.moveDuration);
+
+                // 若有“按时长”配置，则优先用时长；否则用速率；都为0表示“瞬时”
+                move.rtAccelTimer = Mathf.Max(0f, move.accelerationTime);
+                move.rtDecelTimer = Mathf.Max(0f, move.decelerationTime);
+
+                bool instantAccel = (move.accelerationTime <= 0f && move.acceleration <= 0f);
+                bool instantDecel = (move.decelerationTime <= 0f && move.deceleration <= 0f);
+
+                if (instantAccel)
                 {
-                    JumpUpdate(move);
-                    return;
-                }
-
-                bool wallAhead = CheckWallAhead();
-                bool cliffAhead = (ignoreCliffFramesLeft <= 0) && CheckCliffAhead();
-                bool hitObstacle = wallAhead || cliffAhead;
-
-
-                if (hitObstacle)
-                {
-                    bool canAutoJump =
-                        move.obstacleBehavior == ObstacleBehavior.AutoJump &&
-                        inAutoJumpPermitZone &&
-                        autoJumpArmed &&
-                        CheckGrounded() &&
-                        !isJumping &&
-                        turnCooldown <= 0f;
-
-                    if (canAutoJump)
-                    {
-                        // 自动跳：用本 movement 的 jump* 参数 + 你的 Jump 内核
-                        BeginOneJump(move);
-
-                        // 直线段“从新开始计算”
-                        move.moveDuration = config.patrolConfig.movements[patrolIndex].moveDuration;
-
-                        autoJumpFromStraight = true;
-                        autoJumpArmed = false;            // 消耗一次触发
-                        autoJumpDisarmUntilExit = true;   // 必须先离开许可区才能再次触发
-                        return; // 本帧不再做直线位移
-                    }
-                    else
-                    {
-                        // 不满足自动跳条件 —— 按老规矩转向（避免顶墙抖动/卡住）
-                        if (turnCooldown <= 0f)
-                            TurnAround();
-                    }
-                }
-
-                // ↓↓↓ 保持你原有的直线动画/位移/计时逻辑 ↓↓↓
-                if (!string.IsNullOrEmpty(move.moveAnimation) &&
-                    !animator.GetCurrentAnimatorStateInfo(0).IsName(move.moveAnimation))
-                {
-                    animator.Play(move.moveAnimation);
-                    activeStraightMove = move;
-                }
-
-                transform.Translate(Vector3.right * move.moveSpeed * Time.deltaTime, Space.Self);
-
-                move.moveDuration -= Time.deltaTime;
-                if (move.moveDuration <= 0f)
-                {
-                    isResting = true;
-                    move.moveDuration = config.patrolConfig.movements[patrolIndex].moveDuration;
-                }
-            }
-
-
-            else // Jump 模式
-            {
-                if (!isJumping)
-                {
-                    if (CheckGrounded())
-                    {
-                        BeginOneJump(move);
-                    }
-                    else
-                    {
-                        // PatrolUpdate() -> Jump 模式里，非 isJumping 分支的 else 中
-                        if (!hasAlignedToGround)
-                        {
-                            if (CheckGrounded())
-                            {
-                                Bounds b = col.bounds;
-                                // 用中间那条射线重新量一下精确落点
-                                Vector2 origin = new Vector2(b.center.x, b.min.y + 0.02f);
-                                float rayLen = 0.2f;
-                                var hit = Physics2D.Raycast(origin, Vector2.down, rayLen, groundLayer);
-                                if (hit.collider)
-                                {
-                                    transform.position = new Vector3(transform.position.x, hit.point.y + b.extents.y + 0.02f, transform.position.z);
-                                    vY = 0;
-                                    hasAlignedToGround = true;
-                                }
-                            }
-                        }
-
-                        // 无论是否贴地成功，都用统一的重力积分与水平推进（不会反复“强制归零”）
-                        float g = move.gravityScale * BASE_G;
-                        vY = Mathf.Max(-2f, vY - g * Time.deltaTime);
-
-                        // 用安全竖直位移，避免穿透与反复被“抬回”
-                        SafeMoveVertical(vY * Time.deltaTime, groundLayer);
-                        if (groundedAfterVerticalMove && vY <= 0f) vY = 0f; // 若被夹住视为落地，清零下落速度
-
-                        transform.Translate(Vector3.right * (move.jumpSpeed * 0.5f) * Time.deltaTime, Space.Self);
-                    }
-
+                    // 瞬时到达匀速
+                    move.rtCurrentSpeed = Mathf.Max(0f, move.moveSpeed);
+                    move.rtStraightPhase = (move.rtCruiseTimer > 0f) ? StraightPhase.Cruise
+                                          : (!instantDecel ? StraightPhase.Decel : StraightPhase.Rest);
                 }
                 else
                 {
-                    JumpUpdate(move);
+                    move.rtStraightPhase = StraightPhase.Accel;
+                }
+
+                // 如果直接进入 Rest，则立即进入休息
+                if (move.rtStraightPhase == StraightPhase.Rest)
+                {
+                    isResting = true;
+                    move.rtRestTimer = Mathf.Max(0f, move.restDuration);
+                    // 切休息动画
+                    PlayAnimIfNotCurrent(move.restAnimation);
+                    
+                    // 停驻逻辑
+                    desiredSpeedX = 0f;
+                    ApplySlopeIdleStopIfNoMove();
+                    return;
                 }
             }
+
+            // 计算线性加/减速率（秒为单位）
+            float accelRate = (move.accelerationTime > 0f)
+                ? (Mathf.Max(0.01f, move.moveSpeed) / move.accelerationTime)
+                : Mathf.Max(0f, move.acceleration);
+            float decelRate = (move.decelerationTime > 0f)
+                ? (Mathf.Max(0.01f, move.moveSpeed) / move.decelerationTime)
+                : Mathf.Max(0f, move.deceleration);
+
+            // 三相状态机
+            switch (move.rtStraightPhase)
+            {
+                case StraightPhase.Accel:
+                    {
+                        if (accelRate <= 0f)
+                        {
+                            move.rtCurrentSpeed = Mathf.Max(0f, move.moveSpeed);
+                            move.rtStraightPhase = (move.rtCruiseTimer > 0f) ? StraightPhase.Cruise
+                                                      : (decelRate > 0f ? StraightPhase.Decel : StraightPhase.Rest);
+                        }
+                        else
+                        {
+                            move.rtCurrentSpeed = Mathf.MoveTowards(move.rtCurrentSpeed, move.moveSpeed, accelRate * Time.deltaTime);
+                            if (move.accelerationTime > 0f)
+                                move.rtAccelTimer = Mathf.Max(0f, move.rtAccelTimer - Time.deltaTime);
+
+                            if (Mathf.Approximately(move.rtCurrentSpeed, move.moveSpeed) || move.rtAccelTimer <= 0f)
+                                move.rtStraightPhase = (move.rtCruiseTimer > 0f) ? StraightPhase.Cruise
+                                                          : (decelRate > 0f ? StraightPhase.Decel : StraightPhase.Rest);
+                        }
+                        break;
+                    }
+                case StraightPhase.Cruise:
+                    {
+                        move.rtCurrentSpeed = Mathf.Max(0f, move.moveSpeed);
+                        // 只有在 Cruise 时才消耗 moveDuration
+                        move.rtCruiseTimer = Mathf.Max(0f, move.rtCruiseTimer - Time.deltaTime);
+
+                        if (move.rtCruiseTimer <= 0f)
+                            move.rtStraightPhase = (decelRate > 0f) ? StraightPhase.Decel : StraightPhase.Rest;
+                        break;
+                    }
+                case StraightPhase.Decel:
+                    {
+                        // 减速阶段：只有当速度真正降到 0 时，才允许进入 Rest
+                        if (decelRate <= 0f)
+                        {
+                            // 无减速：瞬间归零 -> 进入休息
+                            move.rtCurrentSpeed = 0f;
+                            move.rtStraightPhase = StraightPhase.Rest;
+                        }
+                        else
+                        {
+                            move.rtCurrentSpeed = Mathf.MoveTowards(move.rtCurrentSpeed, 0f, decelRate * Time.deltaTime);
+                            // 注意：不再用 “move.rtDecelTimer <= 0f” 作为提前进入 Rest 的条件
+                            if (move.rtCurrentSpeed <= 0.0001f)
+                            {
+                                move.rtCurrentSpeed = 0f;
+                                move.rtStraightPhase = StraightPhase.Rest;
+                            }
+                        }
+                        break;
+                    }
+
+                case StraightPhase.Rest:
+                default:
+                    {
+                        // 进入休息：速度必须为 0，并立即开始 restDuration
+                        isResting = true;
+                        move.rtRestTimer = Mathf.Max(0f, move.restDuration);
+
+                        // 强制水平速度为 0，避免残留速度导致“休息还在滑动”
+                        rb.velocity = new Vector2(0f, Mathf.Max(rb.velocity.y, 0f));
+                        desiredSpeedX = 0f;
+
+                        // 播休息动画（并保证持续播放）
+                        PlayAnimIfNotCurrent(move.restAnimation);
+                        
+
+                        // 斜坡停驻锁辅助（冻结重力/清切向）
+                        ApplySlopeIdleStopIfNoMove();
+                        return;
+                    }
+            }
+
+            // 障碍/悬崖转向（忽略帧期间禁用；在许可区或自动跳期间禁用）
+            bool canTurnNow = !inAutoJumpPermitZone && !isAutoJumping && (ignoreCliffFramesLeft <= 0);
+            if (canTurnNow)
+            {
+                bool wallAhead = CheckWallAhead();
+                bool cliffAhead = CheckCliffAhead(); // 已由上面的 canTurnNow 统一控制忽略帧
+                if ((wallAhead || cliffAhead) && turnCooldown <= 0f)
+                    TurnAround();
+            }
+
+            // 施加速度（接地沿斜坡投影）
+            desiredSpeedX = move.rtCurrentSpeed * FacingSign();
+            if (isGroundedMC)
+                ApplyProjectedVelocityAlongSlope(Mathf.Abs(desiredSpeedX), FacingSign());
+            else
+                rb.velocity = new Vector2(desiredSpeedX, rb.velocity.y);
+
+            return;
         }
-        else
+
+        // 跳跃逻辑 1
+        if (!isResting && move.type == MovementType.Jump)
+        {
+            // 起跳（仅在“确认接地”时才触发）
+            if (!isJumping)
+            {
+                if (CheckGrounded())
+                {
+                    // 仅在真正接地时规划并起跳，避免落地边缘抖动导致的“原地小跳”
+                    EnsureJumpPlan(move, useAutoParams: false);
+                    BeginOneJump(move, useAutoParams: false);
+                }
+                else
+                {
+                    // 未接地：不要做“空中过渡推进”，等待下一帧接地稳定后再起跳
+                    // 这样可以避免你观察到的：前跳落地后又在原地弹一下
+                    return;
+                }
+            }
+            else
+            {
+                JumpUpdate(move);
+            }
+            return;
+        }
+
+        // 休息期
+        if (isResting)
         {
             string restAnim =
                 (move.type == MovementType.Jump && !string.IsNullOrEmpty(move.jumpRestAnimation))
                     ? move.jumpRestAnimation
                     : move.restAnimation;
 
-            if (!string.IsNullOrEmpty(restAnim) &&
-                !animator.GetCurrentAnimatorStateInfo(0).IsName(restAnim))
-                animator.Play(restAnim);
+            PlayAnimIfNotCurrent(restAnim);
+            
 
+            // 每帧保持水平速度为 0（防止物理残留或斜坡微滑）
+            rb.velocity = new Vector2(0f, rb.velocity.y);
+
+            // 计时
             float restLeft =
-                (move.type == MovementType.Jump) ? move.jumpRestDuration : move.restDuration;
+                (move.type == MovementType.Jump)
+                    ? (move.rtRestTimer > 0f ? move.rtRestTimer : move.jumpRestDuration)
+                    : (move.rtRestTimer > 0f ? move.rtRestTimer : move.restDuration);
 
             restLeft -= Time.deltaTime;
+            move.rtRestTimer = restLeft;
 
-            if (move.type == MovementType.Jump)
-                move.jumpRestDuration = restLeft;
-            else
-                move.restDuration = restLeft;
+            // 停驻锁（无移动时防斜坡下滑）
+            desiredSpeedX = 0f;
+            ApplySlopeIdleStopIfNoMove();
 
             if (restLeft <= 0f)
             {
                 isResting = false;
-                move.restDuration = config.patrolConfig.movements[patrolIndex].restDuration;
-                move.jumpRestDuration = config.patrolConfig.movements[patrolIndex].jumpRestDuration;
+                inJumpRestPhase = false;         // 休息窗口关闭
+                activeJumpMove = null;           // 避免后续用跳跃资源误判
+                move.rtStraightPhase = StraightPhase.None;
+                move.rtMoveTimer = 0f;
+                move.rtRestTimer = 0f;
+                move.rtUsingAutoJumpParams = false;
 
                 if (keepSameMoveAfterRest)
                 {
                     keepSameMoveAfterRest = false;
-
-                    // ★ 开启悬崖检测抑制窗口（只抑制悬崖，不抑制墙）
                     ignoreCliffFramesLeft = Mathf.Max(0, autoJumpIgnoreCliffFrames);
                 }
-                else
-                {
-                    patrolIndex = (patrolIndex + 1) % patrolRuntimeMoves.Count;
-                    activeStraightMove = null;
-                    activeJumpMove = null;
-                }
-            }
 
+                
+            }
+            return;
         }
     }
 
@@ -431,8 +573,8 @@ public class MonsterController : MonoBehaviour
         if (col == null) return false;
         Bounds b = col.bounds;
 
-        // ✅ 改为从脚底偏移，直观控制高度
-        float castY = b.min.y + wallCheckHeightOffset;
+        // 将射线起点夹在包围盒内，避免太贴地
+        float castY = Mathf.Clamp(b.min.y + wallCheckHeightOffset, b.min.y + 0.05f, b.max.y - 0.05f);
         Vector2 origin = new Vector2(b.center.x, castY);
         Vector2 dir = (Vector2)transform.right;
 
@@ -441,20 +583,61 @@ public class MonsterController : MonoBehaviour
         Debug.DrawLine(origin, origin + dir * dist, hit.collider ? Color.red : Color.yellow);
 
         if (!hit.collider) return false;
-        if (Vector2.Dot(hit.normal, dir) < -0.4f) return true;
-        return false;
+        if (hit.collider.isTrigger) return false;                     // 忽略触发器
+        if (hit.collider.CompareTag(autoJumpPermitTag)) return false; // 忽略自动跳许可区
+
+        // 新增：如果命中面是“向上”的地面/斜坡（例如≤45°），不视为墙
+        Vector2 n = hit.normal.normalized;
+        if (n.y >= groundMinNormalYMC) return false; // groundMinNormalYMC 默认 0.70 ≈ 45°
+
+        // 保留原来的“面对近似垂直障碍物”判断
+        return Vector2.Dot(n, dir) < -0.4f;
     }
 
     bool CheckCliffAhead()
     {
         if (col == null) return false;
+        // 仅在当前已接地时检查悬崖，避免空中或贴边抖动误判
         if (!CheckGrounded()) return false;
+
         Bounds b = col.bounds;
-        Vector2 origin = new Vector2(b.center.x, b.min.y + 0.05f);
-        origin += (Vector2)transform.right * (b.extents.x + cliffCheckOffsetX);
-        RaycastHit2D hit = Physics2D.Raycast(origin, Vector2.down, cliffCheckDistance, groundLayer);
-        Debug.DrawLine(origin, origin + Vector2.down * cliffCheckDistance, hit.collider ? Color.green : Color.blue);
-        return hit.collider == null;
+
+        // 射线起点高度：稍高于脚底，避免自碰撞
+        float baseY = b.min.y + 0.05f;
+
+        // 允许的下台阶高度（米）：小于等于这个落差不算悬崖
+        const float STEP_DOWN_ALLOW = 0.10f;
+
+        // 探测距离：至少覆盖允许落差
+        float rayDist = Mathf.Max(cliffCheckDistance, STEP_DOWN_ALLOW + 0.1f);
+
+        // 前脚趾位置与半脚趾位置（减少坡转折处的漏检）
+        Vector2 forward = (Vector2)transform.right;
+        Vector2 originToe = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0.0f, cliffCheckOffsetX));
+        Vector2 originHalf = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0.0f, cliffCheckOffsetX) * 0.5f);
+
+        bool IsSafe(Vector2 origin)
+        {
+            RaycastHit2D hit = Physics2D.Raycast(origin, Vector2.down, rayDist, groundLayer);
+            Debug.DrawLine(origin, origin + Vector2.down * rayDist, hit.collider ? Color.green : Color.blue);
+
+            if (!hit.collider) return false;                          // 未命中：此射线不安全
+            if (hit.collider.isTrigger) return true;                   // 触发器不算悬崖
+            if (hit.collider.CompareTag(autoJumpPermitTag)) return true; // 自动跳许可区不算地形障碍
+
+            // 关键：先看是否“可行走地面/斜坡”（≤45°），是的话直接安全，不看落差
+            if (hit.normal.y >= groundMinNormalYMC) return true;
+
+            // 命中面过陡时，再用“下台阶容差”判断
+            float drop = (b.min.y) - hit.point.y;
+            return drop <= STEP_DOWN_ALLOW;
+        }
+
+        // 任一射线安全，就不是悬崖
+        bool safeToe = IsSafe(originToe);
+        bool safeHalf = IsSafe(originHalf);
+
+        return !(safeToe || safeHalf);
     }
 
     void TurnAround()
@@ -488,7 +671,7 @@ public class MonsterController : MonoBehaviour
         }
 
         if (!string.IsNullOrEmpty(atk.animation))
-            animator.Play(atk.animation);
+            PlayAnimIfNotCurrent(atk.animation);
 
         Debug.Log($"怪物攻击造成伤害：{atk.damage}");
         state = MonsterState.Discovery;
@@ -496,12 +679,27 @@ public class MonsterController : MonoBehaviour
 
     void OnTriggerEnter2D(Collider2D other)
     {
-        if (other.CompareTag(autoJumpPermitTag))
-        {
-            inAutoJumpPermitZone = true;
-            if (!autoJumpDisarmUntilExit)
-                autoJumpArmed = true; // 进入许可区，上膛
-        }
+        if (!other.CompareTag(autoJumpPermitTag)) return;
+
+        var pts = config?.patrolConfig?.patrolPoints;
+        if (pts != null && pts.Count > 0) return;
+
+        inAutoJumpPermitZone = true;
+
+        // 忽略帧期间 或 未上膛 -> 不触发
+        if (!autoJumpReady || ignoreCliffFramesLeft > 0) return;
+        if (patrolRuntimeMoves == null || patrolRuntimeMoves.Count == 0) return;
+
+        var move = patrolRuntimeMoves[patrolIndex];
+
+        // 新增：为自动跳按 automoveDuration 规划跳数
+        EnsureJumpPlan(move, useAutoParams: true);
+
+        BeginOneJump(move, useAutoParams: true);
+
+        // 触发一次后，等“落地 + 忽略帧结束 + 退出触发器”再上膛
+        autoJumpReady = false;
+        autoJumpRearmAfterLanding = true;
     }
 
     void OnTriggerExit2D(Collider2D other)
@@ -509,18 +707,16 @@ public class MonsterController : MonoBehaviour
         if (other.CompareTag(autoJumpPermitTag))
         {
             inAutoJumpPermitZone = false;
-            autoJumpDisarmUntilExit = false; // 离开许可区，解除保险
-            autoJumpArmed = true;            // 下次再进入可再次触发
+            // 注意：此处不再直接上膛；要等“落地+忽略帧结束”才上膛（在 Update 里处理）
         }
     }
 
-
-
+    
     void Die()
     {
         isDead = true;
         if (!string.IsNullOrEmpty(config.deathConfig.deathAnimation))
-            animator.Play(config.deathConfig.deathAnimation);
+            PlayAnimIfNotCurrent(config.deathConfig.deathAnimation);
         if (!string.IsNullOrEmpty(config.deathConfig.deathEffect))
             Debug.Log($"播放死亡特效：{config.deathConfig.deathEffect}");
         Destroy(gameObject, config.deathConfig.instantRemove ? 0f : 2f);
@@ -543,99 +739,141 @@ public class MonsterController : MonoBehaviour
         }
     }
 
-    void BeginOneJump(PatrolMovement move)
+    // 跳跃起始：当 autojumpDuration>0 时，用“高度+总时长”反解出 g 与 v0y；否则按 autogravityScale + 高度
+    void BeginOneJump(PatrolMovement move, bool useAutoParams)
     {
-        if (!CheckGrounded() || isJumping) return;
+        if (!useAutoParams && !CheckGrounded()) return;
+        if (isJumping) { if (!useAutoParams) return; }
+
         isJumping = true;
-        activeJumpMove = move; // 绑定本次跳跃给“跳跃通道/落地休息通道”
-        hasPlayedJumpEffect = false;
-        hasPlayedJumpRestEffect = false;
-        jumpTimeLeft = move.jumpDuration;
+        isAutoJumping = useAutoParams;
+        activeJumpMove = move;
 
-        float g = move.gravityScale * BASE_G;
-        vY = Mathf.Sqrt(Mathf.Max(0.01f, 2f * Mathf.Max(0.2f, move.jumpHeight) * g));
+        float spdX, hY, g;
+        if (useAutoParams)
+        {
+            spdX = Mathf.Max(0f, move.autojumpSpeed);
+            hY = Mathf.Max(0.01f, move.autojumpHeight);
+            g = Mathf.Max(0.01f, move.autogravityScale) * BASE_G;
+        }
+        else
+        {
+            spdX = Mathf.Max(0f, move.jumpSpeed);
+            hY = Mathf.Max(0.01f, move.jumpHeight);
+            g = Mathf.Max(0.01f, move.gravityScale) * BASE_G;
+        }
 
+        vY = Mathf.Sqrt(Mathf.Max(0.01f, 2f * hY * g));
         transform.position += Vector3.up * 0.05f;
 
-        if (!string.IsNullOrEmpty(move.jumpAnimation) &&
-            !animator.GetCurrentAnimatorStateInfo(0).IsName(move.jumpAnimation))
-            animator.Play(move.jumpAnimation);
-
-        if (!fxOnlyFromAnimationEvents)
+        // 关键点：自动跳时，无论当前是否已在 jumpAnimation，都强制重置到 t=0，保证动画关键帧再次触发
+        if (!string.IsNullOrEmpty(move.jumpAnimation))
         {
-            if (move.jumpEffectPrefab && (!move.jumpEffectOnlyFirst || !hasPlayedJumpEffect))
+            if (useAutoParams)
             {
-                PlayEffect(move.jumpEffectPrefab);
-                hasPlayedJumpEffect = true;
+                animator.CrossFadeInFixedTime(move.jumpAnimation, 0f, 0, 0f);
+                animator.Update(0f);
+            }
+            else
+            {
+                // 正常跳保持原逻辑：只有不在该状态时才切换，避免重复触发
+                if (!animator.GetCurrentAnimatorStateInfo(0).IsName(move.jumpAnimation))
+                    PlayAnimIfNotCurrent(move.jumpAnimation);
             }
         }
 
+        float vx = spdX * FacingSign();
+        rb.velocity = new Vector2(vx, vY);
+
+        move.rtUsingAutoJumpParams = useAutoParams;
     }
 
+    // 跳跃更新：用 groundedAfterVerticalMove 作为唯一落地判定，避免“提前接地→水平清零”
     void JumpUpdate(PatrolMovement move)
     {
-        bool grounded = CheckGrounded();
-        transform.Translate(Vector3.right * move.jumpSpeed * Time.deltaTime, Space.Self);
-        float g = move.gravityScale * BASE_G;
-        vY -= g * Time.deltaTime;
+        // 保持水平速度（自动/正常）
+        float spdX = move.rtUsingAutoJumpParams ? Mathf.Max(move.autojumpSpeed, 0f)
+                                                : Mathf.Max(move.jumpSpeed, 0f);
 
-        // 用安全竖直位移替代直接 Translate，避免穿透
-        SafeMoveVertical(vY * Time.deltaTime, groundLayer);
-
-        // 如果本帧因下撞被夹住且速度向下，则视为落地
-        if (groundedAfterVerticalMove && vY <= 0f)
-        {
-            vY = 0f;
-        }
-
-
-        if (grounded && turnCooldown <= 0f && CheckWallAhead())  // 只在落地时才允许因墙翻向
+        // 墙壁转向允许
+        if (turnCooldown <= 0f && CheckWallAhead())
         {
             TurnAround();
             turnCooldown = 0.25f;
         }
 
-        if (jumpTimeLeft > 0f) jumpTimeLeft = Mathf.Max(0f, jumpTimeLeft - Time.deltaTime);
+        // 重力（自动/正常）
+        float g = (move.rtUsingAutoJumpParams ? Mathf.Max(0.01f, move.autogravityScale)
+                                              : Mathf.Max(0.01f, move.gravityScale)) * BASE_G;
 
-        // 如果 SafeMoveVertical 已经把我们夹在地面上，本帧强制认为已落地
-        if (groundedAfterVerticalMove && vY <= 0f) grounded = true;
+        vY -= g * Time.deltaTime;
 
-        // 只有真的落地时才结束一次跳跃
-        if (grounded && vY <= 0f)
+        // 仅竖直方向“安全位移”；是否“真正落地”由 groundedAfterVerticalMove 决定
+        SafeMoveVertical(vY * Time.deltaTime, groundLayer);
+        
+
+        // 垂直位移后，强制写回水平速度（确保空中全程有 X 速度）
+        rb.velocity = new Vector2(spdX * FacingSign(), rb.velocity.y);
+
+        // 只在“真正被竖直夹停的那一帧”判定落地，避免提前进入休息导致的垂直落下
+        if (groundedAfterVerticalMove && vY <= 0f)
         {
             vY = 0f;
             isJumping = false;
-            isResting = true;
-            move.restDuration = move.jumpRestDuration;
 
-            // 来自直线的自动跳：休息完仍回到本直线段
-            if (autoJumpFromStraight)
+            // 关键：落地当帧清掉 Rigidbody 的竖直速度，并开启短暂抑制窗口
+            rb.velocity = new Vector2(rb.velocity.x, 0f);
+            suppressUpwardOnGroundFrames = 2;
+
+            // 自动跳：按连跳计划
+            if (move.rtUsingAutoJumpParams)
             {
-                keepSameMoveAfterRest = true;
-                autoJumpFromStraight = false;
-            }
+                if (move.rtExecuteRemain > 0)
+                    move.rtExecuteRemain = Mathf.Max(0, move.rtExecuteRemain - 1);
 
-            if (!string.IsNullOrEmpty(move.jumpRestAnimation) &&
-                !animator.GetCurrentAnimatorStateInfo(0).IsName(move.jumpRestAnimation))
-                animator.Play(move.jumpRestAnimation);
-
-            if (!fxOnlyFromAnimationEvents)
-            {
-                if (move.jumpRestEffectPrefab && (!move.jumpRestEffectOnlyFirst || !hasPlayedJumpRestEffect))
+                if (move.rtExecuteRemain > 0)
                 {
-                    PlayEffect(move.jumpRestEffectPrefab);
-                    hasPlayedJumpRestEffect = true;
+                    BeginOneJump(move, useAutoParams: true);
+                    return;
                 }
+
+                // 自动跳序列结束
+                isAutoJumping = false;
+                if (move.restDuration > 0f)
+                {
+                    isResting = true;
+                    inJumpRestPhase = true;   // 跳跃→休息窗口 开启
+                    move.rtRestTimer = move.restDuration;
+                }
+                else
+                {
+                    isResting = false;
+                    inJumpRestPhase = false; 
+                }
+                ignoreCliffFramesLeft = Mathf.Max(0, autoJumpIgnoreCliffFrames);
+                move.rtUsingAutoJumpParams = false;
             }
+            else
+            {
+                // 普通跳：进入休息
+                move.rtExecuteRemain = 0;
+                isResting = true;
+                inJumpRestPhase = true;       
 
+                if (!string.IsNullOrEmpty(move.jumpRestAnimation) &&
+                    !animator.GetCurrentAnimatorStateInfo(0).IsName(move.jumpRestAnimation))
+                    PlayAnimIfNotCurrent(move.jumpRestAnimation);
+
+                move.rtRestTimer = move.jumpRestDuration;
+                move.rtUsingAutoJumpParams = false;
+            }
         }
-
     }
 
-    /// <summary>
+
     /// 安全的竖直位移：在位移前用三条射线预判，若将与地面相撞则把位移夹到地面上方（或下方）
     /// 仅用于跳跃分支，避免直接 Translate 穿透
-    /// </summary>
+    
     private void SafeMoveVertical(float dy, LayerMask groundMask)
     {
         groundedAfterVerticalMove = false;
@@ -662,14 +900,12 @@ public class MonsterController : MonoBehaviour
         }
     }
 
-
-    // 统一的三射线竖直探测：down=true 从脚底向下，否则从头顶向上；返回最近命中（无命中 collider 为 null）
+    // 统一的三射线竖直探测
     private RaycastHit2D BestVerticalHit(float rayLen, bool down)
     {
         Bounds b = col.bounds;
 
         Vector2 left, center, right, dir;
-
 
         if (down)
         {
@@ -690,8 +926,6 @@ public class MonsterController : MonoBehaviour
         var hitC = Physics2D.Raycast(center, dir, rayLen, groundLayer);
         var hitR = Physics2D.Raycast(right, dir, rayLen, groundLayer);
 
-
-
         RaycastHit2D best = default;
         float bestDist = float.MaxValue;
         if (hitL.collider && hitL.distance < bestDist) { best = hitL; bestDist = hitL.distance; }
@@ -700,38 +934,361 @@ public class MonsterController : MonoBehaviour
         return best; // best.collider == null 表示无命中
     }
 
-
-
-    // === 动画事件 ===
-    public void OnSpawnEffect() => PlayEffect(config.spawnConfig.spawnEffectPrefab);
-    public void OnIdleEffect() => PlayEffect(config.spawnConfig.idleEffectPrefab);
-    // === 动画事件 ===
-    public void OnPatrolMoveEffect()
+    // 刷新接地/斜坡信息（简化版）
+    private readonly ContactPoint2D[] _cpBufMC = new ContactPoint2D[8];
+    private void UpdateGroundedAndSlope()
     {
+        groundNormalMC = Vector2.up;
+        isGroundedMC = false;
+
+        var filter = new ContactFilter2D { useTriggers = false };
+        filter.SetLayerMask(groundLayer);
+        int cnt = rb.GetContacts(filter, _cpBufMC);
+
+        float bestNy = -1f;
+        for (int i = 0; i < cnt; i++)
+        {
+            var n = _cpBufMC[i].normal;
+            if (n.y >= groundMinNormalYMC)
+            {
+                isGroundedMC = true;
+                if (n.y > bestNy) { bestNy = n.y; groundNormalMC = n; }
+            }
+        }
+
+        // 非跳跃且临时失地：用 Rigidbody2D.Cast 形状投射向下“安全吸附”，避免穿透/漏检
+        if (!isGroundedMC && !isJumping && col != null)
+        {
+            const float snapDist = 0.12f; // 允许的最大吸附距离（米），按美术台阶/坡缝调整 0.08~0.15
+            var snapFilter = new ContactFilter2D { useTriggers = false };
+            snapFilter.SetLayerMask(groundLayer);
+
+            // 向下投射自身形状，找最近可行走面（<=45°）
+            RaycastHit2D[] hits = new RaycastHit2D[6];
+            int hitCount = rb.Cast(Vector2.down, snapFilter, hits, snapDist);
+
+            int pick = -1;
+            float bestDist = float.MaxValue;
+            for (int i = 0; i < hitCount; i++)
+            {
+                var h = hits[i];
+                if (!h.collider) continue;
+                if (h.normal.y < groundMinNormalYMC) continue; // 只吸附到可行走法线
+                if (h.distance < bestDist)
+                {
+                    bestDist = h.distance;
+                    pick = i;
+                }
+            }
+
+            if (pick >= 0)
+            {
+                // 仅当竖直速度不明显向上时吸附，避免干扰起跳/弹起
+                if (rb.velocity.y <= 0.05f)
+                {
+                    // MovePosition/position 确保不穿透：移动距离 = 命中距离 - 微偏移
+                    float gap = Mathf.Max(0f, bestDist - 0.005f);
+                    if (gap > 0f)
+                        rb.position += Vector2.down * gap;
+                }
+
+                isGroundedMC = true;
+                groundNormalMC = hits[pick].normal;
+            }
+        }
+    }
+
+    // 沿斜坡投影施加速度（保证上/下坡一致）
+    private void ApplyProjectedVelocityAlongSlope(float speedAbs, int dirSign)
+    {
+        if (!isGroundedMC)
+        {
+            rb.velocity = new Vector2(speedAbs * dirSign, rb.velocity.y);
+            return;
+        }
+
+        Vector2 n = groundNormalMC.normalized;
+        Vector2 t = new Vector2(n.y, -n.x).normalized;
+
+        Vector2 v = t * (speedAbs * dirSign);
+
+        // 轻微贴地：下压量调小，避免在薄坡面上“压穿”
+        const float stickDown = 0.005f;
+        v += -n * stickDown;
+
+        // 接地不允许产生向上分量；叠加上一帧正向vY已在落地抑制里处理
+        if (v.y > 0f) v.y = 0f;
+
+        float addUp = (suppressUpwardOnGroundFrames > 0) ? 0f : Mathf.Max(rb.velocity.y, 0f);
+        rb.velocity = new Vector2(v.x, v.y + addUp);
+
+        if (suppressUpwardOnGroundFrames > 0) suppressUpwardOnGroundFrames--;
+    }
+
+    // 无移动时斜坡停驻锁
+    private void ApplySlopeIdleStopIfNoMove()
+    {
+        if (!isGroundedMC)
+        {
+            ExitSlopeIdleLockMC();
+            return;
+        }
+
+        bool onSlope = groundNormalMC.y < 0.999f;
+
+        // 轻微下滑钳制
+        var v = rb.velocity;
+        if (v.y < slopeStopVyThresholdMC) v.y = 0f;
+
+        // 无移动、在斜坡、允许停驻 -> 冻重力并清切向
+        if (slopeIdleFreezeGravityMC && onSlope && Mathf.Abs(desiredSpeedX) < 0.01f)
+        {
+            if (!slopeIdleLockedMC)
+            {
+                if (rb.velocity.sqrMagnitude <= slopeEnterIdleSpeedEpsilonMC * slopeEnterIdleSpeedEpsilonMC)
+                {
+                    slopeSavedGravityMC = rb.gravityScale;
+                    rb.gravityScale = 0f;
+                    slopeIdleLockedMC = true;
+                }
+            }
+
+            if (slopeIdleLockedMC)
+            {
+                // 清切向
+                Vector2 n = groundNormalMC.normalized;
+                Vector2 t = new Vector2(n.y, -n.x).normalized;
+                float vTan = Vector2.Dot(v, t);
+                v -= vTan * t;
+                if (v.y > 0f) v.y = 0f;
+                rb.velocity = v;
+                return;
+            }
+        }
+
+        // 平地兜底：极小切向清零
+        {
+            Vector2 n = groundNormalMC.normalized;
+            Vector2 t = new Vector2(n.y, -n.x).normalized;
+            float vTan = Vector2.Dot(v, t);
+            if (Mathf.Abs(vTan) < horizontalStopThresholdOnSlopeMC) v -= vTan * t;
+            rb.velocity = v;
+        }
+
+        ExitSlopeIdleLockMC();
+    }
+
+    private void ExitSlopeIdleLockMC()
+    {
+        if (!slopeIdleLockedMC) return;
+        slopeIdleLockedMC = false;
+        rb.gravityScale = slopeSavedGravityMC;
+    }
+
+    // 等待某个状态播完（随 Animator.speed 缩放，直到 normalizedTime >= 1）
+    private IEnumerator WaitForStateFinished(string stateName, int layer = 0)
+    {
+        if (string.IsNullOrEmpty(stateName)) yield break;
+
+        // 等待切入该状态
+        while (true)
+        {
+            var info = animator.GetCurrentAnimatorStateInfo(layer);
+            if (info.IsName(stateName)) break;
+            yield return null;
+        }
+
+        // 等到本轮播放完成
+        while (true)
+        {
+            var info = animator.GetCurrentAnimatorStateInfo(layer);
+            if (!info.IsName(stateName)) break; // 被过渡打断
+            if (info.normalizedTime >= 1f) break;
+            yield return null;
+        }
+    }
+
+    // 计算单次跳跃的空中时长（秒）：T = 2*sqrt(2*h/g)
+    private float ComputeAirTime(bool useAutoParams, PatrolMovement move)
+    {
+        float g = (useAutoParams ? Mathf.Max(0.01f, move.autogravityScale)
+                                 : Mathf.Max(0.01f, move.gravityScale)) * BASE_G;
+        float h = useAutoParams ? Mathf.Max(0.01f, move.autojumpHeight)
+                                : Mathf.Max(0.01f, move.jumpHeight);
+        float v0 = Mathf.Sqrt(Mathf.Max(0.01f, 2f * h * g));
+        return 2f * v0 / g;
+    }
+
+    // 根据总时长预算生成“剩余跳数”（最少1跳）
+    private void EnsureJumpPlan(PatrolMovement move, bool useAutoParams)
+    {
+        if (move.rtExecuteRemain > 0) return;
+
+        // 普通跳用 jumpDuration；自动跳用 automoveDuration
+        float budget = useAutoParams
+            ? Mathf.Max(0f, move.automoveDuration)
+            : Mathf.Max(0f, move.jumpDuration);
+
+        if (budget > 0f)
+        {
+            float T = Mathf.Max(0.01f, ComputeAirTime(useAutoParams, move));
+            move.rtExecuteRemain = Mathf.Max(1, Mathf.CeilToInt(budget / T));
+        }
+        else
+        {
+            move.rtExecuteRemain = 1;
+        }
+    }
+    private GameObject ResolveFxByPrefabName(string prefabName)
+    {
+        if (string.IsNullOrEmpty(prefabName)) return null;
+        var key = prefabName.Trim().ToLowerInvariant();
+
+        // 先查索引
+        if (fxLookup.TryGetValue(key, out var pf) && pf != null)
+            return pf;
+
+        // 兜底：再从当前上下文临时查一次（避免美术刚改名未重启时的极端情况）
+        var sc = config?.spawnConfig;
+        if (sc?.spawnEffectPrefab && string.Equals(sc.spawnEffectPrefab.name, prefabName, System.StringComparison.OrdinalIgnoreCase))
+            return sc.spawnEffectPrefab;
+        if (sc?.idleEffectPrefab && string.Equals(sc.idleEffectPrefab.name, prefabName, System.StringComparison.OrdinalIgnoreCase))
+            return sc.idleEffectPrefab;
+
+        if (activeStraightMove?.moveEffectPrefab && string.Equals(activeStraightMove.moveEffectPrefab.name, prefabName, System.StringComparison.OrdinalIgnoreCase))
+            return activeStraightMove.moveEffectPrefab;
+        if (activeStraightMove?.restEffectPrefab && string.Equals(activeStraightMove.restEffectPrefab.name, prefabName, System.StringComparison.OrdinalIgnoreCase))
+            return activeStraightMove.restEffectPrefab;
+        if (activeJumpMove?.jumpEffectPrefab && string.Equals(activeJumpMove.jumpEffectPrefab.name, prefabName, System.StringComparison.OrdinalIgnoreCase))
+            return activeJumpMove.jumpEffectPrefab;
+        if (activeJumpMove?.jumpRestEffectPrefab && string.Equals(activeJumpMove.jumpRestEffectPrefab.name, prefabName, System.StringComparison.OrdinalIgnoreCase))
+            return activeJumpMove.jumpRestEffectPrefab;
+
+        return null;
+    }
+
+    // 新增：构建 Prefab 名 → Prefab 的索引（不区分大小写）
+    private void BuildFxLookup()
+    {
+        fxLookup.Clear();
+
+        // 出生/待机
+        var sc = config?.spawnConfig;
+        if (sc?.spawnEffectPrefab)
+            fxLookup[sc.spawnEffectPrefab.name.Trim().ToLowerInvariant()] = sc.spawnEffectPrefab;
+        if (sc?.idleEffectPrefab)
+            fxLookup[sc.idleEffectPrefab.name.Trim().ToLowerInvariant()] = sc.idleEffectPrefab;
+
+        // 巡逻：把配置里所有 movement 的特效都加入索引（而不是仅“当前段”）
+        var moves = config?.patrolConfig?.movements;
+        if (moves != null)
+        {
+            foreach (var m in moves)
+            {
+                if (m.moveEffectPrefab)
+                    fxLookup[m.moveEffectPrefab.name.Trim().ToLowerInvariant()] = m.moveEffectPrefab;
+                if (m.restEffectPrefab)
+                    fxLookup[m.restEffectPrefab.name.Trim().ToLowerInvariant()] = m.restEffectPrefab;
+                if (m.jumpEffectPrefab)
+                    fxLookup[m.jumpEffectPrefab.name.Trim().ToLowerInvariant()] = m.jumpEffectPrefab;
+                if (m.jumpRestEffectPrefab)
+                    fxLookup[m.jumpRestEffectPrefab.name.Trim().ToLowerInvariant()] = m.jumpRestEffectPrefab;
+            }
+        }
+    }
+
+    private void PlayAnimIfNotCurrent(string animName)
+    {
+        if (string.IsNullOrEmpty(animName)) return;
+        var info = animator.GetCurrentAnimatorStateInfo(0);
+        if (!info.IsName(animName))
+        {
+            // 统一的切换：无过渡时间、当帧归零到 t=0，保证关键帧从 0 开始
+            animator.CrossFadeInFixedTime(animName, 0f, 0, 0f);
+            animator.Update(0f);
+        }
+    }
+
+    
+
+    // 动画特效关键帧
+    private bool IsCurrentState(string stateName)
+    {
+        if (string.IsNullOrEmpty(stateName) || animator == null) return false;
+        var st = animator.GetCurrentAnimatorStateInfo(0);
+        return st.IsName(stateName);
+    }
+
+    // 出生：spawn 槽位
+    public void OnFxSpawn()
+    {
+        // 仅非 Patrol 阶段有效；必须匹配 spawn 动画且 prefab 已配置
+        var sc = config?.spawnConfig;
+        if (state == MonsterState.Patrol || sc == null) return;
+        if (IsCurrentState(sc.spawnAnimation) && sc.spawnEffectPrefab)
+            PlayEffect(sc.spawnEffectPrefab);
+    }
+
+    // 出生：idle 槽位
+    public void OnFxIdle()
+    {
+        var sc = config?.spawnConfig;
+        if (state == MonsterState.Patrol || sc == null) return;
+        if (IsCurrentState(sc.idleAnimation) && sc.idleEffectPrefab)
+            PlayEffect(sc.idleEffectPrefab);
+    }
+
+    // 巡逻直线：move 槽位
+    public void OnFxMove()
+    {
+        // 仅 Patrol + 非跳跃非休息 + 正在直线段 且 动画匹配 + prefab 已配置
+        if (state != MonsterState.Patrol) return;
         var m = activeStraightMove;
-        if (m != null && m.moveEffectPrefab)
+        if (m == null) return;
+        if (isJumping) return;
+        if (isResting) return;
+        if (IsCurrentState(m.moveAnimation) && m.moveEffectPrefab)
             PlayEffect(m.moveEffectPrefab);
     }
 
-    public void OnPatrolRestEffect()
+    // 巡逻直线：rest 槽位
+    public void OnFxRest()
     {
+        // 仅 Patrol + 非跳跃 + 休息中 + 正在直线段 且 动画匹配 + prefab 已配置
+        if (state != MonsterState.Patrol) return;
         var m = activeStraightMove;
-        if (m != null && m.restEffectPrefab)
+        if (m == null) return;
+        if (isJumping) return;
+        if (!isResting) return;
+        if (IsCurrentState(m.restAnimation) && m.restEffectPrefab)
             PlayEffect(m.restEffectPrefab);
     }
 
-    public void OnPatrolJumpEffect()
+    // 跳跃（普通/自动共用）：jump 槽位（空中）
+    public void OnFxJump()
     {
+        // 仅 Patrol + 跳跃中 + 正在跳段 且 动画匹配 + prefab 已配置
+        if (state != MonsterState.Patrol) return;
         var m = activeJumpMove;
-        if (m != null && m.jumpEffectPrefab)
+        if (m == null) return;
+        if (!isJumping) return;
+        if (IsCurrentState(m.jumpAnimation) && m.jumpEffectPrefab)
             PlayEffect(m.jumpEffectPrefab);
     }
 
-    public void OnPatrolJumpRestEffect()
+    //  仅在“跳跃休息窗口”才允许播放 jumpRestEffectPrefab
+    public void OnFxJumpRest()
     {
+        // 仅 Patrol + 非跳跃 + 正处于“跳跃休息窗口” + 正在跳段 且 动画匹配 + prefab 已配置
+        if (state != MonsterState.Patrol) return;
+        if (isJumping) return;
+        if (!isResting) return;
+        if (!inJumpRestPhase) return;          // NEW: 核心门禁
+
         var m = activeJumpMove;
-        if (m != null && m.jumpRestEffectPrefab)
+        if (m == null) return;
+
+        if (IsCurrentState(m.jumpRestAnimation) && m.jumpRestEffectPrefab)
             PlayEffect(m.jumpRestEffectPrefab);
     }
-
 }

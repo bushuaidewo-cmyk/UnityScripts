@@ -1,11 +1,11 @@
 using UnityEngine;
 
 /// <summary>
-/// ÓÃÓÚ¶¯»­ÊÂ¼ş´¥·¢Ïú»Ù×ÔÉíµÄ¼òµ¥½Å±¾
+/// ç”¨äºåŠ¨ç”»äº‹ä»¶è§¦å‘é”€æ¯è‡ªèº«çš„ç®€å•è„šæœ¬
 /// </summary>
 public class EffectAutoDestroy : MonoBehaviour
 {
-    // ¶¯»­ÊÂ¼şµ÷ÓÃ´Ëº¯Êı¼´¿ÉÏú»Ù×Ô¼º
+    // åŠ¨ç”»äº‹ä»¶è°ƒç”¨æ­¤å‡½æ•°å³å¯é”€æ¯è‡ªå·±
     public void DestroySelf()
     {
         Destroy(gameObject);

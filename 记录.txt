@@ -1,0 +1,243 @@
+两个怪碰到一起 也要转向   或  穿插 
+
+还有就是巡逻阶段，巡逻的时候只给移动系（moveAnimation 和 restAnimation）添加一个选项，这个选项是（自动转向 或 自动跳跃过去），转向已经做好，接下来的功能就是是否遇到障碍或悬崖自动跳跃过去，跳跃过去以后还是接巡逻阶段移动或休息，再悬崖墙壁自动跳跃期间要把移动系从新开始，落地后移动系从新开始计算
+这个跳跃所使用的底层逻辑 和  巡逻 跳跃系（jumpAnimation 和 jumpRestAnimation）一致，代码底层用一个，比如跳跃改了什么算法，这个也会改，但是面板要单独，因为悬崖峭壁自动跳跃这个比  跳跃系要有不同，  
+
+巡逻跳跃系不加这个功能，没有悬崖峭壁自动跳跃这个功能，但是会转向们已经做好
+
+悬崖和 墙壁能不能跳上去 也要有检测  ，检测就是再场景会摆放boxcolloder2d istrigger  ，怪物撞到就检测可以跳跃  ，不需要判断多高墙 多远悬崖 ，判断完全由关卡控制  
+
+如果怪物没有撞到boxcolloder2d istrigger 检测体，撞到墙了，还是会正常转向，也就是 没有boxcolloder2d istrigger  的时候怪物和之前一样 转向，所以这个自动跳跃要用两种结合判断，平时都是悬崖墙壁转向，遇到有boxcolloder2d istrigger   就自动跳，所以自动跳时满足两个条件：既要转向条件满足，又要有boxcolloder2d istrigger，因为从悬崖这边（有boxcolloder2d istrigger）自动跳到悬崖那边（也有boxcolloder2d istrigger），那可能就触发了两次
+
+
+怪物和怪物之间是可以穿插的 ，但会不会 闪烁
+角色和怪物也是可以穿插的（因为角色未来做伤害会有伤害动画和击退效果，所以穿插也还好，暂时不做）
+
+WALL层是 踩墙使用
+
+编辑器 当选择直线运动 并且 可以障碍跳跃的时候  下面的 跳跃设置就 障碍跳跃的设置 
+
+
+
+关于角色出生在相机 锁定区域解法
+
+首先角色是否在 CameraZone 这个物体里，如果在 ，相机的位置在哪里这个是关键，
+需要知道这个检测体左边的边位置 和 右边边的位置，可以人为 的在CameraZone 这个物体的脚本里 打左或右标签，如果打的是右标签，那这个相机位置就是 CameraZone 这个检测体右边的边 位置（角色Component  与 CameraZone 这个检测体右边的边 交点位置）
+角色出生的时候相机要被矫正到这个位置  
+另外 人物身上用点检测场景CameraZone 检测体
+
+
+新需求 
+怪物可以走包括45度以下的斜坡，现在是走到斜坡就停下了， 不断地抖，还会斜坡滑下来
+45度以下的可以走上去  ，以上的要转向
+
+直线移动走包括45度以下的斜坡停下休息的 时候可以站住 
+跳跃主要是跳到包括45度以下的斜坡，休息的时候可以停住
+
+和自动跳跃没关系，不要碰到了相关代码
+转向考虑下45度以上斜坡才转向
+
+物理还是要用rigidbody dynamic
+
+
+
+patrolConfig.patrolPoints 这里给了两点位置patrolConfig.patrolPoints.Array.data[0]h和patrolConfig.patrolPoints.Array.data[1]后，怪物并没有再两点之间移动 正常怪物出生的位置 走到两点patrolConfig.patrolPoints.Array.data[0]点 再 走 到patrolConfig.patrolPoints.Array.data[1]点 patrolConfig.pingPong 如果勾上就是一直循环，不勾上就不走点
+
+
+patrolConfig.patrolPoints 这个点同样对跳跃也有用，再两点之间跳跃，两点之间如果跳跃不能过点，到点上方X轴速度为0，怪物垂直落下 选择点之间移动或跳跃 同样支持 转向和自动跳跃 所以摆点的时候会注意不要和 自动跳跃检测体重叠，优先级不用考虑
+
+
+把脚本分出来了
+
+“MonsterController 只做编排”版本和5个独立逻辑脚本
+自动跳跃 = 跳跃内核（JumpCore）+ 自动编排（AutoJumpDriver）
+
+JumpCore 只做物理：起跳、重力、SafeMoveVertical、落地判定；不管许可区/上膛/抑制窗口/转向。
+
+AutoJumpDriver 只做“自动”策略：许可区上膛/保险、落地后悬崖抑制帧、调用 JumpCore 起跳&空中核（你之前的变量、窗口语义完全保留）。
+
+MonsterController
+
+自动转向（AutoTurnLogic）：墙/悬崖检测 + TurnAround 封装，墙线从“脚底+偏移”发射，wallCheckHeightOffset 调节立即可见。
+
+MonsterController
+
+地面直线段（GroundMoveLogic）：遇障碍→优先试自动跳，否则转向；修复了你之前“抑制窗口被第二次 CheckCliffAhead 覆盖”的问题（只用一次合并结果）。
+
+MonsterController
+
+
+
+
+
+
+
+第1个需求
+MonsterController要借鉴PlayerController 的移动 跳跃 斜坡移动 斜坡静止 平地走上斜坡  斜坡走下平地  向上走斜坡速度 和向下走胁迫速度要与平地走斜坡速度相同  等物理方式，并且适合怪物编辑器
+
+第2个需求
+需要和第1个需求匹配，就是第一个需求好的同时还能满足第2个需求
+
+怪物编辑器已经有一个版本了
+完善当前的版本
+具体如下：
+spawnConfig 出生阶段 这块不用管 已经OK
+
+接下来就是patrolConfig 巡逻阶段
+
+patrolConfig.patrolPoints 这个是生成点，怪物再点之间移动，选择了这个方式怪物就不会自动跳跃了 自动转向了 完全靠点，几个点之间移动
+patrolConfig.pingPong 这个功能可以删掉
+patrolConfig.movements 这个是可以指定不同的巡逻移动状态 ，有直线移动 和 跳跃移动 ，可以再列表里+ 加入element0、element1……很多状态
+patrolConfig.movements.Array.data[0].executeCount，内部element0执行几次 
+
+patrolConfig.randomOrder 勾上就是列表里element0、element1……一直随机，不勾就是按顺序element0、element1……一直循环
+patrolConfig.loopAll 这个功能可以删掉
+
+再patrolConfig.movements下element0
+patrolConfig.movements.Array.data[0].type  设置类型 straight 或 jump
+选择 straight的时候的参数
+patrolConfig.movements.Array.data[0].moveSpeed  匀速速度  
+patrolConfig.movements.Array.data[0].acceleration  加速度 起步时候  0  加速到  匀速速度   ，如果设置是0  ，没有加速度，直接到达匀速速度
+还要增加一个加速时间 缺失
+patrolConfig.movements.Array.data[0].deceleration  减速度 减速时候   匀速速度     减速到 0，如果设置是0  ，没有减速度，直接匀速速度降到0
+还要增加一个减速时间 缺失
+patrolConfig.movements.Array.data[0].restDuration  休息停顿时间  
+
+patrolConfig.movements.Array.data[0].moveAnimation  怪物移动动画
+patrolConfig.movements.Array.data[0].restAnimation   怪物休息动画
+patrolConfig.movements.Array.data[0].moveEffectOnlyFirst   移动特效是否只播放一次，选择勾上，动画帧触发播放一次就不再播放，不勾就是训话播放
+patrolConfig.movements.Array.data[0].moveEffectPrefab  指定怪物移动中动画帧（OnPatrolMoveEffect）事件播放特效  
+patrolConfig.movements.Array.data[0].restEffectOnlyFirst  休息特效是否只播放一次，选择勾上，动画帧触发播放一次就不再播放，不勾就是训话播放
+patrolConfig.movements.Array.data[0].restEffectPrefab   指定怪物休息中的动画帧（OnPatrolRestEffect）事件播放特效
+
+patrolConfig.movements.Array.data[0].obstacleBehavior  自动类型 turn 或 auto jump 
+选择turn 怪物走到悬崖或墙壁 会自动转向 朝自己朝向的方向移动   墙壁和悬崖已经有检测参数 
+wallCheckDistance  检测长度
+wallCheckHeightOffset   上下偏移
+cliffCheckDistance  检测长度
+cliffCheckOffsetX     偏移
+
+auto jump 选项可以删掉  默认都是turn
+因为auto jump 是由怪物撞到场景的autoJumpPermitTag的物体就会跳跃（跳跃以后autoJumpIgnoreCliffFrames 8帧不检测 悬崖和 自动跳跃，以免连续）并且撞到墙壁也会转向，所以不需要选项，默认就是turn 
+
+
+下面的是autoJumpPermitTag触发怪物跳跃的参数
+参数
+patrolConfig.movements.Array.data[0].autojumpSpeed 匀速速度 X
+patrolConfig.movements.Array.data[0].autojumpHeight 跳跃高度 Y
+patrolConfig.movements.Array.data[0].autogravityScale  向下重力 系数  ，系数 * 怪物rb2d 下GravityScale 这个值要给>0
+patrolConfig.movements.Array.data[0].autojumpDuration  跳跃持续时间  指空中到落地时间，并且这时候 gravityScale 失效 
+
+资源
+patrolConfig.movements.Array.data[0].jumpAnimation 怪物跳跃动画
+patrolConfig.movements.Array.data[0].jumpRestAnimation 怪物跳跃休息动画
+patrolConfig.movements.Array.data[0].jumpEffectOnlyFirst 跳跃特效是否只播放一次，选择勾上，动画帧触发播放一次就不再播放，不勾就是训话播放
+patrolConfig.movements.Array.data[0].jumpEffectPrefab  指定怪物跳跃中动画帧（OnPatrolJumpEffect）事件播放特效  
+patrolConfig.movements.Array.data[0].jumpRestEffectOnlyFirst 跳跃休息特效是否只播放一次，选择勾上，动画帧触发播放一次就不再播放，不勾就是训话播放
+patrolConfig.movements.Array.data[0].jumpRestEffectPrefab 指定怪物跳跃休息中的动画帧（OnPatrolJumpRestEffect）事件播放特效
+
+
+当选择 jump的时候的参数
+参数
+patrolConfig.movements.Array.data[0].jumpSpeed 匀速速度 X
+patrolConfig.movements.Array.data[0].jumpHeight 跳跃高度 Y
+patrolConfig.movements.Array.data[0].gravityScale  向下重力 系数  ，系数 * 怪物rb2d 下GravityScale    
+patrolConfig.movements.Array.data[0].jumpDuration 跳跃持续时间  
+patrolConfig.movements.Array.data[0].restEffectPrefab跳跃休息时间 
+
+moveDuration  是跳跃总体时间，比如跳跃速度 重力 让怪物再空中跳跃了3S，设置总时间是2S，那还是按照3S算，只不过落地后大于设定值2S就不跳跃了，如果跳跃速度 重力 让怪物再空中跳跃了3S，总时间是7S，那就让怪物再跳跃2次，落地后因为还剩1秒，所以还要再跳一次
+restDuration 是moveDuration 执行完后的最后一跳落地开始计算，落地跳跃休息 不动 
+
+资源
+patrolConfig.movements.Array.data[0].jumpAnimation 怪物跳跃动画
+patrolConfig.movements.Array.data[0].jumpRestAnimation 怪物跳跃休息动画
+patrolConfig.movements.Array.data[0].jumpEffectOnlyFirst 跳跃特效是否只播放一次，选择勾上，动画帧触发播放一次就不再播放，不勾就是训话播放
+patrolConfig.movements.Array.data[0].jumpEffectPrefab  指定怪物跳跃中动画帧（OnPatrolJumpEffect）事件播放特效  
+patrolConfig.movements.Array.data[0].jumpRestEffectOnlyFirst 跳跃休息特效是否只播放一次，选择勾上，动画帧触发播放一次就不再播放，不勾就是循环播放
+patrolConfig.movements.Array.data[0].jumpRestEffectPrefab 指定怪物跳跃休息中的动画帧（OnPatrolJumpRestEffect）事件播放特效
+
+patrolConfig.movements.Array.data[0].obstacleBehavior 默认就是 turn 
+怪物跳跃撞到墙壁的时候会转向，已经转向后等8帧后再检测，防止一直检测抖动，另外悬崖不检测转向，跳跃仅仅是撞上前方墙才转向
+当然也支持怪物跳跃中撞到场景的autoJumpPermitTag的物体再次跳跃，跳跃空中撞到autoJumpPermitTag的物体，从触发那一刻为起点再次跳跃
+
+autoJumpPermitTag 的自动跳跃可以和 type设置类型jump参数不同，资源配置相同
+
+编辑器面板优化，巡逻阶段
+选择type  设置类型 straight
+直线移动参数和资源
+自动跳跃参数和资源
+
+选择type  设置类型 jump
+跳跃参数和资源
+自动跳跃参数和资源
+自动跳跃与跳跃参数不同 ，资源相同
+
+请把以上1和2功能完善，不要删除原来这几个脚本功能配置，需要删除的上面的说明也写了，有些字段虽然是空的，但也是策划预留的一部分
+不需要完整代码，不用解释为什么，贴出来代码要改动的位置，怎么替换或删除或增加，不要漏掉
+
+
+
+
+调整下规则
+
+正常跳跃  
+moveDuration  是跳跃总体时间，比如跳跃速度 重力 让怪物再空中跳跃了3S，设置总时间是2S，那还是按照3S算，只不过落地后大于设定值2S就不跳跃了，如果跳跃速度 重力 让怪物再空中跳跃了3S，总时间是7S，那就让怪物再跳跃2次，落地后因为还剩1秒，所以还要再跳一次
+restDuration 是moveDuration 执行完后的最后一跳落地开始计算，落地跳跃休息 不动 
+
+自动跳跃
+patrolConfig.movements.Array.data[0].autojumpSpeed   空中全程都有速度
+patrolConfig.movements.Array.data[0].autojumpHeight   
+patrolConfig.movements.Array.data[0].autogravityScale
+patrolConfig.movements.Array.data[0].automoveDuration   同正常跳跃 设置
+patrolConfig.movements.Array.data[0].restDuration 加回来   同正常跳跃 设置
+
+现在结果是 自动跳跃到最高点就垂直掉下来，没有继续往前跳，（补充：怪物撞到AutoJumpZone后，自动跳跃和悬崖就不能再触发，要落地后等autoJumpIgnoreCliffFrames的帧数后才可以触发；但是墙壁的转向要保留，可能跳过去以后墙壁自动转向
+
+
+
+
+自查代码
+patrolConfig.movements.Array.data[0].moveAnimation  没指定动画是不能播moveAnimation动画 和 不能播moveEffectPrefab特效的
+patrolConfig.movements.Array.data[0].restAnimation  没指定动画是不能播restAnimation动画 和 不能播restEffectPrefab特效的
+patrolConfig.movements.Array.data[0].moveEffectPrefab   没指定prefab  ，而动画里给了关键帧onfx ,并且给了特效prefab名字，也不能播moveEffectPrefab特效
+patrolConfig.movements.Array.data[0].restEffectPrefab   没指定prefab ，而动画里给了关键帧onfx ,并且给了特效prefab名字，也不能播restEffectPrefab特效
+patrolConfig.movements.Array.data[0].moveEffectPrefab   指定了prefab  ，而动画里没给关键帧onfx ,也不能播moveEffectPrefab特效
+patrolConfig.movements.Array.data[0].restEffectPrefab   指定了prefab ，而动画里没给关键帧onfx ,也不能播restEffectPrefab特效
+
+patrolConfig.movements.Array.data[0].jumpAnimation  没指定动画是不能播jumpAnimation 和 不能播jumpEffectPrefab特效的
+patrolConfig.movements.Array.data[0].jumpRestAnimation  没指定动画是不能播jumpRestAnimation 和 不能播jumpRestEffect特效的
+patrolConfig.movements.Array.data[0].jumpEffectPrefab   没指定prefab  ，而动画里给了关键帧onfx ,并且给了特效prefab名字，也不能播jumpEffectPrefab特效
+patrolConfig.movements.Array.data[0].jumpRestEffectPrefab    没指定prefab ，而动画里给了关键帧onfx ,并且给了特效prefab名字，也不能播jumpRestEffect特效
+patrolConfig.movements.Array.data[0].moveEffectPrefab   指定了prefab  ，而动画里没给关键帧onfx ,也不能播jumpEffectPrefab特效
+patrolConfig.movements.Array.data[0].restEffectPrefab   指定了prefab ，而动画里没给关键帧onfx ,也不能播jumpRestEffect特效
+
+自动跳跃资源逻辑同正常跳跃
+
+
+
+s动画关键帧还是单独的 ，因为动画可以相同、指定特效也可能相同、但是一条动画里这个动画关键帧一定不同，也绝对不会指定两个相同关键帧
+spawnEffectPrefab
+idleEffectPrefab
+moveEffectPrefab
+restEffectPrefab
+jumpEffectPrefab
+jumpRestEffectPrefab
+
+保持规则：
+没有配置动画/Prefab 时，任何情况下都不能播动画/特效；
+动画里没给关键帧事件也不能播放特效；
+配置了 Prefab 但关键帧事件没给也不能播放特效；
+没有在当前段配置的 Prefab 即便 关键帧事件 给了名字也不能播放特效
+
+
+
+
+
+
+直线走斜坡 
+
+多点出生 
+
+出生 巡逻 移动 跳跃 自动跳跃 特效 动画 都可以了  
+
+

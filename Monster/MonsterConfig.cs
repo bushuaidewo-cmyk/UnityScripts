@@ -3,427 +3,420 @@ using UnityEngine;
 using static MonsterController;
 
 /// <summary>
-/// ¹ÖÎïÅäÖÃ ScriptableObject£¬°üº¬¹ÖÎï¸÷½×¶ÎµÄ²ÎÊıÅäÖÃ¡£
+/// æ€ªç‰©é…ç½® ScriptableObjectï¼ŒåŒ…å«æ€ªç‰©å„é˜¶æ®µçš„å‚æ•°é…ç½®ã€‚
 /// </summary>
-[CreateAssetMenu(fileName = "NewMonsterConfig", menuName = "¹ÖÎïÅäÖÃ/ĞÂ¹ÖÎïÅäÖÃ")]
+[CreateAssetMenu(fileName = "NewMonsterConfig", menuName = "æ€ªç‰©é…ç½®/æ–°æ€ªç‰©é…ç½®")]
 public class MonsterConfig : ScriptableObject
 {
-    // »ù±¾ÊôĞÔ²ÎÊı
-    [Header("»ù´¡ÊôĞÔ")]
-    [Tooltip("¹ÖÎïÎ¨Ò»ID£¬ÓÃÓÚÊ¶±ğ¹ÖÎïÀàĞÍ")]
+    // åŸºæœ¬å±æ€§å‚æ•°
+    [Header("åŸºç¡€å±æ€§")]
+    [Tooltip("æ€ªç‰©å”¯ä¸€IDï¼Œç”¨äºè¯†åˆ«æ€ªç‰©ç±»å‹")]
     public string monsterID;
-    [Tooltip("¹ÖÎïµÈ¼¶")]
+    [Tooltip("æ€ªç‰©ç­‰çº§")]
     public int level;
-    [Tooltip("¹ÖÎï×î´óÉúÃüÖµ")]
+    [Tooltip("æ€ªç‰©æœ€å¤§ç”Ÿå‘½å€¼")]
     public float maxHP;
-    [Tooltip("»÷É±¹ÖÎïºó»ñµÃµÄ¾­ÑéÖµ")]
+    [Tooltip("å‡»æ€æ€ªç‰©åè·å¾—çš„ç»éªŒå€¼")]
     public int exp;
 
-    // Ô¤ÖÆÌåºÍ½×¶ÎÅäÖÃ
-    [Header("»ù´¡ÉèÖÃ")]
-    [Tooltip("¹ÖÎïPrefabÔ¤ÖÆÌå£¨Ó¦°üº¬Åö×²Ìå¡¢¼ì²â´¥·¢Æ÷¡¢AnimatorµÈ×é¼ş£©")]
+    // é¢„åˆ¶ä½“å’Œé˜¶æ®µé…ç½®
+    [Header("åŸºç¡€è®¾ç½®")]
+    [Tooltip("æ€ªç‰©Prefabé¢„åˆ¶ä½“ï¼ˆåº”åŒ…å«ç¢°æ’ä½“ã€æ£€æµ‹è§¦å‘å™¨ã€Animatorç­‰ç»„ä»¶ï¼‰")]
     public GameObject monsterPrefab;
 
-    [Header("³öÉú½×¶ÎÅäÖÃ")]
+    [Header("å‡ºç”Ÿé˜¶æ®µé…ç½®")]
     public SpawnConfig spawnConfig;
 
-    [Header("Ñ²Âß½×¶ÎÅäÖÃ£¨µØÃæ£©")]
+    [Header("å·¡é€»é˜¶æ®µé…ç½®ï¼ˆåœ°é¢ï¼‰")]
     public PatrolConfig patrolConfig;
 
-    [Header("·¢ÏÖ½×¶ÎÅäÖÃ£¨µØÃæ£©")]
+    [Header("å‘ç°é˜¶æ®µé…ç½®ï¼ˆåœ°é¢ï¼‰")]
     public DiscoveryConfig discoveryConfig;
 
-    [Header("¹¥»÷½×¶ÎÅäÖÃ£¨µØÃæ£©")]
+    [Header("æ”»å‡»é˜¶æ®µé…ç½®ï¼ˆåœ°é¢ï¼‰")]
     public AttackConfig attackConfig;
 
-    [Header("¿ÕÖĞ½×¶ÎÅäÖÃÆôÓÃ")]
-    [Tooltip("ÊÇ·ñÓĞ¿ÕÖĞ½×¶Î£¨¹ÖÎïºóĞø»áÇĞ»»µ½¿ÕÖĞ½×¶Î£©")]
+    [Header("ç©ºä¸­é˜¶æ®µé…ç½®å¯ç”¨")]
+    [Tooltip("æ˜¯å¦æœ‰ç©ºä¸­é˜¶æ®µï¼ˆæ€ªç‰©åç»­ä¼šåˆ‡æ¢åˆ°ç©ºä¸­é˜¶æ®µï¼‰")]
     public bool hasAirPhase;
 
-    [Header("Ñ²Âß½×¶ÎÅäÖÃ£¨¿ÕÖĞ£©")]
+    [Header("å·¡é€»é˜¶æ®µé…ç½®ï¼ˆç©ºä¸­ï¼‰")]
     public AirPatrolConfig airPatrolConfig;
 
-    [Header("·¢ÏÖ½×¶ÎÅäÖÃ£¨¿ÕÖĞ£©")]
+    [Header("å‘ç°é˜¶æ®µé…ç½®ï¼ˆç©ºä¸­ï¼‰")]
     public AirDiscoveryConfig airDiscoveryConfig;
 
-    [Header("¹¥»÷½×¶ÎÅäÖÃ£¨¿ÕÖĞ£©")]
+    [Header("æ”»å‡»é˜¶æ®µé…ç½®ï¼ˆç©ºä¸­ï¼‰")]
     public AttackConfig airAttackConfig;
 
-    [Header("µØ¿Õ×´Ì¬ÇĞ»»")]
-    [Tooltip("µ±µØÃæ½×¶Î½áÊøºóÊÇ·ñÇĞ»»µ½¿ÕÖĞ½×¶Î")]
+    [Header("åœ°ç©ºçŠ¶æ€åˆ‡æ¢")]
+    [Tooltip("å½“åœ°é¢é˜¶æ®µç»“æŸåæ˜¯å¦åˆ‡æ¢åˆ°ç©ºä¸­é˜¶æ®µ")]
     public bool switchToAirAfterGround;
-    [Tooltip("µ±¹ÖÎïHPµÍÓÚ´Ë°Ù·Ö±ÈÊ±ÇĞ»»¿ÕÖĞ½×¶Î£¨0±íÊ¾²»¸ù¾İHPÇĞ»»£©")]
-    public float switchHPThreshold; // ÀıÈç0.5±íÊ¾HPµÍÓÚ50%Ê±ÇĞ»»
+    [Tooltip("å½“æ€ªç‰©HPä½äºæ­¤ç™¾åˆ†æ¯”æ—¶åˆ‡æ¢ç©ºä¸­é˜¶æ®µï¼ˆ0è¡¨ç¤ºä¸æ ¹æ®HPåˆ‡æ¢ï¼‰")]
+    public float switchHPThreshold; // ä¾‹å¦‚0.5è¡¨ç¤ºHPä½äº50%æ—¶åˆ‡æ¢
 
-    [Header("ËÀÍö½×¶ÎÅäÖÃ")]
+    [Header("æ­»äº¡é˜¶æ®µé…ç½®")]
     public DeathConfig deathConfig;
 }
 
 /// <summary>
-/// ³öÉú½×¶ÎÅäÖÃ
+/// å‡ºç”Ÿé˜¶æ®µé…ç½®
 /// </summary>
+// æ›¿æ¢ SpawnConfig å®šä¹‰ä¸ºï¼š
 [System.Serializable]
 public class SpawnConfig
 {
-    [Tooltip("³öÉúµãÅäÖÃÀàĞÍ£º¹Ì¶¨µãÁĞ±í»òËæ»úÇøÓò")]
+    [Tooltip("å‡ºç”Ÿç‚¹é…ç½®ç±»å‹ï¼šå›ºå®šç‚¹åˆ—è¡¨æˆ–éšæœºåŒºåŸŸ")]
     public SpawnPositionType positionType;
-    [Tooltip("Ô¤ÉèµÄ³öÉúµãÁĞ±í£¨ÊÀ½ç×ø±ê£©¡£ÈôÓĞ¶à¸öµã¿ÉË³Ğò»òËæ»úÑ¡Ôñ¡£")]
+    [Tooltip("é¢„è®¾çš„å‡ºç”Ÿç‚¹åˆ—è¡¨ï¼ˆä¸–ç•Œåæ ‡ï¼‰ã€‚è‹¥æœ‰å¤šä¸ªç‚¹å¯é¡ºåºæˆ–éšæœºé€‰æ‹©ã€‚")]
     public List<Vector2> spawnPoints = new List<Vector2>();
-    [Tooltip("ÊÇ·ñ°´Ë³ĞòÊ¹ÓÃ³öÉúµã£¨trueÔòË³ĞòÑ­»·£¬·ñÔòËæ»úÑ¡Ôñ)")]
+    [Tooltip("æ˜¯å¦æŒ‰é¡ºåºä½¿ç”¨å‡ºç”Ÿç‚¹ï¼ˆtrueåˆ™é¡ºåºå¾ªç¯ï¼Œå¦åˆ™éšæœºé€‰æ‹©)")]
     public bool sequentialSpawn = true;
-    [Tooltip("³öÉúÇøÓòÖĞĞÄµã£¨ÊÀ½ç×ø±ê£©")]
+    [Tooltip("å‡ºç”ŸåŒºåŸŸä¸­å¿ƒç‚¹ï¼ˆä¸–ç•Œåæ ‡ï¼‰")]
     public Vector2 areaCenter;
-    [Tooltip("³öÉúÇøÓò´óĞ¡£¨¿í¸ß£¬ÊÀ½çµ¥Î»)")]
+    [Tooltip("å‡ºç”ŸåŒºåŸŸå¤§å°ï¼ˆå®½é«˜ï¼Œä¸–ç•Œå•ä½)")]
 
-    [Header("³öÉúÊôĞÔ")]
+    [Header("å‡ºç”Ÿå±æ€§")]
     public Vector2 areaSize;
-    [Tooltip("³öÉú³¯Ïò£º³¯ÏòÍæ¼Ò£¬¹Ì¶¨³¯×ó£¬¹Ì¶¨³¯ÓÒ")]
+    [Tooltip("å‡ºç”Ÿæœå‘ï¼šæœå‘ç©å®¶ï¼Œå›ºå®šæœå·¦ï¼Œå›ºå®šæœå³")]
     public Orientation spawnOrientation;
-    [Tooltip("¸ÃÇøÓòÄÚÍ¬Ê±´æÔÚµÄ¹ÖÎï×î´óÊıÁ¿")]
+    [Tooltip("è¯¥åŒºåŸŸå†…åŒæ—¶å­˜åœ¨çš„æ€ªç‰©æœ€å¤§æ•°é‡")]
     public int maxSpawnCount = 1;
-    [Tooltip("Ã¿´ÎÉú³ÉµÄ¹ÖÎïÊıÁ¿")]
+    [Tooltip("æ¯æ¬¡ç”Ÿæˆçš„æ€ªç‰©æ•°é‡")]
     public int spawnBatchCount = 1;
-    [Tooltip("Á½´Î³öÉúÉú³ÉµÄ¼ä¸ôÊ±¼ä£¨Ãë)")]
+    [Tooltip("ä¸¤æ¬¡å‡ºç”Ÿç”Ÿæˆçš„é—´éš”æ—¶é—´ï¼ˆç§’)")]
     public float spawnInterval = 0;
 
-    [Header("¶¯»­ÉèÖÃ")]
-    
-    [Tooltip("³öÉú¶¯»­Ãû³Æ")]
+    [Header("åŠ¨ç”»è®¾ç½®")]
+    [Tooltip("å‡ºç”ŸåŠ¨ç”»åç§°")]
     public string spawnAnimation;
-    [Tooltip("³öÉúºóÔ­µØ´ı»ú¶¯»­Ãû³Æ")]
+    [Tooltip("å‡ºç”ŸååŸåœ°å¾…æœºåŠ¨ç”»åç§°")]
     public string idleAnimation;
-    [Tooltip("³öÉú¶¯»­½áÊøºóµÈ´ı¶àÉÙÃëÔÙ²¥·ÅIdle¶¯»­")]
+    [Tooltip("å‡ºç”ŸåŠ¨ç”»ç»“æŸåç­‰å¾…å¤šå°‘ç§’å†æ’­æ”¾IdleåŠ¨ç”»")]
     public float idleDelay = 1f;
 
-    [Header("ÌØĞ§ÉèÖÃ")]
-    [Tooltip("³öÉúÌØĞ§Prefab£¨Á£×ÓÏµÍ³£©")]
+    [Header("ç‰¹æ•ˆè®¾ç½®")]
+    [Tooltip("å‡ºç”Ÿç‰¹æ•ˆPrefabï¼ˆç²’å­ç³»ç»Ÿï¼‰")]
     public GameObject spawnEffectPrefab;
-    [Tooltip("ÊÇ·ñ½öµÚÒ»´Î²¥·Å³öÉú¶¯»­ÌØĞ§£¬ºóĞø³öÉú¶¯»­²»ÔÙ²¥·ÅÌØĞ§")]
-    public bool spawnEffectOnlyFirst = true;
-    [Tooltip("³öÉúIdleÑ­»·ÌØĞ§Prefab£¨Á£×ÓÏµÍ³£©")]
+    [Tooltip("å‡ºç”ŸIdleå¾ªç¯ç‰¹æ•ˆPrefabï¼ˆç²’å­ç³»ç»Ÿï¼‰")]
     public GameObject idleEffectPrefab;
-    [Tooltip("ÊÇ·ñ½öµÚÒ»´Î²¥·ÅIdle¶¯»­ÌØĞ§£¬ºóĞøIdle¶¯»­Ñ­»·²»ÔÙ²¥·ÅÌØĞ§")]
-    public bool idleEffectOnlyFirst = false;
 
-    [Header("Ö´ĞĞ´ÎÊı")]
-    [Tooltip("³öÉúºóÊÇ·ñÁ¢¼´¿ªÊ¼Ñ²Âß£¨·ñÔòÔòÔ­µØ´ı»ú£©")]
-    public bool startPatrolImmediately;
-    [Tooltip("³öÉú½×¶ÎÖ´ĞĞ´ÎÊı£¨Ñ­»·¼¸´Î³öÉú¶¯»­ºó×Ô¶¯½øÈëÑ²Âß½×¶Î£¬0 ±íÊ¾ÎŞÏŞ²»½øÈëÑ²Âß£©")]
+    [Header("æ‰§è¡Œæ¬¡æ•°")]
+    [Tooltip("å‡ºç”Ÿå¾ªç¯æ¬¡æ•°ï¼š0=ä¸æ’­æ”¾å‡ºç”Ÿ/å¾…æœºç›´æ¥è¿›å…¥å·¡é€»ï¼›1=æ’­æ”¾ä¸€æ¬¡ï¼›2=æ’­æ”¾ä¸¤æ¬¡ï¼›ä»¥æ­¤ç±»æ¨")]
     public int spawnLoopCount = 1;
 }
 
-/// <summary>
-/// Ñ²Âß½×¶ÎÅäÖÃ£¨µØÃæ£©
-/// </summary>
+
+/// å·¡é€»é˜¶æ®µé…ç½®ï¼ˆåœ°é¢ï¼‰
+
 [System.Serializable]
 public class PatrolConfig
 {
-    [Tooltip("µØÃæÑ²ÂßÂ·¾¶µãÁĞ±í£¨ÊÀ½ç×ø±ê£©¡£¹ÖÎï½«°´Ë³ĞòÔÚÕâĞ©µãÖ®¼äÍù·µÑ²Âß¡£")]
+    [Tooltip("åœ°é¢å·¡é€»è·¯å¾„ç‚¹åˆ—è¡¨ï¼ˆä¸–ç•Œåæ ‡ï¼‰ã€‚æ€ªç‰©å°†æŒ‰é¡ºåºåœ¨è¿™äº›ç‚¹ä¹‹é—´ç§»åŠ¨ï¼ˆå¾ªç¯ï¼‰ã€‚")]
     public List<Vector2> patrolPoints = new List<Vector2>();
-    [Tooltip("Ñ²ÂßÂ·¾¶Íù·µ£ºtrue ÔòÔÚÂ·¾¶µãÖ®¼äÀ´»ØÍù·µ£¬false Ôòµ½Ä©Î²ºóÑ­»·»Øµ½µÚÒ»¸öµã¡£")]
-    public bool pingPong = true;
 
-    [Tooltip("Ñ²ÂßÒÆ¶¯Ä£Ê½ÁĞ±í£¨¿É×éºÏ¶àÖÖÒÆ¶¯·½Ê½£©")]
+    [Tooltip("å·¡é€»ç§»åŠ¨æ¨¡å¼åˆ—è¡¨ï¼ˆå¯ç»„åˆå¤šç§ç§»åŠ¨æ–¹å¼ï¼‰")]
     public List<PatrolMovement> movements = new List<PatrolMovement>();
-    [Tooltip("Ñ²ÂßÄ£Ê½ÊÇ·ñËæ»úÇĞ»»£¨trueÔòËæ»úÑ¡ÔñÒ»ÖÖÄ£Ê½Ö´ĞĞ£¬falseÔò°´ÁĞ±íË³ĞòÑ­»·£©")]
+
+    [Tooltip("å·¡é€»æ¨¡å¼æ˜¯å¦éšæœºåˆ‡æ¢ï¼ˆtrueåˆ™éšæœºé€‰æ‹©ä¸€ç§æ¨¡å¼æ‰§è¡Œï¼Œfalseåˆ™æŒ‰åˆ—è¡¨é¡ºåºå¾ªç¯ï¼‰")]
     public bool randomOrder = false;
-    [Tooltip("Ñ²ÂßÄ£Ê½×éºÏÕûÌåÊÇ·ñÑ­»·£¨falseÔò¸÷Ä£Ê½Ö´ĞĞÒ»´ÎºóÑ²Âß½×¶Î½áÊø£©")]
-    public bool loopAll = true;
 }
 
-/// <summary>
-/// Ñ²ÂßÒÆ¶¯µ¥ÔªÅäÖÃ£¨Ö±Ïß»òÌøÔ¾ÒÆ¶¯£©
-/// </summary>
+
+/// å·¡é€»ç§»åŠ¨å•å…ƒé…ç½®ï¼ˆç›´çº¿æˆ–è·³è·ƒç§»åŠ¨ï¼‰
+
+
 [System.Serializable]
 public class PatrolMovement
 {
-    [Tooltip("ÒÆ¶¯ÀàĞÍ£ºÖ±Ïß»òÌøÔ¾")]
+    [Tooltip("ç§»åŠ¨ç±»å‹ï¼šç›´çº¿æˆ–è·³è·ƒ")]
     public MovementType type;
 
-    [Header("Ö±ÏßÒÆ¶¯²ÎÊı")]
-    [Tooltip("ÒÆ¶¯ËÙ¶È")]
+    [Header("ç›´çº¿ç§»åŠ¨å‚æ•°")]
+    [Tooltip("åŒ€é€Ÿé€Ÿåº¦")]
     public float moveSpeed;
-    [Tooltip("ÒÆ¶¯Æğ²½¼ÓËÙ¶È")]
+    [Tooltip("èµ·æ­¥åŠ é€Ÿåº¦ï¼ˆå½“åŠ é€Ÿæ—¶é•¿ä¸º0æ—¶ä½¿ç”¨è¯¥æ•°å€¼ä½œä¸ºé€Ÿç‡ï¼‰")]
     public float acceleration;
-    [Tooltip("Í£Ö¹Ç°¼õËÙ¶È")]
+    [Tooltip("åœæ­¢å‰å‡é€Ÿåº¦ï¼ˆå½“å‡é€Ÿæ—¶é•¿ä¸º0æ—¶ä½¿ç”¨è¯¥æ•°å€¼ä½œä¸ºé€Ÿç‡ï¼‰")]
     public float deceleration;
-    [Tooltip("³ÖĞøÒÆ¶¯Ê±¼ä")]
+
+    [Tooltip("åŠ é€Ÿæ—¶é•¿ï¼ˆç§’ï¼‰ï¼Œ>0 åˆ™æŒ‰â€œé€Ÿåº¦/æ—¶é•¿â€è®¡ç®—åŠ é€Ÿç‡")]
+    public float accelerationTime = 0f;
+    [Tooltip("å‡é€Ÿæ—¶é•¿ï¼ˆç§’ï¼‰ï¼Œ>0 åˆ™æŒ‰â€œé€Ÿåº¦/æ—¶é•¿â€è®¡ç®—å‡é€Ÿç‡")]
+    public float decelerationTime = 0f;
+
+    [Tooltip("æŒç»­ç§»åŠ¨æ—¶é—´ï¼ˆå«åŠ é€Ÿ/å‡é€Ÿï¼‰")]
     public float moveDuration;
-    [Tooltip("ĞİÏ¢Í£¶ÙÊ±¼ä")]
+    [Tooltip("ä¼‘æ¯åœé¡¿æ—¶é—´")]
     public float restDuration;
 
-    [Header("Ö±ÏßÓöÕÏ°­/ĞüÑÂĞĞÎª")]
-    [Tooltip("½öÔÚÖ±ÏßÒÆ¶¯ÉúĞ§£ºÓöÇ½/ĞüÑÂÊ±µÄĞĞÎª£¨×ªÏò »ò ×Ô¶¯Ìø¹ıÈ¥£©")]
-    public ObstacleBehavior obstacleBehavior = ObstacleBehavior.Turn;
-
-    [Header("ÒÆ¶¯¶¯»­ÅäÖÃ")]
-    [Tooltip("ÒÆ¶¯¶¯»­Ãû³Æ")]
+    [Header("ç§»åŠ¨åŠ¨ç”»é…ç½®")]
+    [Tooltip("ç§»åŠ¨åŠ¨ç”»åç§°")]
     public string moveAnimation;
-    [Tooltip("ĞİÏ¢¶¯»­Ãû³Æ")]
+    [Tooltip("ä¼‘æ¯åŠ¨ç”»åç§°")]
     public string restAnimation;
-    [Tooltip("ÒÆ¶¯ÌØĞ§ÊÇ·ñ½ö²¥·ÅÒ»´Î")]
-    public bool moveEffectOnlyFirst = false;
-    [Tooltip("ÒÆ¶¯Ê±ÌØĞ§Prefab£¨Á£×ÓÏµÍ³£©")]
+    [Tooltip("ç§»åŠ¨æ—¶ç‰¹æ•ˆPrefabï¼ˆç²’å­ç³»ç»Ÿï¼‰")]
     public GameObject moveEffectPrefab;
-    [Tooltip("ĞİÏ¢ÌØĞ§ÊÇ·ñ½ö²¥·ÅÒ»´Î")]
-    public bool restEffectOnlyFirst = false;
-    [Tooltip("ĞİÏ¢Ê±ÌØĞ§Prefab£¨Á£×ÓÏµÍ³£©")]
+    [Tooltip("ä¼‘æ¯æ—¶ç‰¹æ•ˆPrefabï¼ˆç²’å­ç³»ç»Ÿï¼‰")]
     public GameObject restEffectPrefab;
 
-    
-
-    [Header("ÌøÔ¾ÒÆ¶¯²ÎÊı")]
-    [Tooltip("Ë®Æ½ÌøÔ¾ËÙ¶È")]
+    [Header("è·³è·ƒç§»åŠ¨å‚æ•°ï¼ˆtype=Jump æ—¶ä½¿ç”¨ï¼‰")]
+    [Tooltip("æ°´å¹³è·³è·ƒé€Ÿåº¦")]
     public float jumpSpeed;
-    [Tooltip("ÌøÔ¾¸ß¶È£¨´¹Ö±ÏòÉÏËÙ¶È£©")]
+    [Tooltip("è·³è·ƒé«˜åº¦ï¼ˆå‚ç›´å‘ä¸Šé€Ÿåº¦ï¼‰")]
     public float jumpHeight;
-    [Tooltip("ÖØÁ¦ÏµÊı")]
+    [Tooltip("é‡åŠ›ç³»æ•°")]
     public float gravityScale;
-    [Tooltip("Á¬ĞøÌøÔ¾³ÖĞøÊ±¼ä")]
+    [Tooltip("è¿ç»­è·³è·ƒæŒç»­æ—¶é—´")]
     public float jumpDuration;
-    [Tooltip("ÌøÔ¾ºóµÄĞİÏ¢Ê±¼ä")]
+    [Tooltip("è·³è·ƒåçš„ä¼‘æ¯æ—¶é—´")]
     public float jumpRestDuration;
 
-    [Header("ÌøÔ¾¶¯»­/ÌØĞ§")]
-    [Tooltip("ÌøÔ¾£¨ÔÚ¿ÕÖĞ£©¶¯»­")]
+    [Header("è·³è·ƒåŠ¨ç”»/ç‰¹æ•ˆï¼ˆJump ä¸ AutoJump èµ„æºå…±ç”¨ï¼‰")]
+    [Tooltip("è·³è·ƒï¼ˆåœ¨ç©ºä¸­ï¼‰åŠ¨ç”»")]
     public string jumpAnimation;
-    [Tooltip("ÌøÔ¾ĞİÏ¢£¨ÂäµØºó£©¶¯»­")]
+    [Tooltip("è·³è·ƒä¼‘æ¯ï¼ˆè½åœ°åï¼‰åŠ¨ç”»")]
     public string jumpRestAnimation;
-    [Tooltip("ÌøÔ¾ÆğÌøÊ±ÌØĞ§½ö²¥Ò»´Î")]
-    public bool jumpEffectOnlyFirst = false;
-    [Tooltip("ÌøÔ¾ÆğÌøÌØĞ§Prefab£¨Á£×Ó»òĞòÁĞÖ¡½Ô¿É£©")]
+    [Tooltip("è·³è·ƒèµ·è·³ç‰¹æ•ˆPrefabï¼ˆç²’å­æˆ–åºåˆ—å¸§çš†å¯ï¼‰")]
     public GameObject jumpEffectPrefab;
-    [Tooltip("ÌøÔ¾ĞİÏ¢ÌØĞ§½ö²¥Ò»´Î")]
-    public bool jumpRestEffectOnlyFirst = false;
-    [Tooltip("ÌøÔ¾ĞİÏ¢ÌØĞ§Prefab£¨Á£×Ó»òĞòÁĞÖ¡½Ô¿É£©")]
+    [Tooltip("è·³è·ƒä¼‘æ¯ç‰¹æ•ˆPrefabï¼ˆç²’å­æˆ–åºåˆ—å¸§çš†å¯ï¼‰")]
     public GameObject jumpRestEffectPrefab;
 
-    
+    [Header("Auto Jump å‚æ•°ï¼ˆç”± autoJumpPermitTag è§¦å‘ï¼Œèµ„æºä¸ Jump å…±ç”¨ï¼‰")]
+    [Tooltip("è‡ªåŠ¨è·³è·ƒæ°´å¹³é€Ÿåº¦ X")]
+    public float autojumpSpeed;
+    [Tooltip("è‡ªåŠ¨è·³è·ƒé«˜åº¦ Y")]
+    public float autojumpHeight;
+    [Tooltip("è‡ªåŠ¨è·³è·ƒé‡åŠ›ç³»æ•°ï¼ˆä¹˜ BASE_Gï¼‰")]
+    public float autogravityScale = 1f;
+    [Tooltip("è‡ªåŠ¨è·³è·ƒæ€»æ—¶é•¿é¢„ç®—ï¼ˆç§’ï¼‰ï¼›<=0 è¡¨ç¤ºåªè·³ä¸€æ¬¡")]
+    public float automoveDuration = 0f;
 
-    [Header("Ö´ĞĞ´ÎÊı")]
-    [Tooltip("Ö´ĞĞ´ÎÊı£¨0±íÊ¾ÎŞÏŞÑ­»·¸ÃÄ£Ê½)")]
-    public int executeCount = 0;
+    [Tooltip("è‡ªåŠ¨è·³è·ƒè½åœ°åçš„ä¼‘æ¯æ—¶é•¿ï¼ˆç§’ï¼‰ï¼›<=0 è¡¨ç¤ºæ— ä¼‘æ¯ï¼Œç›´æ¥æ¢å¤ç›´çº¿é€»è¾‘")]
+    public float autorestDuration = 0f;
+
+
+    // ===== è¿è¡Œæ—¶å­—æ®µï¼ˆä¸åºåˆ—åŒ–ï¼‰=====
+    [System.NonSerialized] public int rtExecuteRemain = 0;
+    [System.NonSerialized] public float rtMoveTimer = 0f;
+    [System.NonSerialized] public float rtRestTimer = 0f;
+    [System.NonSerialized] public float rtCurrentSpeed = 0f;
+    [System.NonSerialized] public StraightPhase rtStraightPhase = StraightPhase.None;
+    [System.NonSerialized] public bool rtUsingAutoJumpParams = false;
+
+    // æ–°å¢ï¼šå°†åŠ /åŒ€/å‡ åˆ†å¼€è®¡æ—¶ï¼ˆmoveDuration ä»…åœ¨ Cruise é˜¶æ®µæ¶ˆè€—ï¼‰
+    [System.NonSerialized] public float rtAccelTimer = 0f;
+    [System.NonSerialized] public float rtCruiseTimer = 0f;
+    [System.NonSerialized] public float rtDecelTimer = 0f;
 }
 
-/// <summary>
-/// ·¢ÏÖ½×¶ÎÅäÖÃ£¨µØÃæ£©
-/// </summary>
+// è¿è¡Œæ—¶ç›´çº¿é˜¶æ®µæšä¸¾ï¼ˆåŠ åˆ° MonsterConfig.cs åº•éƒ¨æˆ–ä»»æ„å¯è§ä½ç½®ï¼‰
+public enum StraightPhase { None, Accel, Cruise, Decel, Rest }
+
+
+/// å‘ç°é˜¶æ®µé…ç½®ï¼ˆåœ°é¢ï¼‰
 [System.Serializable]
 public class DiscoveryConfig
 {
-    [Tooltip("Íæ¼Ò¾¯½ä¾àÀë£¨½øÈë¸Ã·¶Î§Ôò´¥·¢·¢ÏÖ½×¶Î£©")]
+    [Tooltip("ç©å®¶è­¦æˆ’è·ç¦»ï¼ˆè¿›å…¥è¯¥èŒƒå›´åˆ™è§¦å‘å‘ç°é˜¶æ®µï¼‰")]
     public float alertRange;
-    [Tooltip("·¢ÏÖ½×¶ÎÒÆ¶¯Ä£Ê½ÁĞ±í")]
+    [Tooltip("å‘ç°é˜¶æ®µç§»åŠ¨æ¨¡å¼åˆ—è¡¨")]
     public List<DiscoveryMovement> movements = new List<DiscoveryMovement>();
-    [Tooltip("Ä£Ê½ÊÇ·ñËæ»úÇĞ»»")]
+    [Tooltip("æ¨¡å¼æ˜¯å¦éšæœºåˆ‡æ¢")]
     public bool randomOrder = false;
-    [Tooltip("Ä£Ê½×éºÏÕûÌåÊÇ·ñÑ­»·£¨falseÔòÃ¿ÖÖÄ£Ê½Ö´ĞĞÒ»´Îºó½áÊø·¢ÏÖ½×¶Î£©")]
+    [Tooltip("æ¨¡å¼ç»„åˆæ•´ä½“æ˜¯å¦å¾ªç¯ï¼ˆfalseåˆ™æ¯ç§æ¨¡å¼æ‰§è¡Œä¸€æ¬¡åç»“æŸå‘ç°é˜¶æ®µï¼‰")]
     public bool loopAll = true;
 }
 
-/// <summary>
-/// ·¢ÏÖ½×¶Îµ¥ÖÖÒÆ¶¯ÅäÖÃ
-/// </summary>
+
+/// å‘ç°é˜¶æ®µå•ç§ç§»åŠ¨é…ç½®
 [System.Serializable]
 public class DiscoveryMovement
 {
-    [Tooltip("ÀàĞÍ£ºÖ±Ïß×·»÷¡¢±£³Ö¾àÀë¡¢ÌøÔ¾×·»÷")]
+    [Tooltip("ç±»å‹ï¼šç›´çº¿è¿½å‡»ã€ä¿æŒè·ç¦»ã€è·³è·ƒè¿½å‡»")]
     public DiscoveryMovementType type;
 
-    // Ö±Ïß×·»÷²ÎÊı
-    [Tooltip("×·»÷ÒÆ¶¯ËÙ¶È")]
+    // ç›´çº¿è¿½å‡»å‚æ•°
+    [Tooltip("è¿½å‡»ç§»åŠ¨é€Ÿåº¦")]
     public float chaseSpeed;
-    [Tooltip("×·»÷¼ÓËÙ¶È")]
+    [Tooltip("è¿½å‡»åŠ é€Ÿåº¦")]
     public float acceleration;
-    [Tooltip("×·»÷¼õËÙ¶È")]
+    [Tooltip("è¿½å‡»å‡é€Ÿåº¦")]
     public float deceleration;
-    [Tooltip("Á¬ĞøÒÆ¶¯Ê±¼ä")]
+    [Tooltip("è¿ç»­ç§»åŠ¨æ—¶é—´")]
     public float moveDuration;
-    [Tooltip("ÔİÍ£ĞİÏ¢Ê±¼ä")]
+    [Tooltip("æš‚åœä¼‘æ¯æ—¶é—´")]
     public float restDuration;
    
 
-    // ±£³Ö¾àÀë²ÎÊı
-    [Tooltip("±£³Ö¾àÀëµÄ×î½ü¾àÀë")]
+    // ä¿æŒè·ç¦»å‚æ•°
+    [Tooltip("ä¿æŒè·ç¦»çš„æœ€è¿‘è·ç¦»")]
     public float minDistance;
-    [Tooltip("±£³Ö¾àÀëµÄ×îÔ¶¾àÀë")]
+    [Tooltip("ä¿æŒè·ç¦»çš„æœ€è¿œè·ç¦»")]
     public float maxDistance;
-    [Tooltip("Î¬³Ö¸Ã¾àÀëµÄÊ±¼ä")]
+    [Tooltip("ç»´æŒè¯¥è·ç¦»çš„æ—¶é—´")]
     public float maintainTime;
-    [Tooltip("±£³Ö¾àÀëÊ±µÄÒÆ¶¯ËÙ¶È")]
+    [Tooltip("ä¿æŒè·ç¦»æ—¶çš„ç§»åŠ¨é€Ÿåº¦")]
     public float maintainSpeed;
 
-    // ÌøÔ¾×·»÷²ÎÊı
-    [Tooltip("ÌøÔ¾×·»÷ËÙ¶È")]
+    // è·³è·ƒè¿½å‡»å‚æ•°
+    [Tooltip("è·³è·ƒè¿½å‡»é€Ÿåº¦")]
     public float jumpSpeed;
-    [Tooltip("ÌøÔ¾¸ß¶È")]
+    [Tooltip("è·³è·ƒé«˜åº¦")]
     public float jumpHeight;
-    [Tooltip("ÖØÁ¦ÏµÊı")]
+    [Tooltip("é‡åŠ›ç³»æ•°")]
     public float gravityScale;
-    [Tooltip("Á¬ĞøÌøÔ¾Ê±¼ä")]
+    [Tooltip("è¿ç»­è·³è·ƒæ—¶é—´")]
     public float jumpDuration;
-    [Tooltip("ÌøÔ¾ºóĞİÏ¢Ê±¼ä")]
+    [Tooltip("è·³è·ƒåä¼‘æ¯æ—¶é—´")]
     public float jumpRestDuration;
  
 
-    [Tooltip("¶¯»­Ãû³Æ")]
+    [Tooltip("åŠ¨ç”»åç§°")]
     public string animation;
-    [Tooltip("ÌØĞ§Ãû³Æ")]
+    [Tooltip("ç‰¹æ•ˆåç§°")]
     public string effect;
-    [Tooltip("Ö´ĞĞ´ÎÊı (0±íÊ¾ÎŞÏŞ³ÖĞø)")]
-    public int executeCount = 0;
+    
 }
 
-/// <summary>
-/// ¹¥»÷½×¶ÎÅäÖÃ£¨¿ÉÒÔ°üº¬¶àÖÖ¹¥»÷·½Ê½£©
-/// </summary>
+/// æ”»å‡»é˜¶æ®µé…ç½®ï¼ˆå¯ä»¥åŒ…å«å¤šç§æ”»å‡»æ–¹å¼ï¼‰
 [System.Serializable]
 public class AttackConfig
 {
-    [Tooltip("¹¥»÷´¥·¢¾àÀë£¨Íæ¼Ò½øÈë´Ë¾àÀë¿ªÊ¼¹¥»÷£©")]
+    [Tooltip("æ”»å‡»è§¦å‘è·ç¦»ï¼ˆç©å®¶è¿›å…¥æ­¤è·ç¦»å¼€å§‹æ”»å‡»ï¼‰")]
     public float attackRange;
-    [Tooltip("°üº¬µÄ¹¥»÷Ä£Ê½ÁĞ±í")]
+    [Tooltip("åŒ…å«çš„æ”»å‡»æ¨¡å¼åˆ—è¡¨")]
     public List<AttackPattern> attackPatterns = new List<AttackPattern>();
-    [Tooltip("¶àÖÖ¹¥»÷·½Ê½Ê±ÊÇ·ñËæ»úÑ¡Ôñ£¨falseÔò°´Ë³ĞòÑ­»·£©")]
+    [Tooltip("å¤šç§æ”»å‡»æ–¹å¼æ—¶æ˜¯å¦éšæœºé€‰æ‹©ï¼ˆfalseåˆ™æŒ‰é¡ºåºå¾ªç¯ï¼‰")]
     public bool randomOrder = false;
 }
 
-/// <summary>
-/// ¹¥»÷Ä£Ê½ÅäÖÃ£¨½üÕ½¡¢Ô¶³Ì¡¢Åö×²¡¢·ÀÓù£©
-/// </summary>
+/// æ”»å‡»æ¨¡å¼é…ç½®ï¼ˆè¿‘æˆ˜ã€è¿œç¨‹ã€ç¢°æ’ã€é˜²å¾¡ï¼‰
 [System.Serializable]
 public class AttackPattern
 {
-    [Tooltip("¹¥»÷ÀàĞÍ£º½üÕ½¡¢Ô¶³Ì¡¢Åö×²¡¢·ÀÓù")]
+    [Tooltip("æ”»å‡»ç±»å‹ï¼šè¿‘æˆ˜ã€è¿œç¨‹ã€ç¢°æ’ã€é˜²å¾¡")]
     public AttackType type;
 
-    [Tooltip("¹¥»÷¶¯»­Ãû³Æ")]
+    [Tooltip("æ”»å‡»åŠ¨ç”»åç§°")]
     public string animation;
-    [Tooltip("¹¥»÷ÌØĞ§Ãû³Æ")]
+    [Tooltip("æ”»å‡»ç‰¹æ•ˆåç§°")]
     public string effect;
-    [Tooltip("ÉËº¦Öµ")]
+    [Tooltip("ä¼¤å®³å€¼")]
     public int damage;
-    [Tooltip("Ò»´Î¹¥»÷¶¯×÷ÖĞµÄÁ¬Ğø¹¥»÷´ÎÊı")]
+    [Tooltip("ä¸€æ¬¡æ”»å‡»åŠ¨ä½œä¸­çš„è¿ç»­æ”»å‡»æ¬¡æ•°")]
     public int repeatCount = 1;
-    [Tooltip("Á¬Ğø¹¥»÷¼ä¸ôÊ±¼ä")]
+    [Tooltip("è¿ç»­æ”»å‡»é—´éš”æ—¶é—´")]
     public float repeatInterval = 0;
-    [Tooltip("Á¬Ğø¹¥»÷Ê±ÊÇ·ñÔÊĞí´ò¶ÏÇ°Ò»¶¯»­")]
+    [Tooltip("è¿ç»­æ”»å‡»æ—¶æ˜¯å¦å…è®¸æ‰“æ–­å‰ä¸€åŠ¨ç”»")]
     public bool interruptPreviousAnimation = false;
 
-    // ½üÕ½ÌØÓĞ²ÎÊı
-    [Tooltip("½üÕ½¹¥»÷µÄÅĞ¶¨¾àÀë»ò·¶Î§")]
+    // è¿‘æˆ˜ç‰¹æœ‰å‚æ•°
+    [Tooltip("è¿‘æˆ˜æ”»å‡»çš„åˆ¤å®šè·ç¦»æˆ–èŒƒå›´")]
     public float meleeRange;
-    [Tooltip("½üÕ½¹¥»÷ÊÇ·ñ¿É±»Íæ¼Ò¶ÜÅÆ¸ñµ²")]
+    [Tooltip("è¿‘æˆ˜æ”»å‡»æ˜¯å¦å¯è¢«ç©å®¶ç›¾ç‰Œæ ¼æŒ¡")]
     public bool meleeBlockable = true;
 
-    // Ô¶³ÌÌØÓĞ²ÎÊı
-    [Tooltip("Í¶ÉäÎïPrefab£¨Ô¶³Ì¹¥»÷£©")]
+    // è¿œç¨‹ç‰¹æœ‰å‚æ•°
+    [Tooltip("æŠ•å°„ç‰©Prefabï¼ˆè¿œç¨‹æ”»å‡»ï¼‰")]
     public GameObject projectilePrefab;
-    [Tooltip("Í¶ÉäÎïËÙ¶È")]
+    [Tooltip("æŠ•å°„ç‰©é€Ÿåº¦")]
     public float projectileSpeed;
-    [Tooltip("Á¬Ğø·¢ÉäÍ¶ÉäÎï´ÎÊı")]
+    [Tooltip("è¿ç»­å‘å°„æŠ•å°„ç‰©æ¬¡æ•°")]
     public int projectileCount = 1;
-    [Tooltip("Ã¿´Î·¢Éä¼ä¸ô")]
+    [Tooltip("æ¯æ¬¡å‘å°„é—´éš”")]
     public float projectileInterval = 0;
-    [Tooltip("Í¶ÉäÎïÊÙÃü£¨Ãë£©")]
+    [Tooltip("æŠ•å°„ç‰©å¯¿å‘½ï¼ˆç§’ï¼‰")]
     public float projectileLifetime = 5f;
-    [Tooltip("Í¶ÉäÎïÊÇ·ñ¿É±»¶ÜÅÆ¸ñµ²")]
+    [Tooltip("æŠ•å°„ç‰©æ˜¯å¦å¯è¢«ç›¾ç‰Œæ ¼æŒ¡")]
     public bool projectileBlockable = true;
 
-    // Åö×²ÉËº¦ÌØÓĞ²ÎÊı
-    [Tooltip("Åö×²Ôì³ÉÉËº¦µÄÀäÈ´Ê±¼ä")]
+    // ç¢°æ’ä¼¤å®³ç‰¹æœ‰å‚æ•°
+    [Tooltip("ç¢°æ’é€ æˆä¼¤å®³çš„å†·å´æ—¶é—´")]
     public float collisionDamageCooldown = 1f;
 
-    // ·ÀÓùÌØÓĞ²ÎÊı
-    [Tooltip("·ÀÓù³ÖĞøÊ±¼ä")]
+    // é˜²å¾¡ç‰¹æœ‰å‚æ•°
+    [Tooltip("é˜²å¾¡æŒç»­æ—¶é—´")]
     public float defenseDuration;
-    [Tooltip("·ÀÓùÆÚ¼äÊÇ·ñÎŞµĞ")]
+    [Tooltip("é˜²å¾¡æœŸé—´æ˜¯å¦æ— æ•Œ")]
     public bool invulnerableDuringDefense = true;
-    [Tooltip("·ÀÓù×´Ì¬ÌØĞ§Ãû³Æ")]
+    [Tooltip("é˜²å¾¡çŠ¶æ€ç‰¹æ•ˆåç§°")]
     public string defenseEffect;
 }
 
-/// <summary>
-/// ¿ÕÖĞÑ²Âß½×¶ÎÅäÖÃ£¨·ÉĞĞÄ£Ê½£©
-/// </summary>
+/// ç©ºä¸­å·¡é€»é˜¶æ®µé…ç½®ï¼ˆé£è¡Œæ¨¡å¼ï¼‰
 [System.Serializable]
 public class AirPatrolConfig
 {
-    [Tooltip("¿ÕÖĞÑ²ÂßÒÆ¶¯Ä£Ê½ÁĞ±í")]
+    [Tooltip("ç©ºä¸­å·¡é€»ç§»åŠ¨æ¨¡å¼åˆ—è¡¨")]
     public List<AirMove> moves = new List<AirMove>();
-    [Tooltip("ÒÆ¶¯Ä£Ê½ÊÇ·ñËæ»úÇĞ»»")]
+    [Tooltip("ç§»åŠ¨æ¨¡å¼æ˜¯å¦éšæœºåˆ‡æ¢")]
     public bool randomOrder = false;
-    [Tooltip("Ä£Ê½×éºÏÊÇ·ñÑ­»·Ö´ĞĞ")]
+    [Tooltip("æ¨¡å¼ç»„åˆæ˜¯å¦å¾ªç¯æ‰§è¡Œ")]
     public bool loopAll = true;
 }
 
-/// <summary>
-/// ¿ÕÖĞÑ²Âßµ¥¸öÒÆ¶¯ÅäÖÃ
-/// </summary>
+/// ç©ºä¸­å·¡é€»å•ä¸ªç§»åŠ¨é…ç½®
 [System.Serializable]
 public class AirMove
 {
-    [Tooltip("·ÉĞĞËÙ¶È")]
+    [Tooltip("é£è¡Œé€Ÿåº¦")]
     public float speed;
-    [Tooltip("·ÉĞĞ³ÖĞøÊ±¼ä")]
+    [Tooltip("é£è¡ŒæŒç»­æ—¶é—´")]
     public float moveDuration;
-    [Tooltip("ĞüÍ£ĞİÏ¢Ê±¼ä")]
+    [Tooltip("æ‚¬åœä¼‘æ¯æ—¶é—´")]
     public float hoverDuration;
-    [Tooltip("·ÉĞĞ¶¯»­Ãû³Æ")]
+    [Tooltip("é£è¡ŒåŠ¨ç”»åç§°")]
     public string flyAnimation;
-    [Tooltip("·ÉĞĞÌØĞ§Ãû³Æ")]
+    [Tooltip("é£è¡Œç‰¹æ•ˆåç§°")]
     public string flyEffect;
 }
 
-/// <summary>
-/// ¿ÕÖĞ·¢ÏÖ½×¶ÎÅäÖÃ
-/// </summary>
+/// ç©ºä¸­å‘ç°é˜¶æ®µé…ç½®
 [System.Serializable]
 public class AirDiscoveryConfig
 {
-    [Tooltip("¿ÕÖĞ¹ÖÎï¾¯½ä·¶Î§")]
+    [Tooltip("ç©ºä¸­æ€ªç‰©è­¦æˆ’èŒƒå›´")]
     public float alertRange;
-    [Tooltip("·¢ÏÖ½×¶Î·ÉĞĞÄ£Ê½ÁĞ±í")]
+    [Tooltip("å‘ç°é˜¶æ®µé£è¡Œæ¨¡å¼åˆ—è¡¨")]
     public List<AirMove> moves = new List<AirMove>();
-    [Tooltip("Ä£Ê½ÊÇ·ñËæ»úÇĞ»»")]
+    [Tooltip("æ¨¡å¼æ˜¯å¦éšæœºåˆ‡æ¢")]
     public bool randomOrder = false;
-    [Tooltip("Ä£Ê½×éºÏÊÇ·ñÑ­»·")]
+    [Tooltip("æ¨¡å¼ç»„åˆæ˜¯å¦å¾ªç¯")]
     public bool loopAll = true;
-    [Tooltip("ÓëÍæ¼Ò±£³Ö¾àÀëµÄ×îĞ¡Öµ")]
+    [Tooltip("ä¸ç©å®¶ä¿æŒè·ç¦»çš„æœ€å°å€¼")]
     public float minDistance;
-    [Tooltip("ÓëÍæ¼Ò±£³Ö¾àÀëµÄ×î´óÖµ")]
+    [Tooltip("ä¸ç©å®¶ä¿æŒè·ç¦»çš„æœ€å¤§å€¼")]
     public float maxDistance;
-    [Tooltip("Ê¼ÖÕ³¯ÏòÍæ¼Ò")]
+    [Tooltip("å§‹ç»ˆæœå‘ç©å®¶")]
     public bool facePlayer = true;
 }
 
-/// <summary>
-/// ËÀÍö½×¶ÎÅäÖÃ
-/// </summary>
+/// æ­»äº¡é˜¶æ®µé…ç½®
 [System.Serializable]
 public class DeathConfig
 {
-    [Tooltip("ËÀÍö¶¯»­Ãû³Æ")]
+    [Tooltip("æ­»äº¡åŠ¨ç”»åç§°")]
     public string deathAnimation;
-    [Tooltip("ËÀÍöÌØĞ§Ãû³Æ")]
+    [Tooltip("æ­»äº¡ç‰¹æ•ˆåç§°")]
     public string deathEffect;
-    [Tooltip("ËÀÍöÊÇ·ñ´¥·¢±¬Õ¨ÉËº¦")]
+    [Tooltip("æ­»äº¡æ˜¯å¦è§¦å‘çˆ†ç‚¸ä¼¤å®³")]
     public bool explosiveDeath;
-    [Tooltip("±¬Õ¨·¶Î§°ë¾¶")]
+    [Tooltip("çˆ†ç‚¸èŒƒå›´åŠå¾„")]
     public float explosionRadius;
-    [Tooltip("±¬Õ¨ÉËº¦Öµ")]
+    [Tooltip("çˆ†ç‚¸ä¼¤å®³å€¼")]
     public int explosionDamage;
-    [Tooltip("ËÀÍöºóÁ¢¼´ÒÆ³ı¹ÖÎï£¨·ñÔò²¥·ÅÍê¶¯»­ºóÒÆ³ı£©")]
+    [Tooltip("æ­»äº¡åç«‹å³ç§»é™¤æ€ªç‰©ï¼ˆå¦åˆ™æ’­æ”¾å®ŒåŠ¨ç”»åç§»é™¤ï¼‰")]
     public bool instantRemove;
 }
 
-/// <summary>³öÉú³¯ÏòÃ¶¾Ù</summary>
+/// <summary>å‡ºç”Ÿæœå‘æšä¸¾</summary>
 public enum Orientation { FacePlayer, FaceLeft, FaceRight }
-/// <summary>Ñ²ÂßÒÆ¶¯ÀàĞÍ</summary>
+/// <summary>å·¡é€»ç§»åŠ¨ç±»å‹</summary>
 public enum MovementType { Straight, Jump }
-/// <summary>·¢ÏÖ½×¶ÎÒÆ¶¯ÀàĞÍ</summary>
+/// <summary>å‘ç°é˜¶æ®µç§»åŠ¨ç±»å‹</summary>
 public enum DiscoveryMovementType { DirectChase, MaintainDistance, JumpChase }
-/// <summary>¹¥»÷ÀàĞÍ</summary>
+/// <summary>æ”»å‡»ç±»å‹</summary>
 public enum AttackType { Melee, Ranged, Collision, Defend }
-/// <summary>³öÉúÎ»ÖÃÀàĞÍ</summary>
+/// <summary>å‡ºç”Ÿä½ç½®ç±»å‹</summary>
 public enum SpawnPositionType { Points, Area }

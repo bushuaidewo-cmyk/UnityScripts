@@ -5,25 +5,25 @@ using UnityEngine;
 [RequireComponent(typeof(BoxCollider2D))]
 public class CameraZone : MonoBehaviour
 {
-    [Header("½øÈëÇøÓòºóÏà»úÊÇ·ñËø¶¨ÖáÏò")]
+    [Header("è¿›å…¥åŒºåŸŸåç›¸æœºæ˜¯å¦é”å®šè½´å‘")]
     public bool lockX = true;
     public bool lockY = true;
 
-    // ¡ï ĞÂÔö£º³öÉúÔÚÇøÄÚÊ±£¬Ïà»ú½ÃÕıµ½ÄÄÒ»²à±ß½ç
+    // â˜… æ–°å¢ï¼šå‡ºç”Ÿåœ¨åŒºå†…æ—¶ï¼Œç›¸æœºçŸ«æ­£åˆ°å“ªä¸€ä¾§è¾¹ç•Œ
     public enum SpawnSnapEdge { None, Left, Right }
-    [Header("³öÉúÔÚ±¾ÇøÄÚÊ±£¬Ïà»úX½ÃÕıµ½µÄ±ß£¨½ö³öÉúµ±ÏÂÉúĞ§£©")]
+    [Header("å‡ºç”Ÿåœ¨æœ¬åŒºå†…æ—¶ï¼Œç›¸æœºXçŸ«æ­£åˆ°çš„è¾¹ï¼ˆä»…å‡ºç”Ÿå½“ä¸‹ç”Ÿæ•ˆï¼‰")]
     [SerializeField] private SpawnSnapEdge spawnSnapEdge = SpawnSnapEdge.Right;
 
     private static int globalActiveZoneCount = 0;
     private readonly HashSet<Rigidbody2D> _playersInside = new HashSet<Rigidbody2D>();
     private BoxCollider2D _col;
 
-    [Header("»ùÓÚµãµÄ¼ì²â£¨Ìæ´ú´¥·¢Æ÷¼¸ºÎ²îÒı·¢¶¶¶¯£©")]
-    [SerializeField] private bool usePointAnchor = true;          // ¿ªÆô¡°µã¼ì²â¡±
-    [SerializeField] private Vector2 anchorOffset = Vector2.zero; // Ïà¶ÔÍæ¼Ò(=Ïà»útarget)µÄ¾Ö²¿Æ«ÒÆ
+    [Header("åŸºäºç‚¹çš„æ£€æµ‹ï¼ˆæ›¿ä»£è§¦å‘å™¨å‡ ä½•å·®å¼•å‘æŠ–åŠ¨ï¼‰")]
+    [SerializeField] private bool usePointAnchor = true;          // å¼€å¯â€œç‚¹æ£€æµ‹â€
+    [SerializeField] private Vector2 anchorOffset = Vector2.zero; // ç›¸å¯¹ç©å®¶(=ç›¸æœºtarget)çš„å±€éƒ¨åç§»
     
 
-    // ÄÚ²¿×´Ì¬£¨µã¼ì²â£©
+    // å†…éƒ¨çŠ¶æ€ï¼ˆç‚¹æ£€æµ‹ï¼‰
     private bool _wasInsideByPoint = false;
     private float _leftX, _rightX;
 
@@ -46,7 +46,7 @@ public class CameraZone : MonoBehaviour
         _col.isTrigger = true;
     }
 
-    // ¡ï ĞÂÔö£º³öÉú¼´ÔÚÇøÄÚ ¡ú Á¢¿Ì°ÑÏà»úX½ÃÕıµ½Ñ¡¶¨±ß½ç²¢Ëø¶¨
+    // â˜… æ–°å¢ï¼šå‡ºç”Ÿå³åœ¨åŒºå†… â†’ ç«‹åˆ»æŠŠç›¸æœºXçŸ«æ­£åˆ°é€‰å®šè¾¹ç•Œå¹¶é”å®š
     private void Start()
     {
         if (!_col) _col = GetComponent<BoxCollider2D>();
@@ -61,13 +61,13 @@ public class CameraZone : MonoBehaviour
 
         Vector2 anchor = (Vector2)cc.target.position + anchorOffset;
 
-        // ÓÃ¡°µã¡±ÅĞ¶Ï³öÉúÊÇ·ñÔÚÇøÄÚ
+        // ç”¨â€œç‚¹â€åˆ¤æ–­å‡ºç”Ÿæ˜¯å¦åœ¨åŒºå†…
         bool spawnInside = _col.OverlapPoint(anchor);
         _wasInsideByPoint = spawnInside;
 
         if (spawnInside)
         {
-            // ÏÈ°ÑÏà»ú½ÃÕıµ½Ö¸¶¨±ß£¬ÔÙ°´±¾ÇøÅäÖÃËø
+            // å…ˆæŠŠç›¸æœºçŸ«æ­£åˆ°æŒ‡å®šè¾¹ï¼Œå†æŒ‰æœ¬åŒºé…ç½®é”
             float snapX = cc.transform.position.x;
             if (spawnSnapEdge == SpawnSnapEdge.Left) snapX = _leftX;
             if (spawnSnapEdge == SpawnSnapEdge.Right) snapX = _rightX;
@@ -107,7 +107,7 @@ public class CameraZone : MonoBehaviour
         if (!IsPlayerCollider(other, out var rb)) return;
         _playersInside.Add(rb);
         globalActiveZoneCount++;
-        // if (!usePointAnchor) ²ÅÓÃ´¥·¢Æ÷Çı¶¯Ïà»ú£¨ÀÏÂß¼­£©£»¿ªÆôµã¼ì²âºó²»ÔÙÔÚÕâÀïËø
+        // if (!usePointAnchor) æ‰ç”¨è§¦å‘å™¨é©±åŠ¨ç›¸æœºï¼ˆè€é€»è¾‘ï¼‰ï¼›å¼€å¯ç‚¹æ£€æµ‹åä¸å†åœ¨è¿™é‡Œé”
     }
 
     private void OnTriggerExit2D(Collider2D other)
@@ -115,7 +115,7 @@ public class CameraZone : MonoBehaviour
         if (!IsPlayerCollider(other, out var rb)) return;
         if (_playersInside.Remove(rb))
             globalActiveZoneCount = Mathf.Max(0, globalActiveZoneCount - 1);
-        // if (!usePointAnchor) ²ÅÔÚÕâÀï½âËø£»µã¼ì²âÄ£Ê½ÓÃ LateUpdate µÄ¡°Ãªµã¿çÏß¡±À´½âËø
+        // if (!usePointAnchor) æ‰åœ¨è¿™é‡Œè§£é”ï¼›ç‚¹æ£€æµ‹æ¨¡å¼ç”¨ LateUpdate çš„â€œé”šç‚¹è·¨çº¿â€æ¥è§£é”
     }
 
 
@@ -137,30 +137,30 @@ public class CameraZone : MonoBehaviour
         var cc = CameraController.instance;
         if (cc == null || cc.target == null || _col == null) return;
 
-        // ÒÔ¡°Ò»¸öµã¡±×÷Îª½ÇÉ«¼ì²âµã£¨¿ÉÓÃ½Åµ×¡¢ÉíÌåÖĞĞÄ£¬°´ anchorOffset µ÷£©
+        // ä»¥â€œä¸€ä¸ªç‚¹â€ä½œä¸ºè§’è‰²æ£€æµ‹ç‚¹ï¼ˆå¯ç”¨è„šåº•ã€èº«ä½“ä¸­å¿ƒï¼ŒæŒ‰ anchorOffset è°ƒï¼‰
         Vector2 anchor = (Vector2)cc.target.position + anchorOffset;
 
         bool insideNow = _col.OverlapPoint(anchor);
 
-        // ¡ª¡ª ´ÓÇøÍâ -> ÇøÄÚ£¨Ãªµã¿çÈë£©¡ª¡ª
+        // â€”â€” ä»åŒºå¤– -> åŒºå†…ï¼ˆé”šç‚¹è·¨å…¥ï¼‰â€”â€”
         if (!_wasInsideByPoint && insideNow)
         {
-            // Ö»ÔÚµã¸Õ¿çÏßÊ±¶ÔÆëµ½¡°×î½ü±ß¡±£¬±ÜÃâ±»Õû¿éÅö×²ÌåÇ¿ĞĞÍÆ¼·
+            // åªåœ¨ç‚¹åˆšè·¨çº¿æ—¶å¯¹é½åˆ°â€œæœ€è¿‘è¾¹â€ï¼Œé¿å…è¢«æ•´å—ç¢°æ’ä½“å¼ºè¡Œæ¨æŒ¤
             float distL = Mathf.Abs(anchor.x - _leftX);
             float distR = Mathf.Abs(anchor.x - _rightX);
             float snapX = (distL <= distR) ? _leftX : _rightX;
 
             float y = Mathf.Clamp(cc.target.position.y, cc.minY, cc.maxY);
 
-            // ÏÈ¶ÔÆëµ½±ß£¬ÔÙËø£¨Í¬Ö¡Íê³É£¬0 ¶¶£©
+            // å…ˆå¯¹é½åˆ°è¾¹ï¼Œå†é”ï¼ˆåŒå¸§å®Œæˆï¼Œ0 æŠ–ï¼‰
             cc.transform.position = new Vector3(snapX, y, cc.transform.position.z);
             cc.LockCamera(cc.transform.position, lockX, lockY);
         }
 
-        // ¡ª¡ª ´ÓÇøÄÚ -> ÇøÍâ£¨Ãªµã¿ç³ö£©¡ª¡ª
+        // â€”â€” ä»åŒºå†… -> åŒºå¤–ï¼ˆé”šç‚¹è·¨å‡ºï¼‰â€”â€”
         if (_wasInsideByPoint && !insideNow)
         {
-            // ÏÈ¶ÔÆëµ½¡°½«Òª¸úËæµÄÎ»ÖÃ¡±£¬ÔÙ½âËø£¨Í¬Ö¡Íê³É£¬0 ¶¶£©
+            // å…ˆå¯¹é½åˆ°â€œå°†è¦è·Ÿéšçš„ä½ç½®â€ï¼Œå†è§£é”ï¼ˆåŒå¸§å®Œæˆï¼Œ0 æŠ–ï¼‰
             float y = Mathf.Clamp(cc.target.position.y, cc.minY, cc.maxY);
             cc.transform.position = new Vector3(cc.target.position.x, y, cc.transform.position.z);
             cc.UnlockCamera();

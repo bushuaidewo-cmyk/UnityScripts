@@ -25,7 +25,7 @@ public class MonsterSpawner : MonoBehaviour
     {
         if (monsterConfig == null)
         {
-            Debug.LogError("[MonsterSpawner] 未分配 MonsterConfig！");
+            Debug.LogError("[MonsterSpawner] 未分配 MonsterConfig!");
             enabled = false;
             return;
         }
@@ -35,7 +35,7 @@ public class MonsterSpawner : MonoBehaviour
         // maxSpawnCount == 0 表示不出生
         if (spawn.maxSpawnCount == 0)
         {
-            Debug.Log("[MonsterSpawner] maxSpawnCount == 0，跳过出生。");
+            Debug.Log("[MonsterSpawner] maxSpawnCount == 0,跳过出生。");
             return;
         }
 
