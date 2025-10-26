@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 using static MonsterController;
 
 /// <summary>
@@ -62,7 +63,6 @@ public class MonsterConfig : ScriptableObject
 /// <summary>
 /// 出生阶段配置
 /// </summary>
-// 替换 SpawnConfig 定义为：
 [System.Serializable]
 public class SpawnConfig
 {
@@ -92,18 +92,16 @@ public class SpawnConfig
     public string spawnAnimation;
     [Tooltip("出生后原地待机动画名称")]
     public string idleAnimation;
-    [Tooltip("出生动画结束后等待多少秒再播放Idle动画")]
-    public float idleDelay = 1f;
+    [Tooltip("播放 Idle 动画的持续时间（秒）。在出生动画播放完毕后，播放 Idle 动画并维持此时长。")]
+    [FormerlySerializedAs("idleDelay")]
+    [InspectorName("Idle Time")]
+    public float idleTime = 1f;
 
     [Header("特效设置")]
     [Tooltip("出生特效Prefab（粒子系统）")]
     public GameObject spawnEffectPrefab;
     [Tooltip("出生Idle循环特效Prefab（粒子系统）")]
     public GameObject idleEffectPrefab;
-
-    [Header("执行次数")]
-    [Tooltip("出生循环次数：0=不播放出生/待机直接进入巡逻；1=播放一次；2=播放两次；以此类推")]
-    public int spawnLoopCount = 1;
 }
 
 
@@ -247,7 +245,7 @@ public class DiscoveryMovement
     public float moveDuration;
     [Tooltip("暂停休息时间")]
     public float restDuration;
-   
+
 
     // 保持距离参数
     [Tooltip("保持距离的最近距离")]
@@ -270,13 +268,13 @@ public class DiscoveryMovement
     public float jumpDuration;
     [Tooltip("跳跃后休息时间")]
     public float jumpRestDuration;
- 
+
 
     [Tooltip("动画名称")]
     public string animation;
     [Tooltip("特效名称")]
     public string effect;
-    
+
 }
 
 /// 攻击阶段配置（可以包含多种攻击方式）

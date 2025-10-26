@@ -206,37 +206,20 @@ public class MonsterController : MonoBehaviour
 
     IEnumerator StateMachine()
     {
-        int spawnLoops = Mathf.Max(0, config.spawnConfig.spawnLoopCount);
-
-        // 出生阶段：严格依赖关键帧事件；仅等待动画按 speed 播放完成，再等 idleDelay
-        if (spawnLoops > 0)
+        // 出生阶段：播放一次出生动画；随后按 Idle Time 播放 Idle 动画
+        if (!string.IsNullOrEmpty(config.spawnConfig.spawnAnimation))
         {
-            for (int i = 0; i < spawnLoops; i++)
-            {
-                if (!string.IsNullOrEmpty(config.spawnConfig.spawnAnimation))
-                {
-                    animator.CrossFadeInFixedTime(config.spawnConfig.spawnAnimation, 0f, 0, 0f);
-                    animator.Update(0f);
-                    Debug.Log($"[Spawn] 播放出生动画第 {i + 1}/{spawnLoops}");
-                    // 等待 spawn 动画本轮结束（normalizedTime 随 Animator.speed 缩放）
-                    yield return WaitForStateFinished(config.spawnConfig.spawnAnimation, 0);
-                }
+            animator.CrossFadeInFixedTime(config.spawnConfig.spawnAnimation, 0f, 0, 0f);
+            animator.Update(0f);
+            yield return WaitForStateFinished(config.spawnConfig.spawnAnimation, 0);
+        }
 
-                // 出生动画结束后等待 idleDelay
-                if (config.spawnConfig.idleDelay > 0f)
-                    yield return new WaitForSeconds(config.spawnConfig.idleDelay);
-
-                // 播放并等待 idle 动画“完成一轮”，再进入下一轮/巡逻
-                if (!string.IsNullOrEmpty(config.spawnConfig.idleAnimation))
-                {
-                    animator.CrossFadeInFixedTime(config.spawnConfig.idleAnimation, 0f, 0, 0f);
-                    animator.Update(0f);
-                    yield return WaitForStateFinished(config.spawnConfig.idleAnimation, 0);
-                }
-
-                if (i < spawnLoops - 1)
-                    yield return new WaitForSeconds(1f);
-            }
+        float idleTime = Mathf.Max(0f, config.spawnConfig.idleTime);
+        if (idleTime > 0f && !string.IsNullOrEmpty(config.spawnConfig.idleAnimation))
+        {
+            animator.CrossFadeInFixedTime(config.spawnConfig.idleAnimation, 0f, 0, 0f);
+            animator.Update(0f);
+            yield return new WaitForSeconds(idleTime);
         }
 
         state = MonsterState.Patrol;
@@ -482,8 +465,8 @@ public class MonsterController : MonoBehaviour
         // ============== 休息期：新增“路点方向锚点”调用 ==============
         if (isResting)
         {
-            
-            
+
+
             string restAnim =
                 (move.type == MovementType.Jump && !string.IsNullOrEmpty(move.jumpRestAnimation))
                     ? move.jumpRestAnimation
@@ -495,7 +478,7 @@ public class MonsterController : MonoBehaviour
             bool canTurnNow = !inAutoJumpPermitZone && !isAutoJumping && (ignoreCliffFramesLeft <= 0);
             WaypointUpdateAndMaybeTurn(canTurnNow);
 
-            
+
 
             // 每帧保持水平速度为 0
             rb.velocity = new Vector2(0f, rb.velocity.y);

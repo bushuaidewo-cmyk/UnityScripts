@@ -1,3 +1,8 @@
+spawnConfig.idleDelay 如果是0 就一直循环idleAnimation 
+如果spawnConfig.idleDelay 如果是1 ，1以后进入巡逻
+
+
+
 两个怪碰到一起 也要转向   或  穿插 
 
 还有就是巡逻阶段，巡逻的时候只给移动系（moveAnimation 和 restAnimation）添加一个选项，这个选项是（自动转向 或 自动跳跃过去），转向已经做好，接下来的功能就是是否遇到障碍或悬崖自动跳跃过去，跳跃过去以后还是接巡逻阶段移动或休息，再悬崖墙壁自动跳跃期间要把移动系从新开始，落地后移动系从新开始计算
@@ -230,14 +235,94 @@ jumpRestEffectPrefab
 没有在当前段配置的 Prefab 即便 关键帧事件 给了名字也不能播放特效
 
 
+堆栈执行
+ 配置了Element0  ，自循环，  正确
+如果再配置 Element1，还是   Element0  ，自循环，错误，应该是Element0、Element1、Element0循环下去
+如果再配置Element2，Element0、Element1、Element2顺序循环
+如果勾选了patrolConfig.randomOrder，随机再Element0、Element1、Element2循环
+
+移动/停下/跳跃/自动转向/自动跳跃/动画/特效全部走“非路点巡逻”的同一套底层逻辑。
+路点只用来“到点就推进下一个（0..N..0）并在接地且允许转向时纠正朝向”。跳跃可越过路点，不会被中途强制拐头；落地恢复直线相位后再朝目标纠正。
 
 
 
 
-直线走斜坡 
 
-多点出生 
 
-出生 巡逻 移动 跳跃 自动跳跃 特效 动画 都可以了  
+
+巡逻阶段都可以了
+现在开始发现阶段
+
+首先发现阶段的模式 移动发现 和跳跃发现 ，相当于巡逻阶段类型移动和跳跃，只不过没有路点 
+
+所以代码应该怎么设计，比如 巡逻类型 移动类型 和  跳跃类型里面的参数 配置 逻辑 资源 动画 特效 规则 转向 自动跳跃 这些都好了 ，后面就不会再动了，巡逻阶段也不会再动了，后面新增加的比如发现阶段也是引用，巡逻阶段的底层，参数是新的一套、动画特效新的一套，底层没区别 
+讨论下代码是不是需要拆分出来 或者 不拆分 
+
+发现阶段多了一个与玩家的直线距离判断，设定的距离内，背对玩家怪物会转向转向朝玩家移动或跳跃移动，没有被动直接朝玩家移动或跳跃移动
+
+发现阶段的模式 移动发现 和跳跃发现  ，各自独立的参数 动画 特效配置，动画特效配置同巡逻特效动画配置方式一样
+
+
+先介绍移动发现阶段里面分3种状态：
+1发现移动距离：一直朝向玩家方向移动 ，这个就是直接判断与玩家间距离，
+怪物与玩家互动：怪物发现玩家后，玩家逃走超出了判定距离，就回到巡逻移动阶段，如果怪物一直保持和玩家发现距离内，怪物就一直追赶
+参数设定: findmoveSpeed、findacceleration、findaccelerationTime、finddecelerationTime、findmoveDuration、findrestDuration   
+动画资源: prefabfindmoveAnimation、findrestAnimation  
+特效prefab：findmoveEffectPrefab、findrestEffectPrefab    
+动画播放特效关键帧:findmoveEffectPrefab、findrestEffectPrefab    
+
+2发现后退移动距离：朝玩家反方向后退移动，怪物走到玩家的多少距离后会转向后退移动， 
+怪物与玩家互动: 首要条件是怪物发现了，再发现距离之内，所以后退距离一定小于发现距离，当怪物接近玩家再发现后退距离以内，怪物就后退，后退中如果怪物设置了休息（不动）的时候，需要转向玩家（背对玩家走一段，休息转过来看看玩家的这种感觉），如果玩家继续追赶再转头背对玩家移动
+当怪物接近玩家再发现后退距离以外，进入正常发现距离阶段，怪物就朝向玩家追赶，形成拉锯
+参数设定:  reversemoveSpeed、reverseacceleration、reverseaccelerationTime、reversedecelerationTime、reversemoveDuration、reverserestDuration
+动画资源：同发现移动距离动画资源 prefabfindmoveAnimation、findrestAnimation
+特效prefab：同发现移动距离特效资源 findmoveEffectPrefab、findrestEffectPrefab
+动画播放特效关键帧 ：同发现距离动画播放特效关键帧公用 findmoveEffectPrefab、findrestEffectPrefab
+
+3发现倒退移动距离 ：向玩家反方向倒退（脸朝玩家，方向向后倒着走），怪物走到玩家的多少距离后会倒退， 新参数: 发现倒退距离 
+怪物与玩家互动：首要条件是怪物发现了，再发现距离之内，所以倒退距离一定小于发现距离，怪物接近玩家再发现倒退距离以内，怪物就倒退，后退中如果怪物设置了休息（不动）的时候，需要怪物停下
+当怪物接近玩家再发现倒退距离以外，进入正常发现距离阶段，怪物就追赶，形成拉锯
+参数设定: backmoveSpeed、backacceleration、backaccelerationTime、backdecelerationTime、backmoveDuration、 backrestDuration
+动画资源：backmoveAnimation、 backrestAnimation
+特效prefab:  backmoveEffectPrefab、 backrestEffectPrefab
+动画播放特效关键帧:  backmoveEffectPrefab、 backrestEffectPrefab
+
+
+现在介绍跳跃发现阶段里面分3种状态：
+1发现跳跃距离：一直朝向玩家方向跳跃 ，这个就是直接判断与玩家间距离（跳跃超过了设定距离也要完成那次跳跃，落地后再调整）
+怪物与玩家互动：怪物发现玩家后，玩家逃走超出了判定距离，就回到巡逻跳跃阶段，如果怪物一直保持和玩家发现距离内，怪物就一直跳跃追赶
+参数设定: findjumpSpeed 、findjumpHeight、  findgravityScale、 findjumpDuration、findjumpRestDuration
+动画资源: findjumpAnimation、findjumpRestAnimation
+特效prefab:findjumpEffectPrefab、findjumpRestEffectPrefab
+动画播放特效关键帧: findjumpEffectPrefab、findjumpRestEffectPrefab
+
+2发现后退跳跃距离：朝玩家反方向后退跳跃，怪物走到玩家的多少距离后会转向后退跳跃 （跳跃超过了设定距离也要完成那次跳跃，落地后再调整）
+怪物与玩家互动: 首要条件是怪物发现了，再发现距离之内，所以后退跳跃距离一定小于发现跳跃距离，当怪物接近玩家再发现后退距离以内，怪物就后退跳跃，后退跳跃中怪物也设置了休息（不动），如果实际跳跃时间小于设定时间，多跳一次，落地才开始计算休息时间，如果实际跳跃时间大于设定时间，设定时间到了也要完成最后一跳，落地计算休息时间，这个和巡逻期间跳跃底层设计一样
+当怪物接近玩家再发现后退跳跃距离以外，进入正常发现跳跃距离阶段，怪物就朝向玩家跳跃追赶，形成拉锯
+参数设定: reversejumpSpeed 、reversejumpHeight、  reversegravityScale、 reversejumpDuration、reversejumpRestDuration
+动画资源：同发现跳跃距离动画资源 findjumpAnimation、findjumpRestAnimation
+特效prefab：同发现跳跃距离特效资源 findjumpEffectPrefab、findjumpRestEffectPrefab
+动画播放特效关键帧 ：同发现距离动画播放特效关键帧公用
+
+3发现倒退跳跃距离 ：向玩家反方向倒退跳跃（脸朝玩家，方向向后倒着跳跃），怪物跳跃到玩家的多少距离后会倒退跳跃 （跳跃超过了设定距离也要完成那次跳跃，落地后再调整）
+怪物与玩家互动：首要条件是怪物发现了，再发现距离之内，所以倒退跳跃距离一定小于发现跳跃距离，怪物接近玩家再发现倒退距离以内，怪物就倒退跳跃，倒退跳跃中如果怪物设置了休息（不动）的时候，需要怪物落地后转向玩家（背对玩家跳跃一段，落地后休息转过来看看玩家的这种感觉）如果实际跳跃时间小于设定时间，也要多跳一次，落地才开始计算休息时间，如果实际跳跃时间大于设定时间，设定时间到了也要完成最后一跳，落地计算休息时间，这个和巡逻期间跳跃底层设计一样
+当怪物接近玩家再发现倒退跳跃距离以外，进入正常发现跳跃距离阶段，怪物就跳跃追赶，形成拉锯
+参数设定: backjumpSpeed、backjumpHeight、backgravityScale、backjumpDuration、backjumpRestDuration
+动画资源: backjumpAnimation、backjumpRestAnimation
+特效prefab：backjumpEffectPrefab、backjumpRestEffectPrefab
+动画播放特效关键帧:  backjumpEffectPrefab、backjumpRestEffectPrefab
+
+以上移动发现和跳跃发现增加3个公用参数：发现距离参数（公用：发现移动距离和发现跳跃距离）、发现后退距离参数（公用：发现后退移动距离和发现后退跳跃距离）、发现倒退距离 参数（公用：发现倒退移动距离 和 发现倒退跳跃距离）
+
+发现阶段的模式  可以列表+ 添加  移动发现  或 跳跃发现 ,elevent0自己循环，如果添加了elevent0、elevent1，elevent0与elevent1按顺序循环
+findrandomOrder 勾上随机播放elevent
+
+
+
+出生阶段
+可以通过idleDelay 进入巡逻阶段
+也可以通过发现阶段discoverDistance触发，直接进入发现阶段
+
+
 
 
