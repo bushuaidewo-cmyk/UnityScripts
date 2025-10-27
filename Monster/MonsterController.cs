@@ -129,6 +129,17 @@ public class MonsterController : MonoBehaviour
     [Tooltip("斜坡上放大切向速度，保持世界X速度≈moveSpeed")]
     [SerializeField] private bool preserveWorldXOnSlopeMC = true;
 
+    [Header("特效锚点（可选）")]
+    [Tooltip("如未指定则按名字自动查找：FX_Spawn/SpawnPoint 等；找不到则回退 GroundPoint 或根节点")]
+    [SerializeField] private Transform fxSpawnPoint;
+    [SerializeField] private Transform fxIdlePoint;
+    [SerializeField] private Transform fxMovePoint;
+    [SerializeField] private Transform fxRestPoint;
+    [SerializeField] private Transform fxJumpPoint;
+    [SerializeField] private Transform fxJumpRestPoint;
+
+    private enum FxSlot { Spawn, Idle, Move, Rest, Jump, JumpRest }
+
     void Start()
     {
         player = GameObject.FindWithTag("Player")?.transform;
@@ -185,6 +196,9 @@ public class MonsterController : MonoBehaviour
 
         // 初始化路点（若有），并对齐初始朝向
         InitWaypointsIfAny();
+
+        // 自动解析特效锚点（可手动在 Inspector 赋值覆盖）
+        AutoResolveFxAnchors();
 
         currentHP = config.maxHP;
         turnCooldown = 1f;
@@ -465,8 +479,6 @@ public class MonsterController : MonoBehaviour
         // ============== 休息期：新增“路点方向锚点”调用 ==============
         if (isResting)
         {
-
-
             string restAnim =
                 (move.type == MovementType.Jump && !string.IsNullOrEmpty(move.jumpRestAnimation))
                     ? move.jumpRestAnimation
@@ -477,8 +489,6 @@ public class MonsterController : MonoBehaviour
             // NEW: 休息中也用路点锚点（接地）纠正朝向，下一次出发/起跳方向正确
             bool canTurnNow = !inAutoJumpPermitZone && !isAutoJumping && (ignoreCliffFramesLeft <= 0);
             WaypointUpdateAndMaybeTurn(canTurnNow);
-
-
 
             // 每帧保持水平速度为 0
             rb.velocity = new Vector2(0f, rb.velocity.y);
@@ -745,10 +755,32 @@ public class MonsterController : MonoBehaviour
         if (spawner) spawner.NotifyMonsterDeath(gameObject);
     }
 
-    private void PlayEffect(GameObject prefab)
+    // 根据槽位解析锚点
+    private Transform ResolveFxAnchor(FxSlot slot)
+    {
+        switch (slot)
+        {
+            case FxSlot.Spawn: return fxSpawnPoint ?? FallbackAnchor();
+            case FxSlot.Idle: return fxIdlePoint ?? FallbackAnchor();
+            case FxSlot.Move: return fxMovePoint ?? FallbackAnchor();
+            case FxSlot.Rest: return fxRestPoint ?? FallbackAnchor();
+            case FxSlot.Jump: return fxJumpPoint ?? FallbackAnchor();
+            case FxSlot.JumpRest: return fxJumpRestPoint ?? FallbackAnchor();
+            default: return FallbackAnchor();
+        }
+    }
+
+    // 创建并在指定锚点播放特效
+    private void PlayEffect(GameObject prefab, Transform anchor)
     {
         if (prefab == null) return;
-        GameObject fx = Instantiate(prefab, transform.position, Quaternion.identity, transform);
+
+        Transform parent = anchor != null ? anchor : transform;
+        Vector3 pos = parent.position;
+        Quaternion rot = parent.rotation;
+
+        GameObject fx = Instantiate(prefab, pos, rot, parent);
+
         var ps = fx.GetComponentInChildren<ParticleSystem>(true);
         if (ps)
         {
@@ -759,6 +791,12 @@ public class MonsterController : MonoBehaviour
         {
             Destroy(fx, 2f);
         }
+    }
+
+    // 兼容旧调用（未指定锚点时使用回退锚点）
+    private void PlayEffect(GameObject prefab)
+    {
+        PlayEffect(prefab, FallbackAnchor());
     }
 
     // 跳跃起始：当 autojumpDuration>0 时，用“高度+总时长”反解出 g 与 v0y；否则按 autogravityScale + 高度
@@ -1159,6 +1197,7 @@ public class MonsterController : MonoBehaviour
             move.rtExecuteRemain = 1;
         }
     }
+
     private GameObject ResolveFxByPrefabName(string prefabName)
     {
         if (string.IsNullOrEmpty(prefabName)) return null;
@@ -1303,11 +1342,10 @@ public class MonsterController : MonoBehaviour
     // 出生：spawn 槽位
     public void OnFxSpawn()
     {
-        // 仅非 Patrol 阶段有效；必须匹配 spawn 动画且 prefab 已配置
         var sc = config?.spawnConfig;
         if (state == MonsterState.Patrol || sc == null) return;
         if (IsCurrentState(sc.spawnAnimation) && sc.spawnEffectPrefab)
-            PlayEffect(sc.spawnEffectPrefab);
+            PlayEffect(sc.spawnEffectPrefab, ResolveFxAnchor(FxSlot.Spawn));
     }
 
     // 出生：idle 槽位
@@ -1316,7 +1354,7 @@ public class MonsterController : MonoBehaviour
         var sc = config?.spawnConfig;
         if (state == MonsterState.Patrol || sc == null) return;
         if (IsCurrentState(sc.idleAnimation) && sc.idleEffectPrefab)
-            PlayEffect(sc.idleEffectPrefab);
+            PlayEffect(sc.idleEffectPrefab, ResolveFxAnchor(FxSlot.Idle));
     }
 
     // 巡逻直线：move 槽位
@@ -1329,7 +1367,7 @@ public class MonsterController : MonoBehaviour
         if (isJumping) return;
         if (isResting) return;
         if (IsCurrentState(m.moveAnimation) && m.moveEffectPrefab)
-            PlayEffect(m.moveEffectPrefab);
+            PlayEffect(m.moveEffectPrefab, ResolveFxAnchor(FxSlot.Move));
     }
 
     // 巡逻直线：rest 槽位
@@ -1342,7 +1380,7 @@ public class MonsterController : MonoBehaviour
         if (isJumping) return;
         if (!isResting) return;
         if (IsCurrentState(m.restAnimation) && m.restEffectPrefab)
-            PlayEffect(m.restEffectPrefab);
+            PlayEffect(m.restEffectPrefab, ResolveFxAnchor(FxSlot.Rest));
     }
 
     // 跳跃（普通/自动共用）：jump 槽位（空中）
@@ -1354,7 +1392,7 @@ public class MonsterController : MonoBehaviour
         if (m == null) return;
         if (!isJumping) return;
         if (IsCurrentState(m.jumpAnimation) && m.jumpEffectPrefab)
-            PlayEffect(m.jumpEffectPrefab);
+            PlayEffect(m.jumpEffectPrefab, ResolveFxAnchor(FxSlot.Jump));
     }
 
     //  仅在“跳跃休息窗口”才允许播放 jumpRestEffectPrefab
@@ -1370,6 +1408,67 @@ public class MonsterController : MonoBehaviour
         if (m == null) return;
 
         if (IsCurrentState(m.jumpRestAnimation) && m.jumpRestEffectPrefab)
-            PlayEffect(m.jumpRestEffectPrefab);
+            PlayEffect(m.jumpRestEffectPrefab, ResolveFxAnchor(FxSlot.JumpRest));
+    }
+
+    // ========== 锚点解析辅助 ==========
+    private void AutoResolveFxAnchors()
+    {
+        // 用户可以手动把空物体作为锚点添加到怪物“子物体”（建议加到 Flip 下）
+        // 约定可识别的命名（按序优先）：FX_Spawn/SpawnPoint 等
+        fxSpawnPoint = fxSpawnPoint ?? FindAnchored(new[] { "FX_Spawn", "SpawnPoint" });
+        fxIdlePoint = fxIdlePoint ?? FindAnchored(new[] { "FX_Idle", "IdlePoint" });
+        fxMovePoint = fxMovePoint ?? FindAnchored(new[] { "FX_Move", "MovePoint" });
+        fxRestPoint = fxRestPoint ?? FindAnchored(new[] { "FX_Rest", "RestPoint" });
+        fxJumpPoint = fxJumpPoint ?? FindAnchored(new[] { "FX_Jump", "JumpPoint" });
+        fxJumpRestPoint = fxJumpRestPoint ?? FindAnchored(new[] { "FX_JumpRest", "JumpRestPoint" });
+
+        // 最后统一回退：若全部未找到，则以 GroundPoint 或根节点作为回退点
+        Transform fallback = FallbackAnchor(); // 会优先 GroundPoint
+        fxSpawnPoint = fxSpawnPoint ?? fallback;
+        fxIdlePoint = fxIdlePoint ?? fallback;
+        fxMovePoint = fxMovePoint ?? fallback;
+        fxRestPoint = fxRestPoint ?? fallback;
+        fxJumpPoint = fxJumpPoint ?? fallback;
+        fxJumpRestPoint = fxJumpRestPoint ?? fallback;
+    }
+
+    private Transform FindAnchored(string[] names)
+    {
+        // 优先在 Flip 下找（翻转时同步），找不到再在整棵层级里找
+        Transform root1 = flip != null ? flip : transform;
+        foreach (var n in names)
+        {
+            var t = FindChildRecursive(root1, n);
+            if (t != null) return t;
+        }
+
+        // 再尝试 GroundPoint（历史回退）
+        var gp = FindChildRecursive(transform, "GroundPoint");
+        if (gp != null) return gp;
+
+        return null;
+    }
+
+    private Transform FallbackAnchor()
+    {
+        // 优先 GroundPoint，其次 Flip，最后根节点
+        var gp = FindChildRecursive(transform, "GroundPoint");
+        if (gp != null) return gp;
+        if (flip != null) return flip;
+        return transform;
+    }
+
+    private Transform FindChildRecursive(Transform root, string targetName)
+    {
+        if (root == null || string.IsNullOrEmpty(targetName)) return null;
+        if (root.name == targetName) return root;
+        for (int i = 0; i < root.childCount; i++)
+        {
+            var c = root.GetChild(i);
+            var r = FindChildRecursive(c, targetName);
+            if (r != null) return r;
+        }
+        return null;
     }
 }
