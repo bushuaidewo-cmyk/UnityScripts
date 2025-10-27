@@ -245,7 +245,7 @@ jumpRestEffectPrefab
 路点只用来“到点就推进下一个（0..N..0）并在接地且允许转向时纠正朝向”。跳跃可越过路点，不会被中途强制拐头；落地恢复直线相位后再朝目标纠正。
 
 
-
+要给巡逻阶段特效增加 位置点 fxSpawnPoint、fxIdlePoint、fxMovePoint、fxRestPoint、fxJumpPoint、fxJumpRestPoint
 
 
 
@@ -266,63 +266,187 @@ jumpRestEffectPrefab
 先介绍移动发现阶段里面分3种状态：
 1发现移动距离：一直朝向玩家方向移动 ，这个就是直接判断与玩家间距离，
 怪物与玩家互动：怪物发现玩家后，玩家逃走超出了判定距离，就回到巡逻移动阶段，如果怪物一直保持和玩家发现距离内，怪物就一直追赶
-参数设定: findmoveSpeed、findacceleration、findaccelerationTime、finddecelerationTime、findmoveDuration、findrestDuration   
-动画资源: prefabfindmoveAnimation、findrestAnimation  
-特效prefab：findmoveEffectPrefab、findrestEffectPrefab    
-动画播放特效关键帧:findmoveEffectPrefab、findrestEffectPrefab    
+参数设定: findmoveSpeed、findacceleration、findaccelerationTime、finddeceleration、finddecelerationTime、findmoveDuration、findrestDuration   底层逻辑公用巡逻阶段，参数全新
+动画资源: prefabfindmoveAnimation、findrestAnimation    
+特效prefab：findmoveEffectPrefab、findrestEffectPrefab  (支持prefab 或序列帧动画)   
+动画播放特效关键帧:findmoveEffectPrefab、findrestEffectPrefab     动画关键帧触发特效的规则同巡逻阶段 移动
 
 2发现后退移动距离：朝玩家反方向后退移动，怪物走到玩家的多少距离后会转向后退移动， 
 怪物与玩家互动: 首要条件是怪物发现了，再发现距离之内，所以后退距离一定小于发现距离，当怪物接近玩家再发现后退距离以内，怪物就后退，后退中如果怪物设置了休息（不动）的时候，需要转向玩家（背对玩家走一段，休息转过来看看玩家的这种感觉），如果玩家继续追赶再转头背对玩家移动
 当怪物接近玩家再发现后退距离以外，进入正常发现距离阶段，怪物就朝向玩家追赶，形成拉锯
-参数设定:  reversemoveSpeed、reverseacceleration、reverseaccelerationTime、reversedecelerationTime、reversemoveDuration、reverserestDuration
+参数设定:  reversemoveSpeed、reverseacceleration、reverseaccelerationTime、reversedeceleration、reversedecelerationTime、reversemoveDuration、reverserestDuration 底层逻辑公用巡逻阶段，参数全新
 动画资源：同发现移动距离动画资源 prefabfindmoveAnimation、findrestAnimation
-特效prefab：同发现移动距离特效资源 findmoveEffectPrefab、findrestEffectPrefab
-动画播放特效关键帧 ：同发现距离动画播放特效关键帧公用 findmoveEffectPrefab、findrestEffectPrefab
+特效prefab：同发现移动距离特效资源 findmoveEffectPrefab、findrestEffectPrefab (支持prefab 或序列帧动画)
+动画播放特效关键帧 ：同发现距离动画播放特效关键帧公用 findmoveEffectPrefab、findrestEffectPrefab     
 
 3发现倒退移动距离 ：向玩家反方向倒退（脸朝玩家，方向向后倒着走），怪物走到玩家的多少距离后会倒退， 新参数: 发现倒退距离 
 怪物与玩家互动：首要条件是怪物发现了，再发现距离之内，所以倒退距离一定小于发现距离，怪物接近玩家再发现倒退距离以内，怪物就倒退，后退中如果怪物设置了休息（不动）的时候，需要怪物停下
 当怪物接近玩家再发现倒退距离以外，进入正常发现距离阶段，怪物就追赶，形成拉锯
-参数设定: backmoveSpeed、backacceleration、backaccelerationTime、backdecelerationTime、backmoveDuration、 backrestDuration
+参数设定: backmoveSpeed、backacceleration、backaccelerationTime、backdeceleration、backdecelerationTime、backmoveDuration、 backrestDuration 底层逻辑公用巡逻阶段，参数全新
 动画资源：backmoveAnimation、 backrestAnimation
-特效prefab:  backmoveEffectPrefab、 backrestEffectPrefab
-动画播放特效关键帧:  backmoveEffectPrefab、 backrestEffectPrefab
+特效prefab:  backmoveEffectPrefab、 backrestEffectPrefab (支持prefab 或序列帧动画)
+动画播放特效关键帧:  backmoveEffectPrefab、 backrestEffectPrefab  动画关键帧触发特效的规则同巡逻阶段 移动
 
 
 现在介绍跳跃发现阶段里面分3种状态：
 1发现跳跃距离：一直朝向玩家方向跳跃 ，这个就是直接判断与玩家间距离（跳跃超过了设定距离也要完成那次跳跃，落地后再调整）
 怪物与玩家互动：怪物发现玩家后，玩家逃走超出了判定距离，就回到巡逻跳跃阶段，如果怪物一直保持和玩家发现距离内，怪物就一直跳跃追赶
-参数设定: findjumpSpeed 、findjumpHeight、  findgravityScale、 findjumpDuration、findjumpRestDuration
+参数设定: findjumpSpeed 、findjumpHeight、  findgravityScale、 findjumpDuration、findjumpRestDuration  底层逻辑公用巡逻阶段，参数全新
 动画资源: findjumpAnimation、findjumpRestAnimation
-特效prefab:findjumpEffectPrefab、findjumpRestEffectPrefab
-动画播放特效关键帧: findjumpEffectPrefab、findjumpRestEffectPrefab
+特效prefab:findjumpEffectPrefab、findjumpRestEffectPrefab (支持prefab 或序列帧动画)
+动画播放特效关键帧: findjumpEffectPrefab、findjumpRestEffectPrefab 动画关键帧触发特效的规则同巡逻阶段 跳跃
 
 2发现后退跳跃距离：朝玩家反方向后退跳跃，怪物走到玩家的多少距离后会转向后退跳跃 （跳跃超过了设定距离也要完成那次跳跃，落地后再调整）
 怪物与玩家互动: 首要条件是怪物发现了，再发现距离之内，所以后退跳跃距离一定小于发现跳跃距离，当怪物接近玩家再发现后退距离以内，怪物就后退跳跃，后退跳跃中怪物也设置了休息（不动），如果实际跳跃时间小于设定时间，多跳一次，落地才开始计算休息时间，如果实际跳跃时间大于设定时间，设定时间到了也要完成最后一跳，落地计算休息时间，这个和巡逻期间跳跃底层设计一样
 当怪物接近玩家再发现后退跳跃距离以外，进入正常发现跳跃距离阶段，怪物就朝向玩家跳跃追赶，形成拉锯
-参数设定: reversejumpSpeed 、reversejumpHeight、  reversegravityScale、 reversejumpDuration、reversejumpRestDuration
+参数设定: reversejumpSpeed 、reversejumpHeight、  reversegravityScale、 reversejumpDuration、reversejumpRestDuration  底层逻辑公用巡逻阶段，参数全新
 动画资源：同发现跳跃距离动画资源 findjumpAnimation、findjumpRestAnimation
-特效prefab：同发现跳跃距离特效资源 findjumpEffectPrefab、findjumpRestEffectPrefab
-动画播放特效关键帧 ：同发现距离动画播放特效关键帧公用
+特效prefab：同发现跳跃距离特效资源 findjumpEffectPrefab、findjumpRestEffectPrefab (支持prefab 或序列帧动画)
+动画播放特效关键帧 ：同发现距离动画播放特效关键帧公用 findjumpEffectPrefab、findjumpRestEffectPrefab 
 
 3发现倒退跳跃距离 ：向玩家反方向倒退跳跃（脸朝玩家，方向向后倒着跳跃），怪物跳跃到玩家的多少距离后会倒退跳跃 （跳跃超过了设定距离也要完成那次跳跃，落地后再调整）
 怪物与玩家互动：首要条件是怪物发现了，再发现距离之内，所以倒退跳跃距离一定小于发现跳跃距离，怪物接近玩家再发现倒退距离以内，怪物就倒退跳跃，倒退跳跃中如果怪物设置了休息（不动）的时候，需要怪物落地后转向玩家（背对玩家跳跃一段，落地后休息转过来看看玩家的这种感觉）如果实际跳跃时间小于设定时间，也要多跳一次，落地才开始计算休息时间，如果实际跳跃时间大于设定时间，设定时间到了也要完成最后一跳，落地计算休息时间，这个和巡逻期间跳跃底层设计一样
 当怪物接近玩家再发现倒退跳跃距离以外，进入正常发现跳跃距离阶段，怪物就跳跃追赶，形成拉锯
-参数设定: backjumpSpeed、backjumpHeight、backgravityScale、backjumpDuration、backjumpRestDuration
+参数设定: backjumpSpeed、backjumpHeight、backgravityScale、backjumpDuration、backjumpRestDuration  底层逻辑公用巡逻阶段，参数全新
 动画资源: backjumpAnimation、backjumpRestAnimation
-特效prefab：backjumpEffectPrefab、backjumpRestEffectPrefab
-动画播放特效关键帧:  backjumpEffectPrefab、backjumpRestEffectPrefab
+特效prefab：backjumpEffectPrefab、backjumpRestEffectPrefab (支持prefab 或序列帧动画)
+动画播放特效关键帧:  backjumpEffectPrefab、backjumpRestEffectPrefab  动画关键帧触发特效的规则同巡逻阶段  跳跃
 
-以上移动发现和跳跃发现增加3个公用参数：发现距离参数（公用：发现移动距离和发现跳跃距离）、发现后退距离参数（公用：发现后退移动距离和发现后退跳跃距离）、发现倒退距离 参数（公用：发现倒退移动距离 和 发现倒退跳跃距离）
+以上移动发现和跳跃发现增加3个公用参数：发现距离参数（公用：发现移动距离和发现跳跃距离）、发现后退距离参数（公用：发现后退移动距离和发现后退跳跃距离）、发现倒退距离 参数（公用：发现倒退移动距离 和 发现倒退跳跃距离）需要绘制这3根线的显示圆圈，方便调试，发现距离红色，发现后退距离白色，发现倒退距离黑色，不需要定制颜色，直接给颜色
 
 发现阶段的模式  可以列表+ 添加  移动发现  或 跳跃发现 ,elevent0自己循环，如果添加了elevent0、elevent1，elevent0与elevent1按顺序循环
 findrandomOrder 勾上随机播放elevent
 
+特效位置得锚点
+FX_FindMove / FindMovePoint
+FX_FindRest / FindRestPoint
+FX_FindJump / FindJumpPoint
+FX_FindJumpRest / FindJumpRestPoint
+FX_BackMove / BackMovePoint
+FX_BackRest / BackRestPoint
+FX_BackJump / BackJumpPoint
+FX_BackJumpRest / BackJumpRestPoint
+
+再发现阶段里还有攻击
+
+攻击列表+ 添加  攻击0 elevent0自己循环，如果添加了攻击0 elevent0、攻击1 elevent1，攻击0 elevent0与攻击1 elevent1按顺序循环
+elevent0 下的参数：
+攻击类型：近战攻击或远程攻击
+
+1近战攻击 
+近战攻击距离：近战检测距离，只要再这个距离内，怪物就要攻击，播放攻击动画（需要绘制近战检测距离的圆圈 黄色，不需要定制颜色，直接给颜色）
+攻击时间：攻击时间内怪物发出攻击，如果攻击时间<攻击动画时间，强制攻击结束，进入攻击休息时间；如果攻击时间>攻击动画时间，只攻击一次，停留在攻击最后一帧，直到攻击时间结束
+攻击休息时间：攻击时间结束后，进入攻击休息时间，关闭攻击距离检测，发现移动距离 或 发现后退移动距离 或 发现倒退移动距离自动生效，例如：攻击最后一帧结束以后，间隔10S，10S内攻击距离检测关闭，这时候如果玩家再发现后退移动距离内 就执行发现后退 或者 再发现倒退移动距离内 就发现倒退 或者 发现移动距离内 就发现移动
+攻击动画资源：attackAnimation
+
+攻击特效prefab：attackEffectPrefab
+攻击动画播放特效关键帧 ：attackEffectPrefab    
+（如果添加了elevent1，那elevent1下面的
+攻击动画资源：attackAnimation
+攻击特效prefab：attackEffectPrefab (支持prefab 或序列帧动画)
+攻击动画播放特效关键帧 ：attackEffectPrefab    
+是新的资源，与elevent0不同）
+
+近战攻击伤害检测体：可以给怪物新子物体指定collider2d istrigger ，并且再attackAnimation 动画内指定function 攻击判定帧 attackAnimationstart、attackAnimationend，再此期间攻击判定
+
+攻击中有移动中攻击或跳跃中攻击：
+
+移动中攻击：
+播放攻击动画的同时可以给怪物移动速度
+参数：
+attackmoveSpeed、attackacceleration、attackaccelerationTime、attackdeceleration、attackdecelerationTime ，这几个参数只在攻击时间内有效，攻击休息时间失效，这些只提供移动效果，没有动画特效，这里的移动中攻击的移动逻辑同巡逻移动底层逻辑一致。
+举例：由速度0加速1S后到匀速速度1，匀速速度1再匀速移动1S，由匀速速度1减到0速需要1S
 
 
-出生阶段
-可以通过idleDelay 进入巡逻阶段
-也可以通过发现阶段discoverDistance触发，直接进入发现阶段
+跳跃中攻击：
+播放攻击动画的同时可以给怪物跳跃能力
+参数：
+attackjumpSpeed 、attackjumpHeight、  attackgravityScale、 attackjumpDuration、attackjumpRestDuration ，当攻击动画时间<跳跃时间 = 空中攻击最后一帧一直保持到落地，落地后才算完成一次攻击；当攻击动画时间>跳跃时间 = 攻击结束最后一帧算完成一次攻击 ；这些只提供跳跃效果，没有动画特效，这里的跳跃中攻击的跳跃逻辑同巡逻移跳跃层逻辑一致
+
+2远程攻击
+远程攻击距离：远程攻击检测距离，只要再这个距离内，怪物就要攻击，播放远程攻击动画（需要绘制远程攻击检测距离的圆圈 蓝色，不需要定制颜色，直接给颜色）
+远程攻击时间：远程攻击时间内怪物发出攻击，如果远程攻击时间<远程攻击动画时间，强制远程攻击结束，进入远程攻击休息时间；如果远程攻击时间>远程攻击动画时间，只远程攻击一次，停留在远程攻击最后一帧，直到远程攻击时间结束
+远程攻击休息时间：远程攻击时间结束后，进入远程攻击休息时间，关闭远程攻击距离检测，发现移动距离 或 发现后退移动距离 或 发现倒退移动距离自动生效，例如：远程攻击最后一帧结束以后，间隔10S，10S内远程攻击距离检测关闭，这时候如果玩家再发现后退移动距离内 就执行发现后退 或者 再发现倒退移动距离内 就发现倒退 或者 发现移动距离内 就发现移动
+攻击动画资源：attackFarAnimation
+远程攻击特效prefab：attackFarEffectPrefab (支持prefab 或序列帧动画)
+远程攻击动画播放特效关键帧 ：attackFarEffectPrefab    （如果添加了elevent1，那elevent1下面的远程攻击动画资源：attackFarAnimation远程攻击特效prefab：attackFarEffectPrefab远程攻击动画播放特效关键帧 ：attackFarEffectPrefab    是新的资源，与elevent0不同）
+
+远程移动中攻击：
+播放远程攻击动画的同时可以给怪物移动速度
+参数：
+attackFarmoveSpeed、attackFaracceleration、attackFaraccelerationTime、attackFardeceleration、attackFardecelerationTime ，这几个参数只在攻击时间内有效，攻击休息时间失效，这些只提供移动效果，没有动画特效，这里的移动逻辑同巡逻移动底层逻辑一致。
+举例：由速度0加速1S后到匀速速度1，匀速速度1再匀速移动1S，由匀速速度1减到0速需要1S
+
+远程跳跃中攻击：
+播放攻击动画的同时可以给怪物跳跃能力
+参数：
+attackjumpSpeed 、attackjumpHeight、  attackgravityScale、 attackjumpDuration、attackjumpRestDuration ，当攻击动画时间<跳跃时间 = 空中攻击最后一帧一直保持到落地，落地后才算完成一次攻击；当攻击动画时间>跳跃时间 = 攻击结束最后一帧算完成一次攻击 ；这些只提供跳跃效果，没有动画特效，这里的跳跃中攻击的跳跃逻辑同巡逻移跳跃层逻辑一致
+
+远程攻击飞行物释放位置：可以给怪物新子物体(空物体)指定 ，并且再attackFarAnimation 动画内指定function 攻击判定帧 attackFarAnimation，再这帧以及怪物的子物体上释放远程攻击飞行物
 
 
+远程攻击飞行物：
+参数：
+飞行物绑定怪物子物体位置
+飞行物攻击伤害检测，可以指定collider2d istrigger
+飞行物同时发射个数
+飞行物同时发射个数间隔时间（例如一次发3颗，每颗间隔0.2S）
+飞行物发射频率完全取决于远程攻击动画播放特效关键帧attackFarEffectPrefab   
+每个飞行物存活：时间
+飞行物释放扇形：扇形角度，随机或均匀分布
+飞行物动画资源：FlygunAnimation
+飞行物特效资源：FlygunEffectPrefab (支持prefab 或序列帧动画)
 
 
+远程攻击飞行物类型
+
+飞行物直线移动
+参数：
+直线移动朝向：自定义角度移动或一直朝玩家方向移动
+直线移动匀速速度
+直线移动匀速时间
+直线移动加速度：飞行物起步移动的时候加速
+直线移动加速度时间
+直线移动减速度：飞行物停下的时候减速
+直线移动减速度时间
+举例：由速度0加速1S后到匀速速度1，匀速速度1再匀速移动1S，由匀速速度1减到0速需要1S
+停下休息时间，移动一段时间后停下休息不动
+是否跟踪玩家，可设置跟踪强度比%，直线与跟踪混合强度
+跟踪的参数飞行物直线移动参数，不需要设置
+
+直线移动类型包括：S型直线sin移动、直线回旋镖、旋转移动、抛物线移动
+如果勾选跟踪，以下飞行类型都再跟踪基础上跟踪S型直线sin移动、跟踪直线回旋镖、跟踪旋转移动、跟踪抛物线移动
+
+S型直线sin移动：飞行物自身sin旋转
+sin 参数：振幅（例如：上下摆动2米）和频率（例如：每秒摆动3次）
+是否一直朝着移动方向，如果是沿着移动方向旋转（自动面向路径切线）如果否不改变自身朝向
+
+直线回旋镖：飞行物飞出去停顿后再飞回来
+参数：飞出最远距离、最远距离停顿时间、回旋回来移动匀速速度、回旋回来移动匀速速度时间、回旋回来移动加速度、回旋回来移动加速度时间、回旋回来移动减速度、回旋回来移动减速度时间
+是否一直朝着移动方向，如果是沿着移动方向旋转（自动面向路径切线），如果否不改变自身朝向
+
+旋转移动：飞行物自身圆形旋转
+参数：旋转半径
+是否一直朝着移动方向，如果是沿着移动方向旋转（自动面向路径切线），如果否不改变自身朝向
+
+抛物线移动：飞行物撞到场景碰撞体会反弹
+参数：
+反弹力（撞到场景法线反弹）根据撞击角度计算，计算速度 * 反弹系数
+向下力
+最高点
+是否一直朝着移动方向，如果是沿着移动方向旋转（自动面向路径切线），如果否不改变自身朝向
+
+远程攻击飞行物命中墙壁或玩家会爆炸
+参数：爆炸范围、爆炸伤害、爆炸持续时间(持续时间内一直伤害)、伤害间隔（多少时间伤害一次）
+飞行物爆炸动画资源：FlygunBoomAnimation
+飞行物爆炸特效资源：FlygunBoomEffectPrefab (支持prefab 或序列帧动画)
+
+未来飞行物 还要死亡区域检测 ，暂时先不考虑，近战攻击和远程飞行物攻击伤害暂时不加入
+
+
+findmoveEffectPrefab / findrestEffectPrefab  是要和发现后退移动公用得
+findjumpEffectPrefab / findjumpRestEffectPrefab  是要和发现后退跳跃公用得
+
+明天测试 发现阶段特效 动画   发现阶段得 跳跃 
+
+争取 攻击搞了
