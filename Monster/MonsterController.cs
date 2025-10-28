@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -14,11 +14,9 @@ public class MonsterController : MonoBehaviour
     private Transform player;
     private Collider2D col;
     private Rigidbody2D rb;
-
     private bool isDead;
     private int patrolIndex = 0;
     private bool isResting = false;
-
     private List<PatrolMovement> patrolRuntimeMoves;
 
     // === 地形检测参数 ===
@@ -34,7 +32,6 @@ public class MonsterController : MonoBehaviour
     private float vY = 0f;
     private const float BASE_G = 25f;
     private bool inJumpRestPhase = false;
-
     private float turnCooldown = 0f;
     private const float SKIN = 0.02f;
     private bool groundedAfterVerticalMove = false;
@@ -45,7 +42,6 @@ public class MonsterController : MonoBehaviour
     private bool autoJumpReady = true;
     private bool autoJumpRearmAfterLanding = false;
     private bool isAutoJumping = false;
-
     private enum MonsterState { Idle, Patrol, Discovery, Dead }
     private MonsterState state = MonsterState.Idle;
 
@@ -64,11 +60,9 @@ public class MonsterController : MonoBehaviour
     private int waypointIndex = 0;
     private int waypointTargetIndex = 0;
     private int waypointDir = +1;
-
     private int suppressUpwardOnGroundFrames = 0;
     private int FacingSign() => (transform.rotation.eulerAngles.y == 0f) ? +1 : -1;
     private float desiredSpeedX = 0f;
-
     private List<int> moveOrder = null;
     private int moveOrderPos = 0;
 
@@ -90,17 +84,6 @@ public class MonsterController : MonoBehaviour
     [SerializeField] private Transform fxRestPoint;
     [SerializeField] private Transform fxJumpPoint;
     [SerializeField] private Transform fxJumpRestPoint;
-
-    // 发现阶段专用锚点（Follow/Back 各4个，均可选）
-    [Header("发现阶段特效锚点（可选）")]
-    [SerializeField] private Transform fxFindMovePoint;
-    [SerializeField] private Transform fxFindRestPoint;
-    [SerializeField] private Transform fxFindJumpPoint;
-    [SerializeField] private Transform fxFindJumpRestPoint;
-    [SerializeField] private Transform fxBackMovePoint;
-    [SerializeField] private Transform fxBackRestPoint;
-    [SerializeField] private Transform fxBackJumpPoint;
-    [SerializeField] private Transform fxBackJumpRestPoint;
 
     // 1) 地形检测参数后，新增一组“前方低矮障碍自动跳（双射线）”配置
     [Header("前方低矮障碍自动跳（双射线）")]
@@ -128,12 +111,39 @@ public class MonsterController : MonoBehaviour
     [SerializeField, Tooltip("仅用水平距离判定（忽略Y），用于平台类玩法更稳定")]
     private bool discoveryUseHorizontalDistanceOnly = false;
 
+    [Header("AutoJump FX 冷却")]
+    [SerializeField, Tooltip("开启后：自动跳跃的跳跃FX（动画事件）进入冷却，同一段时间只播一次")]
+    private bool enableAutoJumpFxCooldown = true;
+
+    // 冷却计时（帧）
+    private int autoJumpFxCooldownLeft = 0;
+    // 本次空中（自动跳）是否已播放过FX
+    private bool airJumpFxPlayedThisAir = false;
+    // 小工具：是否处于“自动跳跃”状态
+    private bool IsAutoJumpNow()
+    {
+        return isAutoJumping || (activeJumpMove != null && activeJumpMove.rtUsingAutoJumpParams);
+    }
+    // 小工具：当是“自动跳跃”时，尝试消费一次FX播放票据；成功返回true并开启冷却，失败则拒绝本次播放
+    private bool TryConsumeAutoJumpFxTicket()
+    {
+        if (!enableAutoJumpFxCooldown) return true;
+
+        // 认为是自动跳（两种判断都兼容）
+        bool isAuto = isAutoJumping || (activeJumpMove != null && activeJumpMove.rtUsingAutoJumpParams);
+        if (!isAuto) return true;
+
+        if (autoJumpFxCooldownLeft > 0)
+            return false;
+
+        autoJumpFxCooldownLeft = Mathf.Max(1, autoJumpIgnoreCliffFrames);
+        return true;
+    }
 
     private enum FxSlot
     {
         Spawn, Idle, Move, Rest, Jump, JumpRest,
-        FindMove, FindRest, FindJump, FindJumpRest,
-        BackMove, BackRest, BackJump, BackJumpRest
+        FindMove, FindRest, FindJump, FindJumpRest
     }
 
     // ================== 发现 V2 运行时字段 ==================
@@ -144,6 +154,10 @@ public class MonsterController : MonoBehaviour
     private DiscoveryEventV2 activeDiscoveryEvent = null;
     private DiscoveryBand currentBand = DiscoveryBand.Follow;
     private bool discoveryRestJustFinished = false;
+
+    // 新增：发现-跳跃的“生命周期标记”和“起跳时档位快照”
+    private bool discoveryJumpActive = false;
+    private DiscoveryBand bandAtJumpStart = DiscoveryBand.Follow;
 
     // 抖动抑制（档位滞回 + 最小驻留时间）
     [Header("发现抖动抑制")]
@@ -160,28 +174,63 @@ public class MonsterController : MonoBehaviour
     [Header("发现阶段朝向抖动抑制")]
     public float faceFlipDeadZone = 0.15f; // 玩家与怪物X差在此死区内不翻转朝向
 
+    //AutoTurn 后的朝向/移动方向冻结
+    [Header("发现阶段：自动转向后的朝向冻结")]
+    [SerializeField, Tooltip("AutoTurn 触发后，强制保持当前朝向/移动方向的时间（秒）")]
+    private float obstacleTurnFaceLockTime = 0.40f;
+
+    // 发现阶段：落地后的朝向冻结
+    [Header("发现阶段：落地后的朝向冻结")]
+    [SerializeField, Tooltip("落地后保持当前朝向/移动方向的时间（秒）")]
+    private float postLandingFaceLockTime = 0.35f;
+    private float postLandingFaceLockTimer = 0f;
+
+    // AutoTurn 后朝向冻结计时器（秒）
+    private float obstacleTurnFaceLockTimer = 0f;
+
+    // 由 StraightTickCommon 标记“本帧因障碍发生过 AutoTurn”
+    private bool obstacleTurnedThisFrame = false;
+
     // 跳跃：记录“移动方向”（与面向解耦，用于倒退跳跃等）
     private int currentJumpDirSign = +1;
 
-    // 发现档位切换辅助：记录上一帧档位
-    private DiscoveryBand prevBand = DiscoveryBand.Follow;
+    // 在已有的“发现阶段朝向抖动抑制”字段附近追加以下字段
+    [SerializeField, Tooltip("朝向翻转的最小驻留时间（秒），在此时间内不再允许翻转")]
+    private float faceFlipMinDwellTime = 0.40f;
+
+    [SerializeField, Tooltip("越过死区后，还需额外距离才允许翻转（米），避免在边界附近来回抖动")]
+    private float faceFlipHysteresis = 0.20f;
+
+    // 运行时：朝向翻转驻留计时器
+    private float faceFlipDwellTimer = 0f;
+
+    // 跳跃期间是否锁定朝向（从起跳到落地保持不变）
+    [SerializeField, Tooltip("跳跃期间是否锁定朝向（从起跳到落地保持不变）")]
+    private bool lockFaceWhileAirborne = true;
+
+    // 空中锁定的面向（+1 / -1，0 表示未锁）
+    private int faceSignLockedDuringAir = 0;
+
+    [Header("发现阶段：自动跳后抑制一次常规跳")]
+    [SerializeField, Tooltip("开启后：自动跳落地后抑制下一次发现阶段的常规跳跃")]
+    private bool suppressOneDiscoveryJumpAfterAuto = true;
+    private bool suppressNextDiscoveryJumpOnce = false;
+
+    
 
     void Start()
     {
         player = GameObject.FindWithTag("Player")?.transform;
         animator = GetComponentInChildren<Animator>();
-
         if (animator) animator.applyRootMotion = false;
         col = GetComponent<Collider2D>();
         rb = GetComponent<Rigidbody2D>();
-
         if (rb == null)
         {
-            Debug.LogError($"[MonsterController] {name} 未找到 Rigidbody2D！");
+            Debug.LogError($"[MonsterController] {name} 未找到 Rigidbody2D!");
             enabled = false;
             return;
         }
-
         // 初始朝向
         if (config.spawnConfig.spawnOrientation == Orientation.FaceLeft)
             transform.rotation = Quaternion.Euler(0, 180f, 0);
@@ -193,8 +242,6 @@ public class MonsterController : MonoBehaviour
             var m0 = GetMonsterDistPos();
             transform.rotation = (p0.x > m0.x) ? Quaternion.Euler(0, 0f, 0) : Quaternion.Euler(0, 180f, 0);
         }
-        
-
         // 事件中继器
         if (animator != null && animator.GetComponent<MonsterAnimationEventRelay>() == null)
             animator.gameObject.AddComponent<MonsterAnimationEventRelay>();
@@ -208,7 +255,6 @@ public class MonsterController : MonoBehaviour
             patrolRuntimeMoves = config.patrolConfig.movements;
         else
             patrolRuntimeMoves = new List<PatrolMovement>();
-
         BuildMoveOrderFromConfig();
         InitWaypointsIfAny();
 
@@ -230,8 +276,17 @@ public class MonsterController : MonoBehaviour
         if (turnCooldown > 0f) turnCooldown -= Time.deltaTime;
         if (bandDwellTimer > 0f) bandDwellTimer -= Time.deltaTime;
 
-        // 冷却全局递减（无论处于巡逻或发现）
         if (ignoreCliffFramesLeft > 0) ignoreCliffFramesLeft--;
+        if (autoJumpFxCooldownLeft > 0) autoJumpFxCooldownLeft--;
+
+        // AutoTurn 后朝向冻结
+        if (obstacleTurnFaceLockTimer > 0f) obstacleTurnFaceLockTimer -= Time.deltaTime;
+
+        // 落地后朝向冻结
+        if (postLandingFaceLockTimer > 0f) postLandingFaceLockTimer -= Time.deltaTime;
+
+        // 朝向翻转驻留
+        if (faceFlipDwellTimer > 0f) faceFlipDwellTimer -= Time.deltaTime;
 
         // 自动跳重新上膛
         if (autoJumpRearmAfterLanding && !isJumping && !inAutoJumpPermitZone && ignoreCliffFramesLeft <= 0)
@@ -243,7 +298,7 @@ public class MonsterController : MonoBehaviour
 
     IEnumerator StateMachine()
     {
-        // 出生（保持不变）
+        // 出生
         if (!string.IsNullOrEmpty(config.spawnConfig.spawnAnimation))
         {
             animator.CrossFadeInFixedTime(config.spawnConfig.spawnAnimation, 0f, 0, 0f);
@@ -291,14 +346,10 @@ public class MonsterController : MonoBehaviour
     // ================== 巡逻阶段 ==================
     void PatrolUpdate()
     {
-
-        // 刷接地/斜坡
         UpdateGroundedAndSlope();
 
-        // 新增：先尝试双射线触发 AutoJump；若起跳则本帧直接退出（下一帧走 JumpUpdate）
         if (MaybeAutoJumpOverLowObstacle(FacingSign())) return;
 
-        // 进入发现范围：切换到发现阶段
         var dcfg = config.discoveryV2Config;
         if (player && dcfg != null)
         {
@@ -309,19 +360,15 @@ public class MonsterController : MonoBehaviour
             {
                 state = MonsterState.Discovery;
 
-                // 仅当不在跳跃中才重置运行态；保持 AutoJump 的连贯性
                 bool reset = !(isJumping || isAutoJumping);
                 EnsureActiveDiscoveryEventSetup(resetRuntimes: reset);
-                
 
-                // 若发现阶段未设置任何动画，立即回到 Idle，避免沿用巡逻动画
                 MaybeFallbackToIdleIfNoDiscoveryAnims();
 
                 return;
             }
         }
 
-        // 跳跃优先
         if (isJumping && activeJumpMove != null)
         {
             JumpUpdate(activeJumpMove);
@@ -332,7 +379,6 @@ public class MonsterController : MonoBehaviour
 
         PatrolMovement move = patrolRuntimeMoves[patrolIndex];
 
-        // 直线分支（已抽公共逻辑）
         if (!isResting && move.type == MovementType.Straight)
         {
             activeStraightMove = move;
@@ -345,7 +391,6 @@ public class MonsterController : MonoBehaviour
             return;
         }
 
-        // 跳跃分支
         if (!isResting && move.type == MovementType.Jump)
         {
             bool canTurnNow = !inAutoJumpPermitZone && !isAutoJumping && (ignoreCliffFramesLeft <= 0);
@@ -371,7 +416,6 @@ public class MonsterController : MonoBehaviour
             return;
         }
 
-        // 休息期
         if (isResting)
         {
             string restAnim =
@@ -431,90 +475,94 @@ public class MonsterController : MonoBehaviour
             return;
         }
 
-        // 刷接地，提升自动跳判断稳定性
         UpdateGroundedAndSlope();
 
         var p = GetPlayerDistPos();
         var m = GetMonsterDistPos();
         float d = discoveryUseHorizontalDistanceOnly ? Mathf.Abs(p.x - m.x) : Vector2.Distance(p, m);
 
-        // 超出发现范围 -> 立即回巡逻
         if (d > dcfg.findRange)
         {
             state = MonsterState.Patrol;
             return;
         }
 
-        
-
-        // 带滞回的档位计算，抑制左右闪
         DiscoveryBand wantBand = ComputeWantBandWithHysteresis(d, dcfg);
 
-        // 切档条件：不在跳跃过程中，且最小驻留时间结束
-        bool bandChangeAllowedNow = !(activeDiscoveryEvent?.mode == DiscoveryV2Mode.Jump && isJumping) && !isResting && (bandDwellTimer <= 0f) && (currentBand != wantBand);
+        bool bandChangeAllowedNow = !(activeDiscoveryEvent?.mode == DiscoveryV2Mode.Jump && isJumping)
+                                    && !isResting && (bandDwellTimer <= 0f) && (currentBand != wantBand);
 
         if (bandChangeAllowedNow)
         {
             currentBand = wantBand;
-
-            // Move 模式切档时，不要打断正在进行的休息；仅在非休息时重置运行态
             if (activeDiscoveryEvent != null && activeDiscoveryEvent.mode == DiscoveryV2Mode.Move && !isResting)
             {
                 var moveForNewBand = GetD2MoveFor(currentBand);
                 ResetStraightRuntime(moveForNewBand);
             }
-
             bandDwellTimer = Mathf.Max(0.05f, bandMinDwellTime);
         }
 
         float dxToPlayer = p.x - m.x;
         int dirToPlayer = (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone) ? FacingSign() : (dxToPlayer >= 0f ? +1 : -1);
-        
+
         if (activeDiscoveryEvent == null)
         {
             AdvanceDiscoveryEvent(orderResetIfEmpty: true);
             if (activeDiscoveryEvent == null) { state = MonsterState.Patrol; return; }
         }
 
-        // 是否刚刚从 Backstep 离开（如需延后翻身时可用）
-        bool exitedBackThisFrame = (prevBand == DiscoveryBand.Backstep) && (currentBand != DiscoveryBand.Backstep);
-
         if (activeDiscoveryEvent.mode == DiscoveryV2Mode.Move)
         {
-            // 若正在进行 AutoJump（或任何跳跃），避免直线逻辑覆盖水平速度：优先跳跃更新
             if (isJumping && activeJumpMove != null)
             {
                 JumpUpdate(activeJumpMove);
-                prevBand = currentBand;
+                
                 return;
             }
 
             var move = GetD2MoveFor(currentBand);
 
-            // 面向/移动方向（保持你原有规则）
+            bool inFaceLock = obstacleTurnFaceLockTimer > 0f;
+
             int faceSign, moveSign;
-            if (currentBand == DiscoveryBand.Follow) { faceSign = dirToPlayer; moveSign = dirToPlayer; }
-            else if (currentBand == DiscoveryBand.Retreat) { bool resting = 
-                    (move.rtStraightPhase == StraightPhase.Rest) 
-                    || isResting; faceSign = resting ? dirToPlayer 
-                    : -dirToPlayer; moveSign = -dirToPlayer; }
-            else { faceSign = dirToPlayer; moveSign = -dirToPlayer; }
+            if (inFaceLock)
+            {
+                faceSign = FacingSign();
+                moveSign = FacingSign();
+            }
+            else
+            {
+                if (currentBand == DiscoveryBand.Follow)
+                {
+                    faceSign = dirToPlayer; moveSign = dirToPlayer;
+                }
+                else if (currentBand == DiscoveryBand.Retreat)
+                {
+                    bool resting = (move.rtStraightPhase == StraightPhase.Rest) || isResting;
+                    faceSign = resting ? dirToPlayer : -dirToPlayer;
+                    moveSign = -dirToPlayer;
+                }
+                else // Backstep
+                {
+                    faceSign = dirToPlayer; moveSign = -dirToPlayer;
+                }
+
+                faceSign = StabilizeFaceSign(faceSign, dxToPlayer);
+            }
 
             ForceFaceSign(faceSign);
 
-            // 再按“移动方向”做自动跳检测
             if (!isJumping && isGroundedMC && MaybeAutoJumpOverLowObstacle(moveSign))
             {
-                // 本帧直接空中更新并返回，避免直线逻辑覆盖水平速度
                 if (isJumping && activeJumpMove != null)
                 {
                     JumpUpdate(activeJumpMove);
-                    prevBand = currentBand;
+                    
                     return;
                 }
             }
 
-            // 三态映射 -> allowTurn / stopAtCliff
             bool allowTurn, stopAtCliff;
             switch (activeDiscoveryEvent.obstacleTurnMode)
             {
@@ -527,51 +575,81 @@ public class MonsterController : MonoBehaviour
                     allowTurn = false; stopAtCliff = true; break;
             }
 
-            // 调用 StraightTickCommon 时把两者传进去
+            bool suppressTurnInZone = (activeDiscoveryEvent.obstacleTurnMode != ObstacleTurnMode.AutoTurn);
+
+            obstacleTurnedThisFrame = false;
+
             discoveryRestJustFinished = StraightTickCommon(
                 move,
                 moveSign,
                 useWaypoints: false,
                 useMoveDirForProbes: true,
                 allowTurnOnObstacle: allowTurn,
-                stopAtCliffEdgeWhenNoTurn: stopAtCliff
+                stopAtCliffEdgeWhenNoTurn: stopAtCliff,
+                suppressTurnInAutoJumpZone: suppressTurnInZone
             );
+
+            if (obstacleTurnedThisFrame)
+            {
+                obstacleTurnFaceLockTimer = Mathf.Max(0f, obstacleTurnFaceLockTime);
+                obstacleTurnedThisFrame = false;
+            }
 
             if (discoveryRestJustFinished)
                 AdvanceDiscoveryEvent();
         }
-        else // Jump 模式
+        else
         {
-            // 若是 AutoJump 进行中，优先使用 activeJumpMove（巡逻段的 auto 参数），
-            // 避免误用 jmove（发现跳配置、通常 auto 参数为 0）导致“跳得很近”
             if (isAutoJumping && activeJumpMove != null)
             {
                 JumpUpdate(activeJumpMove);
-                prevBand = currentBand;
+                
                 return;
             }
 
             var jmove = GetD2JumpFor(currentBand);
 
-            // 面向规则：Backstep/Follow 面向玩家；Retreat 起跳时背对玩家
             int faceSign = (currentBand == DiscoveryBand.Retreat) ? -dirToPlayer : dirToPlayer;
+
+            if (lockFaceWhileAirborne && isJumping && faceSignLockedDuringAir != 0)
+                faceSign = faceSignLockedDuringAir;
+            else
+                faceSign = StabilizeFaceSign(faceSign, dxToPlayer);
+
             ForceFaceSign(faceSign);
 
-            // 移动方向规则：Follow 向玩家；Retreat 远离玩家；Backstep 远离玩家（脸朝玩家）
             int moveDir = (currentBand == DiscoveryBand.Follow) ? dirToPlayer : -dirToPlayer;
 
-            // 在地面且未起跳时，按“移动方向”尝试自动跳（坑底恢复）
+            if (suppressNextDiscoveryJumpOnce)
+            {
+                suppressNextDiscoveryJumpOnce = false;
+
+                isResting = true;
+                inJumpRestPhase = true;
+
+                if (!string.IsNullOrEmpty(jmove.jumpRestAnimation))
+                    PlayAnimIfNotCurrent(jmove.jumpRestAnimation);
+
+                jmove.rtRestTimer = Mathf.Max(0f, jmove.jumpRestDuration);
+
+                rb.velocity = new Vector2(0f, rb.velocity.y);
+                desiredSpeedX = 0f;
+                ApplySlopeIdleStopIfNoMove();
+
+                
+                return;
+            }
+
             if (!isJumping && isGroundedMC && MaybeAutoJumpOverLowObstacle(moveDir))
             {
                 if (isJumping && activeJumpMove != null)
                 {
                     JumpUpdate(activeJumpMove);
-                    prevBand = currentBand;
+                    
                     return;
                 }
             }
 
-            // 跳跃休息期推进（发现阶段）
             if (isResting && inJumpRestPhase)
             {
                 if (!string.IsNullOrEmpty(jmove.jumpRestAnimation))
@@ -590,6 +668,8 @@ public class MonsterController : MonoBehaviour
                     inJumpRestPhase = false;
                     jmove.rtRestTimer = 0f;
                     discoveryRestJustFinished = true;
+                    // 一次发现-跳跃循环彻底结束（从起跳到跳休结束）——清除生命周期标记
+                    discoveryJumpActive = false;
                 }
             }
             else
@@ -601,7 +681,7 @@ public class MonsterController : MonoBehaviour
                 }
                 else
                 {
-                    JumpUpdate(jmove); // “这一跳完成后再切档”
+                    JumpUpdate(jmove);
                 }
             }
 
@@ -609,40 +689,57 @@ public class MonsterController : MonoBehaviour
                 AdvanceDiscoveryEvent();
         }
 
-        prevBand = currentBand;
+        
     }
 
-    // 档位计算（带滞回，不修改配置）
+    private int StabilizeFaceSign(int wantFaceSign, float dxToPlayer)
+    {
+        int cur = FacingSign();
+        if (wantFaceSign == cur) return cur;
+
+        if (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone) return cur;
+
+        if (faceFlipDwellTimer > 0f) return cur;
+
+        float need = faceFlipDeadZone + Mathf.Max(0f, faceFlipHysteresis);
+        if (Mathf.Abs(dxToPlayer) < need) return cur;
+
+        faceFlipDwellTimer = Mathf.Max(0.05f, faceFlipMinDwellTime);
+        return wantFaceSign;
+    }
+
     private DiscoveryBand ComputeWantBandWithHysteresis(float d, DiscoveryV2Config cfg)
     {
         float find = Mathf.Max(0f, cfg.findRange);
         float revBase = Mathf.Max(0f, cfg.reverseRange);
         float backBase = Mathf.Max(0f, cfg.backRange);
 
-        // 独立阈值 + 本档离开滞回（不相互夹紧）
+        bool backEnabled = backBase > 0f;
+        bool revEnabled = revBase > 0f;
+
         float revOut = revBase + Mathf.Max(0f, bandHysteresis);
         float backOut = backBase + Mathf.Max(0f, bandHysteresis);
 
         switch (currentBand)
         {
             case DiscoveryBand.Follow:
-                if (d <= backBase) return DiscoveryBand.Backstep;
-                if (d <= revBase) return DiscoveryBand.Retreat;
+                if (backEnabled && d <= backBase) return DiscoveryBand.Backstep;
+                if (revEnabled && d <= revBase) return DiscoveryBand.Retreat;
                 return DiscoveryBand.Follow;
 
             case DiscoveryBand.Retreat:
-                if (d <= backBase) return DiscoveryBand.Backstep;
-                if (d >= revOut) return DiscoveryBand.Follow;
+                if (backEnabled && d <= backBase) return DiscoveryBand.Backstep;
+                if (!revEnabled || d >= revOut) return DiscoveryBand.Follow;
                 return DiscoveryBand.Retreat;
 
             case DiscoveryBand.Backstep:
-                if (d >= backOut)
-                    return (d <= revBase) ? DiscoveryBand.Retreat : DiscoveryBand.Follow;
+                if (!backEnabled || d >= backOut)
+                    return (revEnabled && d <= revBase) ? DiscoveryBand.Retreat : DiscoveryBand.Follow;
                 return DiscoveryBand.Backstep;
 
             default:
-                if (d <= backBase) return DiscoveryBand.Backstep;
-                if (d <= revBase) return DiscoveryBand.Retreat;
+                if (backEnabled && d <= backBase) return DiscoveryBand.Backstep;
+                if (revEnabled && d <= revBase) return DiscoveryBand.Retreat;
                 return DiscoveryBand.Follow;
         }
     }
@@ -659,7 +756,6 @@ public class MonsterController : MonoBehaviour
             return d2_move_retreat ??= BuildStraightFromRetreat(set);
         return d2_move_back ??= BuildStraightFromBack(set);
     }
-
     private PatrolMovement BuildStraightFromFollow(MoveSetV2 set)
     {
         return new PatrolMovement
@@ -678,26 +774,28 @@ public class MonsterController : MonoBehaviour
             restEffectPrefab = set.findrestEffectPrefab
         };
     }
-
     private PatrolMovement BuildStraightFromRetreat(MoveSetV2 set)
     {
         return new PatrolMovement
         {
             type = MovementType.Straight,
-            moveSpeed = set.reverse.reversemoveSpeed,
-            acceleration = set.reverse.reverseacceleration,
-            accelerationTime = set.reverse.reverseaccelerationTime,
-            deceleration = set.reverse.reversedeceleration,
-            decelerationTime = set.reverse.reversedecelerationTime,
-            moveDuration = set.reverse.reversemoveDuration,
-            restDuration = set.reverse.reverserestDuration,
+
+            // 数值改为用 back 参数（Retreat 与 Back 共用）
+            moveSpeed = set.back.backmoveSpeed,
+            acceleration = set.back.backacceleration,
+            accelerationTime = set.back.backaccelerationTime,
+            deceleration = set.back.backdeceleration,
+            decelerationTime = set.back.backdecelerationTime,
+            moveDuration = set.back.backmoveDuration,
+            restDuration = set.back.backrestDuration,
+
+            // 动画/特效资源仍复用 find 系（与原规则一致）
             moveAnimation = set.findmoveAnimation,
             restAnimation = set.findrestAnimation,
             moveEffectPrefab = set.findmoveEffectPrefab,
             restEffectPrefab = set.findrestEffectPrefab
         };
     }
-
     private PatrolMovement BuildStraightFromBack(MoveSetV2 set)
     {
         return new PatrolMovement
@@ -711,18 +809,19 @@ public class MonsterController : MonoBehaviour
             moveDuration = set.back.backmoveDuration,
             restDuration = set.back.backrestDuration,
 
+            // Back 仅 move 动画不同；rest 动画复用 find
             moveAnimation = set.backmoveAnimation,
-            restAnimation = set.backrestAnimation,
-            moveEffectPrefab = set.backmoveEffectPrefab,
-            restEffectPrefab = set.backrestEffectPrefab
+            restAnimation = set.findrestAnimation,
+
+            // 特效全部复用 find
+            moveEffectPrefab = set.findmoveEffectPrefab,
+            restEffectPrefab = set.findrestEffectPrefab
         };
     }
-
     private PatrolMovement EnsureDummyMove()
     {
         return d2_move_follow ??= new PatrolMovement { type = MovementType.Straight, moveSpeed = 0f };
     }
-
     private PatrolMovement GetD2JumpFor(DiscoveryBand band)
     {
         var set = activeDiscoveryEvent?.jumpSet;
@@ -751,24 +850,26 @@ public class MonsterController : MonoBehaviour
             jumpRestEffectPrefab = set.findjumpRestEffectPrefab
         };
     }
-
     private PatrolMovement BuildJumpFromRetreat(JumpSetV2 set)
     {
         return new PatrolMovement
         {
             type = MovementType.Jump,
-            jumpSpeed = set.reverse.reversejumpSpeed,
-            jumpHeight = set.reverse.reversejumpHeight,
-            gravityScale = set.reverse.reversegravityScale,
-            jumpDuration = set.reverse.reversejumpDuration,
-            jumpRestDuration = set.reverse.reversejumpRestDuration,
+
+            // 数值改为用 back 参数（Retreat 与 Back 共用）
+            jumpSpeed = set.back.backjumpSpeed,
+            jumpHeight = set.back.backjumpHeight,
+            gravityScale = set.back.backgravityScale,
+            jumpDuration = set.back.backjumpDuration,
+            jumpRestDuration = set.back.backjumpRestDuration,
+
+            // 动画/特效资源仍复用 find 系（与原规则一致）
             jumpAnimation = set.findjumpAnimation,
             jumpRestAnimation = set.findjumpRestAnimation,
             jumpEffectPrefab = set.findjumpEffectPrefab,
             jumpRestEffectPrefab = set.findjumpRestEffectPrefab
         };
     }
-
     private PatrolMovement BuildJumpFromBack(JumpSetV2 set)
     {
         return new PatrolMovement
@@ -780,10 +881,13 @@ public class MonsterController : MonoBehaviour
             jumpDuration = set.back.backjumpDuration,
             jumpRestDuration = set.back.backjumpRestDuration,
 
+            // Back 仅 jump 动画不同；jump rest 动画复用 find
             jumpAnimation = set.backjumpAnimation,
-            jumpRestAnimation = set.backjumpRestAnimation,
-            jumpEffectPrefab = set.backjumpEffectPrefab,
-            jumpRestEffectPrefab = set.backjumpRestEffectPrefab
+            jumpRestAnimation = set.findjumpRestAnimation,
+
+            // 特效全部复用 find
+            jumpEffectPrefab = set.findjumpEffectPrefab,
+            jumpRestEffectPrefab = set.findjumpRestEffectPrefab
         };
     }
 
@@ -792,20 +896,19 @@ public class MonsterController : MonoBehaviour
         return d2_jump_follow ??= new PatrolMovement { type = MovementType.Jump, jumpSpeed = 0f };
     }
 
-    // 通用直线驱动：复用巡逻直线三相 + 地形 + 速度写入；
-    // 返回值：true 表示本次“直线+休息”一个完整周期刚结束（可用于发现事件推进）
     private bool StraightTickCommon(
         PatrolMovement move,
         int dirSign,
         bool useWaypoints,
         bool useMoveDirForProbes = false,
         bool allowTurnOnObstacle = true,
-        bool stopAtCliffEdgeWhenNoTurn = false) //不允许转向时，遇悬崖是否原地停住)
+        bool stopAtCliffEdgeWhenNoTurn = false,
+        bool suppressTurnInAutoJumpZone = true)
     {
-        // 刷接地/斜坡
+        obstacleTurnedThisFrame = false;
+
         UpdateGroundedAndSlope();
 
-        // 立即休息快路径
         if (!isResting && move.rtStraightPhase == StraightPhase.None && move.restDuration > 0f && (move.moveDuration <= 0f || move.moveSpeed <= 0.0001f))
         {
             move.rtStraightPhase = StraightPhase.Rest;
@@ -820,7 +923,6 @@ public class MonsterController : MonoBehaviour
             return false;
         }
 
-        // 初始化三相
         if (!isResting && move.rtStraightPhase == StraightPhase.None)
         {
             move.rtCurrentSpeed = 0f;
@@ -839,6 +941,18 @@ public class MonsterController : MonoBehaviour
 
             if (move.rtStraightPhase == StraightPhase.Rest)
             {
+                if (move.restDuration <= 0f)
+                {
+                    isResting = false;
+                    move.rtStraightPhase = StraightPhase.None;
+                    move.rtMoveTimer = 0f;
+                    move.rtRestTimer = 0f;
+                    move.rtAccelTimer = 0f;
+                    move.rtCruiseTimer = 0f;
+                    move.rtDecelTimer = 0f;
+                    return true;
+                }
+
                 isResting = true;
                 move.rtRestTimer = Mathf.Max(0f, move.restDuration);
                 PlayAnimIfNotCurrent(move.restAnimation);
@@ -908,6 +1022,18 @@ public class MonsterController : MonoBehaviour
             case StraightPhase.Rest:
             default:
                 {
+                    if (move.restDuration <= 0f)
+                    {
+                        isResting = false;
+                        move.rtStraightPhase = StraightPhase.None;
+                        move.rtMoveTimer = 0f;
+                        move.rtRestTimer = 0f;
+                        move.rtAccelTimer = 0f;
+                        move.rtCruiseTimer = 0f;
+                        move.rtDecelTimer = 0f;
+                        return true;
+                    }
+
                     isResting = true;
                     if (move.rtRestTimer <= 0f) move.rtRestTimer = Mathf.Max(0f, move.restDuration);
 
@@ -927,39 +1053,60 @@ public class MonsterController : MonoBehaviour
                         move.rtAccelTimer = 0f;
                         move.rtCruiseTimer = 0f;
                         move.rtDecelTimer = 0f;
-                        return true; // 本周期完成
+                        return true;
                     }
                     return false;
                 }
         }
 
-        // 地形探测：无论 allowTurnOnObstacle 与否，都先探测前方墙/悬崖
         bool wallAhead = useMoveDirForProbes ? CheckWallInDir(dirSign) : CheckWallAhead();
-        bool cliffAhead = useMoveDirForProbes ? CheckCliffInDir(dirSign) : CheckCliffAhead();
+        bool permitCountsAsGround = suppressTurnInAutoJumpZone;
+        bool cliffAhead = useMoveDirForProbes
+            ? CheckCliffInDir(dirSign, permitCountsAsGround)
+            : CheckCliffAhead(permitCountsAsGround);
 
-        // 自动转向：仅当允许、且不在自动跳许可区、不在自动跳中、无冷却，并且前方有墙或悬崖
-        bool canTurnNow = allowTurnOnObstacle && !inAutoJumpPermitZone && !isAutoJumping && (ignoreCliffFramesLeft <= 0);
-        if (canTurnNow && (wallAhead || cliffAhead) && turnCooldown <= 0f)
-            TurnAround();
+        if (allowTurnOnObstacle && !cliffAhead && !isGroundedMC)
+        {
+            bool cliffLoose = useMoveDirForProbes
+                ? ProbeCliffNoGroundInDir(dirSign, permitCountsAsGround)
+                : ProbeCliffNoGroundAhead(permitCountsAsGround);
+            if (cliffLoose) cliffAhead = true;
+        }
 
-        // 巡逻需要路点锚点；发现不需要
+        bool zoneBlocksTurn = suppressTurnInAutoJumpZone && inAutoJumpPermitZone;
+        bool cooldownBlocksTurn = suppressTurnInAutoJumpZone ? (ignoreCliffFramesLeft > 0) : false;
+
+        bool canTurnNow = allowTurnOnObstacle && !zoneBlocksTurn && !isAutoJumping && !cooldownBlocksTurn;
+
+        bool cooldownOkForTurn = !suppressTurnInAutoJumpZone || (turnCooldown <= 0f);
+
+        bool turnedThisFrame = false;
+        if (canTurnNow && (wallAhead || cliffAhead) && cooldownOkForTurn)
+        {
+            bool ignoreCooldown = !suppressTurnInAutoJumpZone;
+            TurnAround(ignoreCooldown);
+            turnedThisFrame = true;
+
+            if (allowTurnOnObstacle)
+                obstacleTurnedThisFrame = true;
+        }
+
+        int effectiveDir = dirSign;
+        if (allowTurnOnObstacle && (turnedThisFrame || turnCooldown > 0f))
+        {
+            effectiveDir = FacingSign();
+        }
+
         if (useWaypoints)
             WaypointUpdateAndMaybeTurn(canTurnNow);
 
-        // 写速度（接地沿斜坡投影）
-        
         float clampedSpeed = Mathf.Clamp(move.rtCurrentSpeed, 0f, targetSpeed);
-
-        // 不允许转向时的“悬崖停下”策略（仅接地生效）
         bool stopAtCliffEdge = (!allowTurnOnObstacle) && stopAtCliffEdgeWhenNoTurn && cliffAhead && isGroundedMC;
-
-        desiredSpeedX = (stopAtCliffEdge ? 0f : clampedSpeed * dirSign);
-
+        desiredSpeedX = (stopAtCliffEdge ? 0f : clampedSpeed * effectiveDir);
         if (isGroundedMC)
-            ApplyProjectedVelocityAlongSlope(Mathf.Abs(desiredSpeedX), dirSign);
+            ApplyProjectedVelocityAlongSlope(Mathf.Abs(desiredSpeedX), effectiveDir);
         else
             rb.velocity = new Vector2(desiredSpeedX, rb.velocity.y);
-
         return false;
     }
 
@@ -974,7 +1121,6 @@ public class MonsterController : MonoBehaviour
         move.rtDecelTimer = 0f;
         isResting = false;
     }
-
     private void AdvanceDiscoveryEvent(bool orderResetIfEmpty = false)
     {
         var dcfg = config.discoveryV2Config;
@@ -986,13 +1132,10 @@ public class MonsterController : MonoBehaviour
 
         if (discoveryOrder == null || discoveryOrder.Count != dcfg.events.Count)
             BuildDiscoveryOrderFromConfig();
-
         if (discoveryOrder.Count <= 0) return;
-
         discoveryOrderPos = (discoveryOrderPos + 1) % discoveryOrder.Count;
         if (discoveryOrderPos == 0 && dcfg.findRandomOrder && discoveryOrder.Count > 1)
             Shuffle(discoveryOrder);
-
         activeDiscoveryIndex = discoveryOrder[discoveryOrderPos];
         EnsureActiveDiscoveryEventSetup(resetRuntimes: true);
     }
@@ -1010,7 +1153,6 @@ public class MonsterController : MonoBehaviour
         discoveryOrderPos = 0;
         if (discoveryOrder.Count > 0) activeDiscoveryIndex = discoveryOrder[0];
     }
-
     private void EnsureActiveDiscoveryEventSetup(bool resetRuntimes)
     {
         var dcfg = config.discoveryV2Config;
@@ -1038,85 +1180,6 @@ public class MonsterController : MonoBehaviour
         float wantY = (sign >= 0) ? 0f : 180f;
         if (!Mathf.Approximately(transform.rotation.eulerAngles.y, wantY))
             transform.rotation = Quaternion.Euler(0, wantY, 0);
-    }
-
-    // ================== 发现阶段：动画特效事件（Find/Back 两套） ==================
-    // 注意：这些仅在发现阶段响应，巡逻阶段不会触发
-
-    public void OnFxFindMove()
-    {
-        PlayDiscoveryMoveFxForBand(DiscoveryBand.Follow, isRest: false);
-    }
-
-    public void OnFxFindRest()
-    {
-        PlayDiscoveryMoveFxForBand(DiscoveryBand.Follow, isRest: true);
-    }
-
-    public void OnFxBackMove()
-    {
-        PlayDiscoveryMoveFxForBand(DiscoveryBand.Backstep, isRest: false);
-    }
-
-    public void OnFxBackRest()
-    {
-        PlayDiscoveryMoveFxForBand(DiscoveryBand.Backstep, isRest: true);
-    }
-
-    public void OnFxFindJump()
-    {
-        PlayDiscoveryJumpFxForBand(DiscoveryBand.Follow, isRest: false);
-    }
-
-    public void OnFxFindJumpRest()
-    {
-        PlayDiscoveryJumpFxForBand(DiscoveryBand.Follow, isRest: true);
-    }
-
-    public void OnFxBackJump()
-    {
-        PlayDiscoveryJumpFxForBand(DiscoveryBand.Backstep, isRest: false);
-    }
-
-    public void OnFxBackJumpRest()
-    {
-        PlayDiscoveryJumpFxForBand(DiscoveryBand.Backstep, isRest: true);
-    }
-
-    private void PlayDiscoveryMoveFxForBand(DiscoveryBand band, bool isRest)
-    {
-        if (state != MonsterState.Discovery) return;
-        var m = GetD2MoveFor(band);
-        if (m == null) return;
-
-        var prefab = isRest ? m.restEffectPrefab : m.moveEffectPrefab;
-        if (prefab == null) return;
-
-        FxSlot slot;
-        if (band == DiscoveryBand.Backstep)
-            slot = isRest ? FxSlot.BackRest : FxSlot.BackMove;
-        else
-            slot = isRest ? FxSlot.FindRest : FxSlot.FindMove;
-
-        PlayEffect(prefab, ResolveFxAnchor(slot));
-    }
-
-    private void PlayDiscoveryJumpFxForBand(DiscoveryBand band, bool isRest)
-    {
-        if (state != MonsterState.Discovery) return;
-        var j = GetD2JumpFor(band);
-        if (j == null) return;
-
-        var prefab = isRest ? j.jumpRestEffectPrefab : j.jumpEffectPrefab;
-        if (prefab == null) return;
-
-        FxSlot slot;
-        if (band == DiscoveryBand.Backstep)
-            slot = isRest ? FxSlot.BackJumpRest : FxSlot.BackJump;
-        else
-            slot = isRest ? FxSlot.FindJumpRest : FxSlot.FindJump;
-
-        PlayEffect(prefab, ResolveFxAnchor(slot));
     }
 
     // ================== 出生/巡逻使用的工具方法 ==================
@@ -1189,7 +1252,6 @@ public class MonsterController : MonoBehaviour
         return BestVerticalHit(0.12f, true).collider != null;
     }
 
-    // 原基于“面向方向”的墙/悬崖探测
     bool CheckWallAhead()
     {
         if (col == null) return false;
@@ -1213,7 +1275,7 @@ public class MonsterController : MonoBehaviour
         return Vector2.Dot(n, dir) < -0.4f;
     }
 
-    bool CheckCliffAhead()
+    bool CheckCliffAhead(bool permitCountsAsGround)
     {
         if (col == null) return false;
         if (!CheckGrounded()) return false;
@@ -1234,8 +1296,9 @@ public class MonsterController : MonoBehaviour
             Debug.DrawLine(origin, origin + Vector2.down * rayDist, hit.collider ? Color.green : Color.blue);
 
             if (!hit.collider) return false;
-            if (hit.collider.isTrigger) return true;
-            if (hit.collider.CompareTag(autoJumpPermitTag)) return true;
+
+            if (hit.collider.isTrigger) return permitCountsAsGround;
+            if (hit.collider.CompareTag(autoJumpPermitTag)) return permitCountsAsGround;
 
             if (hit.normal.y >= groundMinNormalYMC) return true;
 
@@ -1249,7 +1312,6 @@ public class MonsterController : MonoBehaviour
         return !(safeToe || safeHalf);
     }
 
-    // 新增：按“移动方向”的墙/悬崖探测（用于发现阶段 Retreat/Backstep）
     bool CheckWallInDir(int dirSign)
     {
         if (col == null) return false;
@@ -1273,7 +1335,7 @@ public class MonsterController : MonoBehaviour
         return Vector2.Dot(n, dir) < -0.4f;
     }
 
-    bool CheckCliffInDir(int dirSign)
+    bool CheckCliffInDir(int dirSign, bool permitCountsAsGround)
     {
         if (col == null) return false;
         if (!CheckGrounded()) return false;
@@ -1294,8 +1356,9 @@ public class MonsterController : MonoBehaviour
             Debug.DrawLine(origin, origin + Vector2.down * rayDist, hit.collider ? Color.cyan : Color.blue);
 
             if (!hit.collider) return false;
-            if (hit.collider.isTrigger) return true;
-            if (hit.collider.CompareTag(autoJumpPermitTag)) return true;
+
+            if (hit.collider.isTrigger) return permitCountsAsGround;
+            if (hit.collider.CompareTag(autoJumpPermitTag)) return permitCountsAsGround;
 
             if (hit.normal.y >= groundMinNormalYMC) return true;
 
@@ -1309,12 +1372,68 @@ public class MonsterController : MonoBehaviour
         return !(safeToe || safeHalf);
     }
 
-    void TurnAround()
+    void TurnAround(bool ignoreCooldown = false)
     {
-        if (turnCooldown > 0f) return;
+        if (!ignoreCooldown && turnCooldown > 0f) return;
         float newY = (transform.rotation.eulerAngles.y == 0f) ? 180f : 0f;
         transform.rotation = Quaternion.Euler(0, newY, 0);
         turnCooldown = 0.25f;
+    }
+
+    private bool ProbeCliffNoGroundAhead(bool permitCountsAsGround)
+    {
+        if (col == null) return false;
+        Bounds b = col.bounds;
+        float baseY = b.min.y + 0.05f;
+
+        const float STEP_DOWN_ALLOW = 0.10f;
+        float rayDist = Mathf.Max(cliffCheckDistance, STEP_DOWN_ALLOW + 0.1f);
+
+        Vector2 forward = (Vector2)transform.right;
+        Vector2 originToe = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0f, cliffCheckOffsetX));
+        Vector2 originHalf = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0f, cliffCheckOffsetX) * 0.5f);
+
+        bool IsSafe(Vector2 origin)
+        {
+            var hit = Physics2D.Raycast(origin, Vector2.down, rayDist, groundLayer);
+            Debug.DrawLine(origin, origin + Vector2.down * rayDist, hit.collider ? Color.green : Color.blue);
+            if (!hit.collider) return false;
+            if (hit.collider.isTrigger) return permitCountsAsGround;
+            if (hit.collider.CompareTag(autoJumpPermitTag)) return permitCountsAsGround;
+            if (hit.normal.y >= groundMinNormalYMC) return true;
+            float drop = (b.min.y) - hit.point.y;
+            return drop <= STEP_DOWN_ALLOW;
+        }
+
+        return !(IsSafe(originToe) || IsSafe(originHalf));
+    }
+
+    private bool ProbeCliffNoGroundInDir(int dirSign, bool permitCountsAsGround)
+    {
+        if (col == null) return false;
+        Bounds b = col.bounds;
+        float baseY = b.min.y + 0.05f;
+
+        const float STEP_DOWN_ALLOW = 0.10f;
+        float rayDist = Mathf.Max(cliffCheckDistance, STEP_DOWN_ALLOW + 0.1f);
+
+        Vector2 forward = Vector2.right * Mathf.Sign(dirSign);
+        Vector2 originToe = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0f, cliffCheckOffsetX));
+        Vector2 originHalf = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0f, cliffCheckOffsetX) * 0.5f);
+
+        bool IsSafe(Vector2 origin)
+        {
+            var hit = Physics2D.Raycast(origin, Vector2.down, rayDist, groundLayer);
+            Debug.DrawLine(origin, origin + Vector2.down * rayDist, hit.collider ? Color.cyan : Color.blue);
+            if (!hit.collider) return false;
+            if (hit.collider.isTrigger) return permitCountsAsGround;
+            if (hit.collider.CompareTag(autoJumpPermitTag)) return permitCountsAsGround;
+            if (hit.normal.y >= groundMinNormalYMC) return true;
+            float drop = (b.min.y) - hit.point.y;
+            return drop <= STEP_DOWN_ALLOW;
+        }
+
+        return !(IsSafe(originToe) || IsSafe(originHalf));
     }
 
     // 跳跃起始
@@ -1326,6 +1445,11 @@ public class MonsterController : MonoBehaviour
         isJumping = true;
         isAutoJumping = useAutoParams;
         activeJumpMove = move;
+
+        if (lockFaceWhileAirborne && state == MonsterState.Discovery)
+            faceSignLockedDuringAir = FacingSign();
+
+        airJumpFxPlayedThisAir = false;
 
         float spdX, hY, g;
         if (useAutoParams)
@@ -1344,27 +1468,28 @@ public class MonsterController : MonoBehaviour
         vY = Mathf.Sqrt(Mathf.Max(0.01f, 2f * hY * g));
         transform.position += Vector3.up * 0.05f;
 
+        // 关键：无论是否自动跳，都强制把跳跃动画从 0 重播
         if (!string.IsNullOrEmpty(move.jumpAnimation))
         {
-            if (useAutoParams)
-            {
-                animator.CrossFadeInFixedTime(move.jumpAnimation, 0f, 0, 0f);
-                animator.Update(0f);
-            }
+            var info = animator.GetCurrentAnimatorStateInfo(0);
+            if (info.IsName(move.jumpAnimation))
+                animator.Play(move.jumpAnimation, 0, 0f);   // 同状态：从 0 重播，确保事件再次触发
             else
-            {
-                if (!animator.GetCurrentAnimatorStateInfo(0).IsName(move.jumpAnimation))
-                    PlayAnimIfNotCurrent(move.jumpAnimation);
-            }
+                animator.CrossFadeInFixedTime(move.jumpAnimation, 0f, 0, 0f);
+            animator.Update(0f);
         }
 
-        // 记录本次跳跃的“移动方向”，与面向解耦（支持倒退跳跃）
         currentJumpDirSign = moveDirOverride.HasValue ? System.Math.Sign(moveDirOverride.Value) : FacingSign();
-
-        float vx = spdX * currentJumpDirSign;
-        rb.velocity = new Vector2(vx, vY);
+        rb.velocity = new Vector2(spdX * currentJumpDirSign, vY);
 
         move.rtUsingAutoJumpParams = useAutoParams;
+
+        // 如果当前处于“发现-跳跃事件”，则标记一个“发现跳跃生命周期”并快照起跳档位
+        if (state == MonsterState.Discovery && activeDiscoveryEvent != null && activeDiscoveryEvent.mode == DiscoveryV2Mode.Jump)
+        {
+            discoveryJumpActive = true;
+            bandAtJumpStart = currentBand;
+        }
     }
 
     // 跳跃更新
@@ -1373,12 +1498,11 @@ public class MonsterController : MonoBehaviour
         float spdX = move.rtUsingAutoJumpParams ? Mathf.Max(move.autojumpSpeed, 0f)
                                             : Mathf.Max(move.jumpSpeed, 0f);
 
-        // 修改：仅在普通跳跃时允许空中撞墙调头；自动跳跃禁用这个能力
         if (!move.rtUsingAutoJumpParams && turnCooldown <= 0f && CheckWallInDir(currentJumpDirSign))
         {
-            TurnAround();
+            TurnAround(ignoreCooldown: true);
             currentJumpDirSign = -currentJumpDirSign;
-            turnCooldown = 0.25f;
+            turnCooldown = 0.10f;
         }
 
         float g = (move.rtUsingAutoJumpParams ? Mathf.Max(0.01f, move.autogravityScale)
@@ -1395,6 +1519,10 @@ public class MonsterController : MonoBehaviour
             vY = 0f;
             isJumping = false;
 
+            faceSignLockedDuringAir = 0;
+
+            postLandingFaceLockTimer = Mathf.Max(0f, postLandingFaceLockTime);
+
             rb.velocity = new Vector2(rb.velocity.x, 0f);
             suppressUpwardOnGroundFrames = 2;
 
@@ -1410,17 +1538,25 @@ public class MonsterController : MonoBehaviour
                 }
 
                 isAutoJumping = false;
-                if (move.restDuration > 0f)
+
+                if (suppressOneDiscoveryJumpAfterAuto && state == MonsterState.Discovery)
+                    suppressNextDiscoveryJumpOnce = true;
+
+                float restAfterAuto =
+                    (move.type == MovementType.Jump) ? move.jumpRestDuration : move.restDuration;
+
+                if (restAfterAuto > 0f)
                 {
                     isResting = true;
                     inJumpRestPhase = true;
-                    move.rtRestTimer = move.restDuration;
+                    move.rtRestTimer = restAfterAuto;
                 }
                 else
                 {
                     isResting = false;
                     inJumpRestPhase = false;
                 }
+
                 ignoreCliffFramesLeft = Mathf.Max(0, autoJumpIgnoreCliffFrames);
                 move.rtUsingAutoJumpParams = false;
             }
@@ -1494,8 +1630,8 @@ public class MonsterController : MonoBehaviour
         RaycastHit2D best = default;
         float bestDist = float.MaxValue;
         if (hitL.collider && hitL.distance < bestDist) { best = hitL; bestDist = hitL.distance; }
-        if (hitC.collider && hitC.distance < bestDist) { best = hitC; bestDist = hitL.distance; }
-        if (hitR.collider && hitR.distance < bestDist) { best = hitR; bestDist = hitL.distance; }
+        if (hitC.collider && hitC.distance < bestDist) { best = hitC; bestDist = hitC.distance; }
+        if (hitR.collider && hitR.distance < bestDist) { best = hitR; bestDist = hitR.distance; }
         return best;
     }
 
@@ -1520,7 +1656,6 @@ public class MonsterController : MonoBehaviour
             }
         }
 
-        // 非跳跃且临时失地：向下形状投射吸附
         if (!isGroundedMC && !isJumping && col != null)
         {
             const float snapDist = 0.12f;
@@ -1790,12 +1925,21 @@ public class MonsterController : MonoBehaviour
             PlayEffect(m.restEffectPrefab, ResolveFxAnchor(FxSlot.Rest));
     }
 
+    // Patrol 阶段跳跃特效（仅在 Patrol 生效）
     public void OnFxJump()
     {
         if (state != MonsterState.Patrol) return;
         var m = activeJumpMove;
         if (m == null) return;
         if (!isJumping) return;
+
+        if (IsAutoJumpNow())
+        {
+            if (airJumpFxPlayedThisAir) return;
+            if (!TryConsumeAutoJumpFxTicket()) return;
+            airJumpFxPlayedThisAir = true;
+        }
+
         if (IsCurrentState(m.jumpAnimation) && m.jumpEffectPrefab)
             PlayEffect(m.jumpEffectPrefab, ResolveFxAnchor(FxSlot.Jump));
     }
@@ -1814,7 +1958,6 @@ public class MonsterController : MonoBehaviour
             PlayEffect(m.jumpRestEffectPrefab, ResolveFxAnchor(FxSlot.JumpRest));
     }
 
-    // 用严格版本替换 ResolveFxAnchor（不再回退到巡逻/通用）
     private Transform ResolveFxAnchor(FxSlot slot)
     {
         switch (slot)
@@ -1826,21 +1969,16 @@ public class MonsterController : MonoBehaviour
             case FxSlot.Jump: return fxJumpPoint;
             case FxSlot.JumpRest: return fxJumpRestPoint;
 
-            case FxSlot.FindMove: return fxFindMovePoint;
-            case FxSlot.FindRest: return fxFindRestPoint;
-            case FxSlot.FindJump: return fxFindJumpPoint;
-            case FxSlot.FindJumpRest: return fxFindJumpRestPoint;
-
-            case FxSlot.BackMove: return fxBackMovePoint;
-            case FxSlot.BackRest: return fxBackRestPoint;
-            case FxSlot.BackJump: return fxBackJumpPoint;
-            case FxSlot.BackJumpRest: return fxBackJumpRestPoint;
+            // Find* 槽位全部公用通用锚点
+            case FxSlot.FindMove: return fxMovePoint;
+            case FxSlot.FindRest: return fxRestPoint;
+            case FxSlot.FindJump: return fxJumpPoint;
+            case FxSlot.FindJumpRest: return fxJumpRestPoint;
 
             default: return null;
         }
     }
 
-    // 用严格版本替换 PlayEffect（无锚点就不播）
     private void PlayEffect(GameObject prefab, Transform anchor)
     {
         if (prefab == null) return;
@@ -1877,6 +2015,8 @@ public class MonsterController : MonoBehaviour
         var move = patrolRuntimeMoves[patrolIndex];
 
         EnsureJumpPlan(move, useAutoParams: true);
+        move.rtExecuteRemain = 1;
+
         BeginOneJump(move, useAutoParams: true);
 
         autoJumpReady = false;
@@ -1891,17 +2031,14 @@ public class MonsterController : MonoBehaviour
         }
     }
 
-    // 用 XY 平面画圆
     void OnDrawGizmosSelected()
     {
         var dcfg2 = config?.discoveryV2Config;
         if (dcfg2 == null) return;
 
-        // 统一用距离锚点（若未配置则回退 transform）
         Vector3 pos = monsterDistPoint ? monsterDistPoint.position : transform.position;
 
 #if UNITY_EDITOR
-        // 可视化辅助：在圆心处标一个小十字和标签，方便确认是否真的是 monsterDistPoint
         UnityEditor.Handles.color = Color.yellow;
         UnityEditor.Handles.DrawLine(pos + Vector3.left * 0.1f, pos + Vector3.right * 0.1f);
         UnityEditor.Handles.DrawLine(pos + Vector3.down * 0.1f, pos + Vector3.up * 0.1f);
@@ -1926,7 +2063,6 @@ public class MonsterController : MonoBehaviour
         }
     }
 
-    // 进入发现阶段时，如果当前档位的发现动画都为空，则回退到 Idle（避免沿用巡逻动画）
     private void MaybeFallbackToIdleIfNoDiscoveryAnims()
     {
         var m = GetD2MoveFor(currentBand);
@@ -1949,30 +2085,27 @@ public class MonsterController : MonoBehaviour
         {
             var d = config.discoveryV2Config;
 
-            // 非负约束
             d.findRange = Mathf.Max(0f, d.findRange);
             d.reverseRange = Mathf.Max(0f, d.reverseRange);
             d.backRange = Mathf.Max(0f, d.backRange);
 
-            // 迁移旧的 allowObstacleAutoTurn -> 新的 obstacleTurnMode
             if (d.events != null)
             {
                 foreach (var ev in d.events)
                 {
-                    // 仅当枚举仍是默认值且存在旧字段语义时，才做一次性映射
                     if (ev != null)
                     {
                         if (ev.obstacleTurnMode == ObstacleTurnMode.AutoTurn && ev.allowObstacleAutoTurnLegacy == false)
                         {
                             ev.obstacleTurnMode = ObstacleTurnMode.NoTurnStopAtCliff;
                         }
-                        // 标记成 true，避免每次 OnValidate 都把手工设置覆盖
                         ev.allowObstacleAutoTurnLegacy = true;
                     }
                 }
             }
         }
     }
+
     private Vector2 GetMonsterDistPos()
     {
         return monsterDistPoint ? (Vector2)monsterDistPoint.position : (Vector2)transform.position;
@@ -1984,8 +2117,6 @@ public class MonsterController : MonoBehaviour
         return playerDistPoint ? (Vector2)playerDistPoint.position : (Vector2)player.position;
     }
 
-    // 2) 新增：双射线判定并触发一次 AutoJump；返回 true 表示本帧已起跳
-    // 改：双射线自动跳检测增加方向参数（dirSign：+1/-1）
     private bool MaybeAutoJumpOverLowObstacle(int dirSign)
     {
         if (!enableForwardGapAutoJump) return false;
@@ -1996,10 +2127,9 @@ public class MonsterController : MonoBehaviour
         if (col == null) return false;
         Bounds b = col.bounds;
 
-        int sign = (dirSign >= 0) ? +1 : -1;   
+        int sign = (dirSign >= 0) ? +1 : -1;
         Vector2 forward = Vector2.right * sign;
 
-        // 选取脚部起点：优先 groundPoint；否则用碰撞框脚边前沿
         Vector2 lowerOrigin;
         if (groundPoint)
         {
@@ -2012,7 +2142,6 @@ public class MonsterController : MonoBehaviour
             lowerOrigin = new Vector2(toeX, footY);
         }
 
-        // 头顶水平射线起点：头顶 + 抬升（默认用 autojumpHeight）
         float topY = b.max.y + 0.02f;
         float useAutoHeight = 0.8f;
         if (patrolRuntimeMoves != null && patrolRuntimeMoves.Count > 0)
@@ -2021,7 +2150,6 @@ public class MonsterController : MonoBehaviour
 
         Vector2 upperOrigin = new Vector2(lowerOrigin.x, topY + raise);
 
-        // 脚部水平射线：近距离必须命中“墙/陡坡”
         var hitLow = Physics2D.Raycast(lowerOrigin, forward, Mathf.Max(0.05f, lowerRayLen), groundLayer);
         Debug.DrawLine(lowerOrigin, lowerOrigin + forward * Mathf.Max(0.05f, lowerRayLen), hitLow.collider ? Color.red : Color.yellow);
 
@@ -2034,13 +2162,11 @@ public class MonsterController : MonoBehaviour
         }
         if (!lowBlocked) return false;
 
-        // 头顶水平射线：应通畅（不命中实心阻挡）
         var hitUp = Physics2D.Raycast(upperOrigin, forward, Mathf.Max(0.05f, upperRayLen), groundLayer);
         Debug.DrawLine(upperOrigin, upperOrigin + forward * Mathf.Max(0.05f, upperRayLen), hitUp.collider ? Color.magenta : Color.green);
         if (hitUp.collider && !hitUp.collider.isTrigger && !hitUp.collider.CompareTag(autoJumpPermitTag))
             return false;
 
-        // 取 AutoJump 参数
         float useAutoSpeed = 2.0f, useAutoGScale = 1.0f;
         if (patrolRuntimeMoves != null && patrolRuntimeMoves.Count > 0)
         {
@@ -2062,10 +2188,130 @@ public class MonsterController : MonoBehaviour
 
         EnsureJumpPlan(temp, useAutoParams: true);
         BeginOneJump(temp, useAutoParams: true, moveDirOverride: sign);
-
         autoJumpReady = false;
         autoJumpRearmAfterLanding = true;
 
         return true;
+    }
+
+    // ================== 发现阶段：动画特效事件（严格一一对应版） ==================
+    // 发现阶段：动画特效事件入口（防抖+稳态版本）
+
+
+    public void OnFxFindMove()
+    {
+        if (state != MonsterState.Discovery) return;
+
+        // 新增：若当前处在“发现-跳跃生命周期”或空中/跳休中，屏蔽移动FX，避免共用剪辑时误播
+        if (discoveryJumpActive || isJumping || inJumpRestPhase) return;
+
+        // 仅在“发现-移动事件模式”下响应
+        if (activeDiscoveryEvent == null || activeDiscoveryEvent.mode != DiscoveryV2Mode.Move) return;
+
+        PlayDiscoveryMoveFxForBand(currentBand, isRest: false);
+    }
+
+    public void OnFxFindRest()
+    {
+        if (state != MonsterState.Discovery) return;
+
+        // 新增：若当前处在“发现-跳跃生命周期”或空中/跳休中，屏蔽移动FX
+        if (discoveryJumpActive || isJumping || inJumpRestPhase) return;
+
+        // 仅在“发现-移动事件模式”下响应
+        if (activeDiscoveryEvent == null || activeDiscoveryEvent.mode != DiscoveryV2Mode.Move) return;
+
+        PlayDiscoveryMoveFxForBand(currentBand, isRest: true);
+    }
+
+    // 跳跃
+    public void OnFxFindJump()
+    {
+        if (state != MonsterState.Discovery) return;
+
+        // 关键：基于“跳跃生命周期”判断，避免事件轮换/切档的瞬时竞态导致偶发不播
+        if (!(discoveryJumpActive || isJumping)) return;
+
+        // 使用“起跳时档位”的 Jump 配置，避免中途切档导致取到空资源
+        var j = GetD2JumpFor(discoveryJumpActive ? bandAtJumpStart : currentBand);
+        if (j == null) return;
+
+        // 缺动画/缺资源均不播（遵守你的严格播放规则）
+        if (string.IsNullOrEmpty(j.jumpAnimation)) return;
+        var prefab = j.jumpEffectPrefab;
+        if (prefab == null) return;
+
+        var anchor = ResolveFxAnchor(FxSlot.FindJump);
+        if (anchor == null) return;
+
+        PlayEffect(prefab, anchor);
+    }
+
+    public void OnFxFindJumpRest()
+    {
+        if (state != MonsterState.Discovery) return;
+
+        // 跳休阶段才处理；若仍在生命周期内也允许（共用剪辑时更稳）
+        if (!(discoveryJumpActive || (isResting && inJumpRestPhase))) return;
+
+        var j = GetD2JumpFor(discoveryJumpActive ? bandAtJumpStart : currentBand);
+        if (j == null) return;
+
+        if (string.IsNullOrEmpty(j.jumpRestAnimation)) return;
+        var prefab = j.jumpRestEffectPrefab;
+        if (prefab == null) return;
+
+        var anchor = ResolveFxAnchor(FxSlot.FindJumpRest);
+        if (anchor == null) return;
+
+        PlayEffect(prefab, anchor);
+    }
+
+    // 严格播放（去掉 Animator 状态名强校验；保留‘配置非空/特效非空/锚点非空’）
+    private void PlayDiscoveryMoveFxForBand(DiscoveryBand band, bool isRest)
+    {
+        if (state != MonsterState.Discovery) return;
+
+        var m = GetD2MoveFor(band);
+        if (m == null) return;
+
+        // 配置的动画字段必须非空（满足“缺动画不播”）
+        string anim = isRest ? m.restAnimation : m.moveAnimation;
+        if (string.IsNullOrEmpty(anim)) return;
+
+        // 特效必须非空（满足“缺特效不播”）
+        var prefab = isRest ? m.restEffectPrefab : m.moveEffectPrefab;
+        if (prefab == null) return;
+
+        // 统一使用 find 锚点（已按规则，不混用不回退）
+        FxSlot slot = isRest ? FxSlot.FindRest : FxSlot.FindMove;
+        var anchor = ResolveFxAnchor(slot);
+        if (anchor == null) return; // 无锚点不播
+
+        PlayEffect(prefab, anchor);
+    }
+
+    // 严格播放（去掉 Animator 状态名强校验；仍保留‘配置非空/特效非空/锚点非空’）
+    private void PlayDiscoveryJumpFxForBand(DiscoveryBand band, bool isRest)
+    {
+        if (state != MonsterState.Discovery) return;
+
+        var j = GetD2JumpFor(band);
+        if (j == null) return;
+
+        // 配置的动画字段必须非空（满足“缺动画不播”的规则）
+        string anim = isRest ? j.jumpRestAnimation : j.jumpAnimation;
+        if (string.IsNullOrEmpty(anim)) return;
+
+        // 特效必须非空（满足“缺特效不播”的规则）
+        var prefab = isRest ? j.jumpRestEffectPrefab : j.jumpEffectPrefab;
+        if (prefab == null) return;
+
+        // 统一使用 find 系锚点（已按你的“一一对应，不混用”规则）
+        FxSlot slot = isRest ? FxSlot.FindJumpRest : FxSlot.FindJump;
+        var anchor = ResolveFxAnchor(slot);
+        if (anchor == null) return; // 无锚点不播
+
+        PlayEffect(prefab, anchor);
     }
 }

@@ -274,18 +274,18 @@ jumpRestEffectPrefab
 2发现后退移动距离：朝玩家反方向后退移动，怪物走到玩家的多少距离后会转向后退移动， 
 怪物与玩家互动: 首要条件是怪物发现了，再发现距离之内，所以后退距离一定小于发现距离，当怪物接近玩家再发现后退距离以内，怪物就后退，后退中如果怪物设置了休息（不动）的时候，需要转向玩家（背对玩家走一段，休息转过来看看玩家的这种感觉），如果玩家继续追赶再转头背对玩家移动
 当怪物接近玩家再发现后退距离以外，进入正常发现距离阶段，怪物就朝向玩家追赶，形成拉锯
-参数设定:  reversemoveSpeed、reverseacceleration、reverseaccelerationTime、reversedeceleration、reversedecelerationTime、reversemoveDuration、reverserestDuration 底层逻辑公用巡逻阶段，参数全新
-动画资源：同发现移动距离动画资源 prefabfindmoveAnimation、findrestAnimation
-特效prefab：同发现移动距离特效资源 findmoveEffectPrefab、findrestEffectPrefab (支持prefab 或序列帧动画)
-动画播放特效关键帧 ：同发现距离动画播放特效关键帧公用 findmoveEffectPrefab、findrestEffectPrefab     
+参数设定:  同发现倒退移动距离
+动画资源：发现移动距离
+特效prefab：发现移动距离
+动画播放特效关键帧 ：发现移动距离
 
 3发现倒退移动距离 ：向玩家反方向倒退（脸朝玩家，方向向后倒着走），怪物走到玩家的多少距离后会倒退， 新参数: 发现倒退距离 
 怪物与玩家互动：首要条件是怪物发现了，再发现距离之内，所以倒退距离一定小于发现距离，怪物接近玩家再发现倒退距离以内，怪物就倒退，后退中如果怪物设置了休息（不动）的时候，需要怪物停下
 当怪物接近玩家再发现倒退距离以外，进入正常发现距离阶段，怪物就追赶，形成拉锯
 参数设定: backmoveSpeed、backacceleration、backaccelerationTime、backdeceleration、backdecelerationTime、backmoveDuration、 backrestDuration 底层逻辑公用巡逻阶段，参数全新
-动画资源：backmoveAnimation、 backrestAnimation
-特效prefab:  backmoveEffectPrefab、 backrestEffectPrefab (支持prefab 或序列帧动画)
-动画播放特效关键帧:  backmoveEffectPrefab、 backrestEffectPrefab  动画关键帧触发特效的规则同巡逻阶段 移动
+动画资源：backmoveAnimation，休息同发现移动距离休息
+特效prefab：发现移动距离
+动画播放特效关键帧 ：发现移动距离
 
 
 现在介绍跳跃发现阶段里面分3种状态：
@@ -299,25 +299,25 @@ jumpRestEffectPrefab
 2发现后退跳跃距离：朝玩家反方向后退跳跃，怪物走到玩家的多少距离后会转向后退跳跃 （跳跃超过了设定距离也要完成那次跳跃，落地后再调整）
 怪物与玩家互动: 首要条件是怪物发现了，再发现距离之内，所以后退跳跃距离一定小于发现跳跃距离，当怪物接近玩家再发现后退距离以内，怪物就后退跳跃，后退跳跃中怪物也设置了休息（不动），如果实际跳跃时间小于设定时间，多跳一次，落地才开始计算休息时间，如果实际跳跃时间大于设定时间，设定时间到了也要完成最后一跳，落地计算休息时间，这个和巡逻期间跳跃底层设计一样
 当怪物接近玩家再发现后退跳跃距离以外，进入正常发现跳跃距离阶段，怪物就朝向玩家跳跃追赶，形成拉锯
-参数设定: reversejumpSpeed 、reversejumpHeight、  reversegravityScale、 reversejumpDuration、reversejumpRestDuration  底层逻辑公用巡逻阶段，参数全新
-动画资源：同发现跳跃距离动画资源 findjumpAnimation、findjumpRestAnimation
-特效prefab：同发现跳跃距离特效资源 findjumpEffectPrefab、findjumpRestEffectPrefab (支持prefab 或序列帧动画)
-动画播放特效关键帧 ：同发现距离动画播放特效关键帧公用 findjumpEffectPrefab、findjumpRestEffectPrefab 
+参数设定: 发现倒退跳跃距离参数
+动画资源：发现跳跃距离
+特效prefab：发现跳跃距离
+动画播放特效关键帧 ：发现跳跃距离
 
 3发现倒退跳跃距离 ：向玩家反方向倒退跳跃（脸朝玩家，方向向后倒着跳跃），怪物跳跃到玩家的多少距离后会倒退跳跃 （跳跃超过了设定距离也要完成那次跳跃，落地后再调整）
 怪物与玩家互动：首要条件是怪物发现了，再发现距离之内，所以倒退跳跃距离一定小于发现跳跃距离，怪物接近玩家再发现倒退距离以内，怪物就倒退跳跃，倒退跳跃中如果怪物设置了休息（不动）的时候，需要怪物落地后转向玩家（背对玩家跳跃一段，落地后休息转过来看看玩家的这种感觉）如果实际跳跃时间小于设定时间，也要多跳一次，落地才开始计算休息时间，如果实际跳跃时间大于设定时间，设定时间到了也要完成最后一跳，落地计算休息时间，这个和巡逻期间跳跃底层设计一样
 当怪物接近玩家再发现倒退跳跃距离以外，进入正常发现跳跃距离阶段，怪物就跳跃追赶，形成拉锯
 参数设定: backjumpSpeed、backjumpHeight、backgravityScale、backjumpDuration、backjumpRestDuration  底层逻辑公用巡逻阶段，参数全新
-动画资源: backjumpAnimation、backjumpRestAnimation
-特效prefab：backjumpEffectPrefab、backjumpRestEffectPrefab (支持prefab 或序列帧动画)
-动画播放特效关键帧:  backjumpEffectPrefab、backjumpRestEffectPrefab  动画关键帧触发特效的规则同巡逻阶段  跳跃
+动画资源: backjumpAnimation、休息发现跳跃距离休息
+特效prefab：发现跳跃距离
+动画播放特效关键帧:  发现跳跃距离
 
 以上移动发现和跳跃发现增加3个公用参数：发现距离参数（公用：发现移动距离和发现跳跃距离）、发现后退距离参数（公用：发现后退移动距离和发现后退跳跃距离）、发现倒退距离 参数（公用：发现倒退移动距离 和 发现倒退跳跃距离）需要绘制这3根线的显示圆圈，方便调试，发现距离红色，发现后退距离白色，发现倒退距离黑色，不需要定制颜色，直接给颜色
 
 发现阶段的模式  可以列表+ 添加  移动发现  或 跳跃发现 ,elevent0自己循环，如果添加了elevent0、elevent1，elevent0与elevent1按顺序循环
 findrandomOrder 勾上随机播放elevent
 
-特效位置得锚点
+特效位置得锚点（已作废，全部换成了巡逻阶段的锚点）
 FX_FindMove / FindMovePoint
 FX_FindRest / FindRestPoint
 FX_FindJump / FindJumpPoint
@@ -444,9 +444,99 @@ sin 参数：振幅（例如：上下摆动2米）和频率（例如：每秒摆
 未来飞行物 还要死亡区域检测 ，暂时先不考虑，近战攻击和远程飞行物攻击伤害暂时不加入
 
 
-findmoveEffectPrefab / findrestEffectPrefab  是要和发现后退移动公用得
-findjumpEffectPrefab / findjumpRestEffectPrefab  是要和发现后退跳跃公用得
 
-明天测试 发现阶段特效 动画   发现阶段得 跳跃 
 
-争取 攻击搞了
+
+findmove里的动画、特效、关键帧 不可以 和 findjump里的动画、特效、关键帧混用
+
+findmove
+动画findmoveAnimation 里 对应关键帧 findmoveEffectPrefab，关键帧对应的特效是findmoveEffectPrefab
+缺少动画findmoveAnimation不能播放特效findmoveEffectPrefab
+缺少关键帧findmoveEffectPrefab不能播放特效findmoveEffectPrefab
+缺少特效findmoveEffectPrefab不能播特效findmoveEffectPrefab
+动画findrestAnimation 里 对应关键帧 findrestEffectPrefab，关键帧对应的特效是findrestEffectPrefab
+缺少动画findrestAnimation不能播放特效findrestEffectPrefab
+缺少关键帧findrestEffectPrefab不能播放特效findrestEffectPrefab
+缺少特效findrestEffectPrefab不能播特效findrestEffectPrefab
+
+reversemove
+动画、关键帧、特效同findmove
+
+
+backmove
+只有动画backmoveAnimation  不同于 findmove里的findmoveAnimation动画
+动画backmoveAnimation里 对应关键帧 findmoveEffectPrefab，关键帧对应的特效是findmoveEffectPrefab
+动画、关键帧、特效同findmove
+
+findjump
+动画findjumpAnimation 里 对应关键帧 findjumpEffectPrefab，关键帧对应的特效是findjumpEffectPrefab
+缺少动画findjumpAnimation不能播放特效findjumpEffectPrefab
+缺少关键帧findjumpEffectPrefab不能播放特效findjumpEffectPrefab
+缺少特效findjumpEffectPrefab 不能播特效findjumpEffectPrefab
+动画findjumpRestAnimation 里 对应关键帧 findjumpRestEffectPrefab，关键帧对应的特效是findjumpRestEffectPrefab
+缺少动画findjumpRestAnimation不能播放特效findjumpRestEffectPrefab
+缺少关键帧findjumpRestEffectPrefab不能播放特效findjumpRestEffectPrefab
+缺少特效findjumpEffectPrefab 不能播特效findjumpEffectPrefab
+
+reversejump
+动画、关键帧、特效同findjump
+
+backjump
+只有动画backjumpAnimation  不同于 findjump里的findjumpAnimation 动画
+动画backjumpAnimation 里 对应关键帧 findjumpEffectPrefab，关键帧对应的特效是findjumpEffectPrefab
+动画、关键帧、特效同findjump
+
+
+在发现阶段的特效入口按当前事件模式强制过滤：
+mode=Move 时仅响应 findmoveEffectPrefab / findrestEffectPrefab
+mode=Jump 时仅响应 findjumpEffectPrefab / findjumpRestEffectPrefab
+这样，即便移动与跳跃共用同一个动画剪辑、且剪辑里只有“移动事件”，在 Jump 模式下也不会误播移动特效。
+
+
+
+
+
+
+编辑器折叠分类功能
+
+出生阶段positionType
+选择 point的时候spawnConfig.areaCenter，spawnConfig.areaSize折叠
+选择area的时候 spawnPoints、sequentialSpawn折叠
+
+巡逻阶段type
+选择straight的时候，参数：jumpSpeed、jumpHeight、gravityScale、jumpDuration、jumpRestDuration这些折叠
+选择jump的时候，参数：moveSpeed、acceleration、deceleration、accelerationTime、decelerationTime、moveDuration、restDuration这些折叠
+资源：moveAnimation、restAnimation、moveEffectPrefab、restEffectPrefab这些折叠
+这些再straight和jump的时候都要有，jumpAnimation、jumpRestAnimation、jumpEffectPrefab、jumpRestEffectPrefab
+
+
+发现阶段mode
+选择move的时候，这些全部折叠findjumpSpeed、findjumpHeight、findgravityScale 、findjumpDuration 、findjumpRestDuration 、backjumpSpeed 、backjumpHeight、backgravityScale 、backjumpDuration 、backjumpRestDuration 、findjumpAnimation、findjumpRestAnimation、findjumpEffectPrefab、findjumpRestEffectPrefab
+
+
+选择jump的时候，这些全部折叠、findmoveSpeed、findacceleration、findaccelerationTime、finddeceleration、finddecelerationTime、findmoveDuration、findrestDuration、backmoveSpeed、backacceleration、backaccelerationTime、backdeceleration、backdecelerationTime、backmoveDuration、backrestDuration、findmoveAnimation、findrestAnimation、findmoveEffectPrefab、findrestEffectPrefab
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -6,7 +6,7 @@ using UnityEngine;
 /// </summary>
 public class MonsterAnimationEventRelay : MonoBehaviour
 {
-    [SerializeField] private bool debugEvents = false;
+    [SerializeField] private bool debugEvents = true; // 运行时打开
 
     private MonsterController controller;
 
@@ -14,7 +14,7 @@ public class MonsterAnimationEventRelay : MonoBehaviour
     {
         controller = GetComponentInParent<MonsterController>();
         if (controller == null)
-            Debug.LogWarning($"[MonsterAnimationEventRelay] 未找到 MonsterController！路径：{transform.name}");
+            Debug.LogWarning($"[MonsterAnimationEventRelay] 未找到 MonsterController!路径：{transform.name}");
     }
 
     // 出生阶段
@@ -56,9 +56,8 @@ public class MonsterAnimationEventRelay : MonoBehaviour
         controller?.OnFxJumpRest();
     }
 
-    // =============== 发现阶段：Find/Back 专用事件名（新增） ===============
+    // =============== 发现阶段：统一使用 find* 事件名（Back/Reverse 也用 find*） ===============
 
-    // 发现-跟随（Find）
     public void findmoveEffectPrefab()
     {
         if (debugEvents) Debug.Log("[Relay] findmoveEffectPrefab()");
@@ -81,30 +80,5 @@ public class MonsterAnimationEventRelay : MonoBehaviour
     {
         if (debugEvents) Debug.Log("[Relay] findjumpRestEffectPrefab()");
         controller?.OnFxFindJumpRest();
-    }
-
-    // 发现-后撤/后退（Back）
-    public void backmoveEffectPrefab()
-    {
-        if (debugEvents) Debug.Log("[Relay] backmoveEffectPrefab()");
-        controller?.OnFxBackMove();
-    }
-
-    public void backrestEffectPrefab()
-    {
-        if (debugEvents) Debug.Log("[Relay] backrestEffectPrefab()");
-        controller?.OnFxBackRest();
-    }
-
-    public void backjumpEffectPrefab()
-    {
-        if (debugEvents) Debug.Log("[Relay] backjumpEffectPrefab()");
-        controller?.OnFxBackJump();
-    }
-
-    public void backjumpRestEffectPrefab()
-    {
-        if (debugEvents) Debug.Log("[Relay] backjumpRestEffectPrefab()");
-        controller?.OnFxBackJumpRest();
     }
 }
