@@ -1,15 +1,11 @@
 #if UNITY_EDITOR
 using UnityEditor;
 using UnityEngine;
-using System.Collections.Generic;
 using System.IO;
 
 [CustomEditor(typeof(MonsterConfig))]
 public class MonsterConfigEditor : Editor
 {
-    // 折叠状态缓存（按 propertyPath 记忆）
-    private static readonly Dictionary<string, bool> foldmap = new Dictionary<string, bool>();
-
     public override void OnInspectorGUI()
     {
         serializedObject.Update();
@@ -76,14 +72,13 @@ public class MonsterConfigEditor : Editor
 
             EditorGUILayout.PropertyField(spPosType);
 
-            // 折叠显示：positionType == Points → 折叠 areaCenter/areaSize；== Area → 折叠 spawnPoints/sequentialSpawn
             var posType = (SpawnPositionType)spPosType.enumValueIndex;
             if (posType == SpawnPositionType.Points)
             {
                 EditorGUILayout.PropertyField(spSpawnPoints, true);
                 EditorGUILayout.PropertyField(spSequential);
             }
-            else // Area
+            else
             {
                 EditorGUILayout.PropertyField(spAreaCenter);
                 EditorGUILayout.PropertyField(spAreaSize);
@@ -168,14 +163,20 @@ public class MonsterConfigEditor : Editor
         var spAccelerationTime = spMove.FindPropertyRelative("accelerationTime");
         var spDecelerationTime = spMove.FindPropertyRelative("decelerationTime");
         var spMoveDuration = spMove.FindPropertyRelative("moveDuration");
-        var spRestDuration = spMove.FindPropertyRelative("restDuration");
+        
+        // 直线休息区间
+        var spRestMin = spMove.FindPropertyRelative("restMin");
+        var spRestMax = spMove.FindPropertyRelative("restMax");
 
         // 跳跃参数
         var spJumpSpeed = spMove.FindPropertyRelative("jumpSpeed");
         var spJumpHeight = spMove.FindPropertyRelative("jumpHeight");
         var spGravityScale = spMove.FindPropertyRelative("gravityScale");
         var spJumpDuration = spMove.FindPropertyRelative("jumpDuration");
-        var spJumpRestDuration = spMove.FindPropertyRelative("jumpRestDuration");
+        
+        // 跳休区间
+        var spJumpRestMin = spMove.FindPropertyRelative("jumprestMin");
+        var spJumpRestMax = spMove.FindPropertyRelative("jumprestMax");
 
         // 资源（直线）
         var spMoveAnim = spMove.FindPropertyRelative("moveAnimation");
@@ -189,9 +190,8 @@ public class MonsterConfigEditor : Editor
         var spJumpFx = spMove.FindPropertyRelative("jumpEffectPrefab");
         var spJumpRestFx = spMove.FindPropertyRelative("jumpRestEffectPrefab");
 
-        // 折叠规则（参数）：
-        // - type=Straight：折叠（隐藏）跳跃参数，仅展示直线参数
-        // - type=Jump：折叠（隐藏）直线参数，仅展示跳跃参数
+        
+
         if (type == MovementType.Straight)
         {
             Section("直线参数");
@@ -201,21 +201,34 @@ public class MonsterConfigEditor : Editor
             EditorGUILayout.PropertyField(spAccelerationTime);
             EditorGUILayout.PropertyField(spDecelerationTime);
             EditorGUILayout.PropertyField(spMoveDuration);
-            EditorGUILayout.PropertyField(spRestDuration);
+
+            // 区间
+            EditorGUILayout.Space(2);
+            EditorGUILayout.LabelField("巡逻休息时长区间（秒）", EditorStyles.miniBoldLabel);
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.PropertyField(spRestMin, new GUIContent("restMin"));
+            EditorGUILayout.PropertyField(spRestMax, new GUIContent("restMax"));
+            EditorGUILayout.EndHorizontal();
         }
-        else // Jump
+        else
         {
             Section("跳跃参数");
             EditorGUILayout.PropertyField(spJumpSpeed);
             EditorGUILayout.PropertyField(spJumpHeight);
             EditorGUILayout.PropertyField(spGravityScale);
             EditorGUILayout.PropertyField(spJumpDuration);
-            EditorGUILayout.PropertyField(spJumpRestDuration);
+
+            // 区间
+            EditorGUILayout.Space(2);
+            EditorGUILayout.LabelField("巡逻跳休时长区间（秒）", EditorStyles.miniBoldLabel);
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.PropertyField(spJumpRestMin, new GUIContent("jumprestMin"));
+            EditorGUILayout.PropertyField(spJumpRestMax, new GUIContent("jumprestMax"));
+            EditorGUILayout.EndHorizontal();
         }
 
         SpaceMinor();
 
-        // 资源折叠：两组资源在 Straight/Jump 两种类型下都要显示，但以“可折叠”的方式呈现
         if (Fold(spMove.propertyPath + ".res.move", "资源（直线 Move/Rest）", false))
         {
             using (new EditorGUI.IndentLevelScope())
@@ -240,7 +253,6 @@ public class MonsterConfigEditor : Editor
 
         SpaceMinor();
 
-        // AutoJump 参数（无条件展示，保持原有结构）
         if (Fold(spMove.propertyPath + ".autojump", "Auto Jump 参数", false))
         {
             using (new EditorGUI.IndentLevelScope())
@@ -264,12 +276,20 @@ public class MonsterConfigEditor : Editor
             var spFindRange = spV2.FindPropertyRelative("findRange");
             var spReverseR = spV2.FindPropertyRelative("reverseRange");
             var spBackR = spV2.FindPropertyRelative("backRange");
+
+            var spBackAuto = spV2.FindPropertyRelative("enableBackAutoJumpOnObstacle");
+            var spBackSuppress = spV2.FindPropertyRelative("suppressBackBandDuringRest");
+
             var spRandom = spV2.FindPropertyRelative("findRandomOrder");
             var spEvents = spV2.FindPropertyRelative("events");
 
             EditorGUILayout.PropertyField(spFindRange);
             EditorGUILayout.PropertyField(spReverseR);
             EditorGUILayout.PropertyField(spBackR);
+
+            EditorGUILayout.PropertyField(spBackAuto, new GUIContent("Back: Auto-Jump On Obstacle"));
+            EditorGUILayout.PropertyField(spBackSuppress, new GUIContent("Back: Suppress Bands During Rest"));
+
             EditorGUILayout.PropertyField(spRandom);
 
             SpaceMinor();
@@ -313,13 +333,11 @@ public class MonsterConfigEditor : Editor
             EditorGUILayout.PropertyField(spMode);
             var mode = (DiscoveryV2Mode)spMode.enumValueIndex;
 
-            // 仅 Move 模式显示“障碍处理策略”
             if (mode == DiscoveryV2Mode.Move)
                 EditorGUILayout.PropertyField(spTurnMode);
 
             SpaceMinor();
 
-            // mode=Move -> 只显示 MoveSet；mode=Jump -> 只显示 JumpSet
             if (mode == DiscoveryV2Mode.Move)
             {
                 DrawMoveSet(spMoveSet);
@@ -335,7 +353,6 @@ public class MonsterConfigEditor : Editor
     {
         if (spMoveSet == null) return;
 
-        // find（FollowMoveParams）
         var spFind = spMoveSet.FindPropertyRelative("find");
         var spBack = spMoveSet.FindPropertyRelative("back");
 
@@ -373,7 +390,6 @@ public class MonsterConfigEditor : Editor
     {
         if (spJumpSet == null) return;
 
-        // find（FollowJumpParams） / back（BackstepJumpParams）
         var spFind = spJumpSet.FindPropertyRelative("find");
         var spBack = spJumpSet.FindPropertyRelative("back");
 
@@ -428,7 +444,15 @@ public class MonsterConfigEditor : Editor
         EditorGUILayout.PropertyField(spBack.FindPropertyRelative("backdeceleration"));
         EditorGUILayout.PropertyField(spBack.FindPropertyRelative("backdecelerationTime"));
         EditorGUILayout.PropertyField(spBack.FindPropertyRelative("backmoveDuration"));
-        EditorGUILayout.PropertyField(spBack.FindPropertyRelative("backrestDuration"));
+
+        var spMin = spBack.FindPropertyRelative("backrestMin");
+        var spMax = spBack.FindPropertyRelative("backrestMax");
+        EditorGUILayout.Space(2);
+        EditorGUILayout.LabelField("Back 休息时长区间（秒）", EditorStyles.miniBoldLabel);
+        EditorGUILayout.BeginHorizontal();
+        EditorGUILayout.PropertyField(spMin, new GUIContent("backrestMin"));
+        EditorGUILayout.PropertyField(spMax, new GUIContent("backrestMax"));
+        EditorGUILayout.EndHorizontal();
     }
 
     private void DrawJumpParamsFind(SerializedProperty spFind)
@@ -448,7 +472,15 @@ public class MonsterConfigEditor : Editor
         EditorGUILayout.PropertyField(spBack.FindPropertyRelative("backjumpHeight"));
         EditorGUILayout.PropertyField(spBack.FindPropertyRelative("backgravityScale"));
         EditorGUILayout.PropertyField(spBack.FindPropertyRelative("backjumpDuration"));
-        EditorGUILayout.PropertyField(spBack.FindPropertyRelative("backjumpRestDuration"));
+
+        var spMin = spBack.FindPropertyRelative("backjumpRestMin");
+        var spMax = spBack.FindPropertyRelative("backjumpRestMax");
+        EditorGUILayout.Space(2);
+        EditorGUILayout.LabelField("Back 跳休时长区间（秒）", EditorStyles.miniBoldLabel);
+        EditorGUILayout.BeginHorizontal();
+        EditorGUILayout.PropertyField(spMin, new GUIContent("backjumpRestMin"));
+        EditorGUILayout.PropertyField(spMax, new GUIContent("backjumpRestMax"));
+        EditorGUILayout.EndHorizontal();
     }
 
     private void DrawIOButtons()
@@ -498,15 +530,15 @@ public class MonsterConfigEditor : Editor
 
     private static void SpaceMinor() => EditorGUILayout.Space(4);
 
-    private static bool Fold(string key, string title, bool defaultState)
+    private bool Fold(string key, string title, bool defaultState)
     {
-        if (!foldmap.TryGetValue(key, out bool state))
-        {
-            state = defaultState;
-            foldmap[key] = state;
-        }
-        var newState = EditorGUILayout.Foldout(state, title, true);
-        if (newState != state) foldmap[key] = newState;
+        int id = target != null ? target.GetInstanceID() : 0;
+        string fullKey = $"MonsterConfigEditor.fold.{id}.{key}";
+        int val = EditorPrefs.GetInt(fullKey, defaultState ? 1 : 0);
+        bool state = val != 0;
+        bool newState = EditorGUILayout.Foldout(state, title, true);
+        if (newState != state)
+            EditorPrefs.SetInt(fullKey, newState ? 1 : 0);
         return newState;
     }
 }

@@ -216,7 +216,9 @@ public class MonsterController : MonoBehaviour
     private bool suppressOneDiscoveryJumpAfterAuto = true;
     private bool suppressNextDiscoveryJumpOnce = false;
 
-    
+    //后退/倒退检测抑制计时器（秒）
+    private float backBandSuppressTimer = 0f;
+
 
     void Start()
     {
@@ -271,6 +273,7 @@ public class MonsterController : MonoBehaviour
         StartCoroutine(StateMachine());
     }
 
+    //Update() 内递减计时器
     void Update()
     {
         if (turnCooldown > 0f) turnCooldown -= Time.deltaTime;
@@ -279,16 +282,19 @@ public class MonsterController : MonoBehaviour
         if (ignoreCliffFramesLeft > 0) ignoreCliffFramesLeft--;
         if (autoJumpFxCooldownLeft > 0) autoJumpFxCooldownLeft--;
 
-        // AutoTurn 后朝向冻结
         if (obstacleTurnFaceLockTimer > 0f) obstacleTurnFaceLockTimer -= Time.deltaTime;
-
-        // 落地后朝向冻结
         if (postLandingFaceLockTimer > 0f) postLandingFaceLockTimer -= Time.deltaTime;
-
-        // 朝向翻转驻留
         if (faceFlipDwellTimer > 0f) faceFlipDwellTimer -= Time.deltaTime;
 
-        // 自动跳重新上膛
+        // 后退/倒退距离抑制计时器递减
+        if (backBandSuppressTimer > 0f) backBandSuppressTimer -= Time.deltaTime;
+
+        // 若配置关闭，确保不生效
+        var dcfgU = config != null ? config.discoveryV2Config : null;
+        if (dcfgU != null && !dcfgU.suppressBackBandDuringRest)
+            backBandSuppressTimer = 0f;
+
+
         if (autoJumpRearmAfterLanding && !isJumping && !inAutoJumpPermitZone && ignoreCliffFramesLeft <= 0)
         {
             autoJumpReady = true;
@@ -419,9 +425,9 @@ public class MonsterController : MonoBehaviour
         if (isResting)
         {
             string restAnim =
-                (move.type == MovementType.Jump && !string.IsNullOrEmpty(move.jumpRestAnimation))
-                    ? move.jumpRestAnimation
-                    : move.restAnimation;
+                (move.type == MovementType.Jump && !string.IsNullOrEmpty(move.jumpRestAnimation)) 
+                ? move.jumpRestAnimation 
+                : move.restAnimation;
 
             PlayAnimIfNotCurrent(restAnim);
 
@@ -430,10 +436,7 @@ public class MonsterController : MonoBehaviour
 
             rb.velocity = new Vector2(0f, rb.velocity.y);
 
-            float restLeft =
-                (move.type == MovementType.Jump)
-                    ? (move.rtRestTimer > 0f ? move.rtRestTimer : move.jumpRestDuration)
-                    : (move.rtRestTimer > 0f ? move.rtRestTimer : move.restDuration);
+            float restLeft = (move.rtRestTimer > 0f) ? move.rtRestTimer : (move.type == MovementType.Jump ? PickJumpRestTime(move) : PickStraightRestTime(move));
 
             restLeft -= Time.deltaTime;
             move.rtRestTimer = restLeft;
@@ -457,23 +460,15 @@ public class MonsterController : MonoBehaviour
         }
     }
 
-    // ================== 发现阶段（V2） ==================
+    // DiscoveryUpdate() 顶部 wantBand 计算处：在算出 wantBand 之后，若计时器>0，强制Follow
     void DiscoveryUpdate()
     {
         discoveryRestJustFinished = false;
 
-        if (!player)
-        {
-            state = MonsterState.Patrol;
-            return;
-        }
+        if (!player) { state = MonsterState.Patrol; return; }
 
         var dcfg = config.discoveryV2Config;
-        if (dcfg == null || dcfg.events == null || dcfg.events.Count == 0)
-        {
-            state = MonsterState.Patrol;
-            return;
-        }
+        if (dcfg == null || dcfg.events == null || dcfg.events.Count == 0) { state = MonsterState.Patrol; return; }
 
         UpdateGroundedAndSlope();
 
@@ -481,13 +476,15 @@ public class MonsterController : MonoBehaviour
         var m = GetMonsterDistPos();
         float d = discoveryUseHorizontalDistanceOnly ? Mathf.Abs(p.x - m.x) : Vector2.Distance(p, m);
 
-        if (d > dcfg.findRange)
-        {
-            state = MonsterState.Patrol;
-            return;
-        }
+        if (d > dcfg.findRange) { state = MonsterState.Patrol; return; }
 
+        // 带选择
         DiscoveryBand wantBand = ComputeWantBandWithHysteresis(d, dcfg);
+
+        // 仅当开关开启时才抑制 Back/Retreat 检测
+        if (dcfg.suppressBackBandDuringRest && backBandSuppressTimer > 0f && wantBand != DiscoveryBand.Follow)
+            wantBand = DiscoveryBand.Follow;
+
 
         bool bandChangeAllowedNow = !(activeDiscoveryEvent?.mode == DiscoveryV2Mode.Jump && isJumping)
                                     && !isResting && (bandDwellTimer <= 0f) && (currentBand != wantBand);
@@ -506,6 +503,17 @@ public class MonsterController : MonoBehaviour
         float dxToPlayer = p.x - m.x;
         int dirToPlayer = (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone) ? FacingSign() : (dxToPlayer >= 0f ? +1 : -1);
 
+        // 抑制窗口期间，重叠区间内冻结 dirToPlayer 为当前朝向，避免快速左右闪
+        if (dcfg.suppressBackBandDuringRest && backBandSuppressTimer > 0f)
+        {
+            // 锁定区间：基于现有死区与滞回之和（可按需调大一点）
+            float lockZone = Mathf.Max(faceFlipDeadZone, 0.15f) + Mathf.Max(0f, faceFlipHysteresis);
+            if (Mathf.Abs(dxToPlayer) <= lockZone)
+            {
+                dirToPlayer = FacingSign();
+            }
+        }
+
         if (activeDiscoveryEvent == null)
         {
             AdvanceDiscoveryEvent(orderResetIfEmpty: true);
@@ -517,7 +525,7 @@ public class MonsterController : MonoBehaviour
             if (isJumping && activeJumpMove != null)
             {
                 JumpUpdate(activeJumpMove);
-                
+
                 return;
             }
 
@@ -539,8 +547,8 @@ public class MonsterController : MonoBehaviour
                 }
                 else if (currentBand == DiscoveryBand.Retreat)
                 {
-                    bool resting = (move.rtStraightPhase == StraightPhase.Rest) || isResting;
-                    faceSign = resting ? dirToPlayer : -dirToPlayer;
+                    // 统一退却时朝向为远离玩家（不在休息时强制朝向玩家）
+                    faceSign = -dirToPlayer;
                     moveSign = -dirToPlayer;
                 }
                 else // Backstep
@@ -558,7 +566,7 @@ public class MonsterController : MonoBehaviour
                 if (isJumping && activeJumpMove != null)
                 {
                     JumpUpdate(activeJumpMove);
-                    
+
                     return;
                 }
             }
@@ -589,6 +597,55 @@ public class MonsterController : MonoBehaviour
                 suppressTurnInAutoJumpZone: suppressTurnInZone
             );
 
+            // 仅当开关开启时执行转换（Move 分支：使用 moveSet.back.backrestMin/Max）
+            if (dcfg.suppressBackBandDuringRest
+                && (currentBand == DiscoveryBand.Retreat || currentBand == DiscoveryBand.Backstep)
+                && isResting
+                && backBandSuppressTimer <= 0f)
+            {
+                float min = Mathf.Max(0f, activeDiscoveryEvent.moveSet.back.backrestMin);
+                float max = Mathf.Max(min, activeDiscoveryEvent.moveSet.back.backrestMax);
+                backBandSuppressTimer = (max > 0f) ? Random.Range(min, max) : 0f;
+
+                ResetStraightRuntime(move);
+                discoveryRestJustFinished = true;
+            }
+
+            
+
+            // 当处于 Retreat/Backstep 且配置 enableBackAutoJumpOnObstacle 开启时，
+            // 如果检测到墙/悬崖则尝试触发一次向玩家方向的跳跃（使用当前事件的 jumpSet）
+            if (dcfg != null && dcfg.enableBackAutoJumpOnObstacle && (currentBand == DiscoveryBand.Retreat || currentBand == DiscoveryBand.Backstep))
+            {
+                // 仅在地面、非跳跃、非休息时尝试
+                if (!isJumping && isGroundedMC && !isResting)
+                {
+                    // 判定“前方有墙或悬崖”
+                    bool wallAhead = CheckWallInDir(moveSign);
+                    bool cliffAhead = CheckCliffInDir(moveSign, permitCountsAsGround: true);
+                    if (wallAhead || cliffAhead)
+                    {
+                        // 需要当前事件配置有 jumpSet 才能执行
+                        if (activeDiscoveryEvent != null && activeDiscoveryEvent.jumpSet != null)
+                        {
+                            var jmove = GetD2JumpFor(currentBand);
+                            if (jmove != null)
+                            {
+                                // 准备并起跳：跳跃方向按“朝玩家方向”
+                                int dirToPlayerLocal = (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone) ? FacingSign() : (dxToPlayer >= 0f ? +1 : -1);
+                                EnsureJumpPlan(jmove, useAutoParams: false);
+                                BeginOneJump(jmove, useAutoParams: false, moveDirOverride: dirToPlayerLocal);
+                                // 一次触发后跳出，不再继续 StraightTick 后续处理
+                                obstacleTurnedThisFrame = false;
+                                discoveryRestJustFinished = false;
+                                // 直接 return ，避免后续重复逻辑（DiscoveryUpdate 会在下一帧继续处理 JumpUpdate）
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+
             if (obstacleTurnedThisFrame)
             {
                 obstacleTurnFaceLockTimer = Mathf.Max(0f, obstacleTurnFaceLockTime);
@@ -597,13 +654,14 @@ public class MonsterController : MonoBehaviour
 
             if (discoveryRestJustFinished)
                 AdvanceDiscoveryEvent();
+
         }
         else
         {
             if (isAutoJumping && activeJumpMove != null)
             {
                 JumpUpdate(activeJumpMove);
-                
+
                 return;
             }
 
@@ -630,13 +688,13 @@ public class MonsterController : MonoBehaviour
                 if (!string.IsNullOrEmpty(jmove.jumpRestAnimation))
                     PlayAnimIfNotCurrent(jmove.jumpRestAnimation);
 
-                jmove.rtRestTimer = Mathf.Max(0f, jmove.jumpRestDuration);
+                jmove.rtRestTimer = PickJumpRestTime(jmove);
 
                 rb.velocity = new Vector2(0f, rb.velocity.y);
                 desiredSpeedX = 0f;
                 ApplySlopeIdleStopIfNoMove();
 
-                
+
                 return;
             }
 
@@ -645,13 +703,33 @@ public class MonsterController : MonoBehaviour
                 if (isJumping && activeJumpMove != null)
                 {
                     JumpUpdate(activeJumpMove);
-                    
+
                     return;
                 }
             }
 
             if (isResting && inJumpRestPhase)
             {
+                // 抑制开关：把跳休转为抑制窗口（用 backjumpRestMin/Max 随机）
+                if (dcfg.suppressBackBandDuringRest
+                    && (currentBand == DiscoveryBand.Retreat || currentBand == DiscoveryBand.Backstep)
+                    && backBandSuppressTimer <= 0f)
+                {
+                    float min = Mathf.Max(0f, activeDiscoveryEvent.jumpSet.back.backjumpRestMin);
+                    float max = Mathf.Max(min, activeDiscoveryEvent.jumpSet.back.backjumpRestMax);
+                    backBandSuppressTimer = (max > 0f) ? Random.Range(min, max) : 0f;
+
+                    isResting = false;
+                    inJumpRestPhase = false;
+                    if (jmove != null) jmove.rtRestTimer = 0f;
+                    discoveryRestJustFinished = true;
+
+                    AdvanceDiscoveryEvent();
+                    return;
+                }
+
+                
+
                 if (!string.IsNullOrEmpty(jmove.jumpRestAnimation))
                     PlayAnimIfNotCurrent(jmove.jumpRestAnimation);
 
@@ -659,7 +737,7 @@ public class MonsterController : MonoBehaviour
                 desiredSpeedX = 0f;
                 ApplySlopeIdleStopIfNoMove();
 
-                if (jmove.rtRestTimer <= 0f) jmove.rtRestTimer = jmove.jumpRestDuration;
+                if (jmove.rtRestTimer <= 0f) jmove.rtRestTimer = PickJumpRestTime(jmove);
                 jmove.rtRestTimer -= Time.deltaTime;
 
                 if (jmove.rtRestTimer <= 0f)
@@ -689,7 +767,7 @@ public class MonsterController : MonoBehaviour
                 AdvanceDiscoveryEvent();
         }
 
-        
+
     }
 
     private int StabilizeFaceSign(int wantFaceSign, float dxToPlayer)
@@ -767,29 +845,33 @@ public class MonsterController : MonoBehaviour
             deceleration = set.find.finddeceleration,
             decelerationTime = set.find.finddecelerationTime,
             moveDuration = set.find.findmoveDuration,
-            restDuration = set.find.findrestDuration,
+
+            // Follow 段只有单值 → 映射为区间[min=max=单值]
+            restMin = Mathf.Max(0f, set.find.findrestDuration),
+            restMax = Mathf.Max(0f, set.find.findrestDuration),
+
             moveAnimation = set.findmoveAnimation,
             restAnimation = set.findrestAnimation,
             moveEffectPrefab = set.findmoveEffectPrefab,
             restEffectPrefab = set.findrestEffectPrefab
         };
     }
+    // Discovery V2：把 back 的区间写入运行时 PatrolMovement，保证“总是生效”
     private PatrolMovement BuildStraightFromRetreat(MoveSetV2 set)
     {
         return new PatrolMovement
         {
             type = MovementType.Straight,
-
-            // 数值改为用 back 参数（Retreat 与 Back 共用）
             moveSpeed = set.back.backmoveSpeed,
             acceleration = set.back.backacceleration,
             accelerationTime = set.back.backaccelerationTime,
             deceleration = set.back.backdeceleration,
             decelerationTime = set.back.backdecelerationTime,
             moveDuration = set.back.backmoveDuration,
-            restDuration = set.back.backrestDuration,
 
-            // 动画/特效资源仍复用 find 系（与原规则一致）
+            restMin = Mathf.Max(0f, set.back.backrestMin),
+            restMax = Mathf.Max(0f, set.back.backrestMax),
+
             moveAnimation = set.findmoveAnimation,
             restAnimation = set.findrestAnimation,
             moveEffectPrefab = set.findmoveEffectPrefab,
@@ -807,13 +889,12 @@ public class MonsterController : MonoBehaviour
             deceleration = set.back.backdeceleration,
             decelerationTime = set.back.backdecelerationTime,
             moveDuration = set.back.backmoveDuration,
-            restDuration = set.back.backrestDuration,
 
-            // Back 仅 move 动画不同；rest 动画复用 find
+            restMin = Mathf.Max(0f, set.back.backrestMin),
+            restMax = Mathf.Max(0f, set.back.backrestMax),
+
             moveAnimation = set.backmoveAnimation,
             restAnimation = set.findrestAnimation,
-
-            // 特效全部复用 find
             moveEffectPrefab = set.findmoveEffectPrefab,
             restEffectPrefab = set.findrestEffectPrefab
         };
@@ -843,7 +924,11 @@ public class MonsterController : MonoBehaviour
             jumpHeight = set.find.findjumpHeight,
             gravityScale = set.find.findgravityScale,
             jumpDuration = set.find.findjumpDuration,
-            jumpRestDuration = set.find.findjumpRestDuration,
+
+            // Follow 段只有单值 → 映射为区间[min=max=单值]
+            jumprestMin = Mathf.Max(0f, set.find.findjumpRestDuration),
+            jumprestMax = Mathf.Max(0f, set.find.findjumpRestDuration),
+
             jumpAnimation = set.findjumpAnimation,
             jumpRestAnimation = set.findjumpRestAnimation,
             jumpEffectPrefab = set.findjumpEffectPrefab,
@@ -855,15 +940,14 @@ public class MonsterController : MonoBehaviour
         return new PatrolMovement
         {
             type = MovementType.Jump,
-
-            // 数值改为用 back 参数（Retreat 与 Back 共用）
             jumpSpeed = set.back.backjumpSpeed,
             jumpHeight = set.back.backjumpHeight,
             gravityScale = set.back.backgravityScale,
             jumpDuration = set.back.backjumpDuration,
-            jumpRestDuration = set.back.backjumpRestDuration,
 
-            // 动画/特效资源仍复用 find 系（与原规则一致）
+            jumprestMin = Mathf.Max(0f, set.back.backjumpRestMin),
+            jumprestMax = Mathf.Max(0f, set.back.backjumpRestMax),
+
             jumpAnimation = set.findjumpAnimation,
             jumpRestAnimation = set.findjumpRestAnimation,
             jumpEffectPrefab = set.findjumpEffectPrefab,
@@ -879,13 +963,12 @@ public class MonsterController : MonoBehaviour
             jumpHeight = set.back.backjumpHeight,
             gravityScale = set.back.backgravityScale,
             jumpDuration = set.back.backjumpDuration,
-            jumpRestDuration = set.back.backjumpRestDuration,
 
-            // Back 仅 jump 动画不同；jump rest 动画复用 find
+            jumprestMin = Mathf.Max(0f, set.back.backjumpRestMin),
+            jumprestMax = Mathf.Max(0f, set.back.backjumpRestMax),
+
             jumpAnimation = set.backjumpAnimation,
             jumpRestAnimation = set.findjumpRestAnimation,
-
-            // 特效全部复用 find
             jumpEffectPrefab = set.findjumpEffectPrefab,
             jumpRestEffectPrefab = set.findjumpRestEffectPrefab
         };
@@ -909,14 +992,12 @@ public class MonsterController : MonoBehaviour
 
         UpdateGroundedAndSlope();
 
-        if (!isResting && move.rtStraightPhase == StraightPhase.None && move.restDuration > 0f && (move.moveDuration <= 0f || move.moveSpeed <= 0.0001f))
+        if (!isResting && move.rtStraightPhase == StraightPhase.None && HasStraightRest(move) && (move.moveDuration <= 0f || move.moveSpeed <= 0.0001f))
         {
             move.rtStraightPhase = StraightPhase.Rest;
             isResting = true;
-            move.rtRestTimer = Mathf.Max(0f, move.restDuration);
-
+            move.rtRestTimer = PickStraightRestTime(move);
             PlayAnimIfNotCurrent(move.restAnimation);
-
             rb.velocity = new Vector2(0f, rb.velocity.y);
             desiredSpeedX = 0f;
             ApplySlopeIdleStopIfNoMove();
@@ -941,7 +1022,8 @@ public class MonsterController : MonoBehaviour
 
             if (move.rtStraightPhase == StraightPhase.Rest)
             {
-                if (move.restDuration <= 0f)
+                // 无休息区间：直接结束
+                if (!HasStraightRest(move))
                 {
                     isResting = false;
                     move.rtStraightPhase = StraightPhase.None;
@@ -953,8 +1035,9 @@ public class MonsterController : MonoBehaviour
                     return true;
                 }
 
+                // 有休息区间：进入休息并随机时长
                 isResting = true;
-                move.rtRestTimer = Mathf.Max(0f, move.restDuration);
+                move.rtRestTimer = PickStraightRestTime(move);
                 PlayAnimIfNotCurrent(move.restAnimation);
                 desiredSpeedX = 0f;
                 ApplySlopeIdleStopIfNoMove();
@@ -1022,7 +1105,7 @@ public class MonsterController : MonoBehaviour
             case StraightPhase.Rest:
             default:
                 {
-                    if (move.restDuration <= 0f)
+                    if (!HasStraightRest(move))
                     {
                         isResting = false;
                         move.rtStraightPhase = StraightPhase.None;
@@ -1035,7 +1118,7 @@ public class MonsterController : MonoBehaviour
                     }
 
                     isResting = true;
-                    if (move.rtRestTimer <= 0f) move.rtRestTimer = Mathf.Max(0f, move.restDuration);
+                    if (move.rtRestTimer <= 0f) move.rtRestTimer = PickStraightRestTime(move);
 
                     PlayAnimIfNotCurrent(move.restAnimation);
 
@@ -1542,8 +1625,7 @@ public class MonsterController : MonoBehaviour
                 if (suppressOneDiscoveryJumpAfterAuto && state == MonsterState.Discovery)
                     suppressNextDiscoveryJumpOnce = true;
 
-                float restAfterAuto =
-                    (move.type == MovementType.Jump) ? move.jumpRestDuration : move.restDuration;
+                float restAfterAuto = (move.type == MovementType.Jump) ? PickJumpRestTime(move) : PickStraightRestTime(move);
 
                 if (restAfterAuto > 0f)
                 {
@@ -1570,8 +1652,7 @@ public class MonsterController : MonoBehaviour
                     !animator.GetCurrentAnimatorStateInfo(0).IsName(move.jumpRestAnimation))
                     PlayAnimIfNotCurrent(move.jumpRestAnimation);
 
-                move.rtRestTimer = move.jumpRestDuration;
-                move.rtUsingAutoJumpParams = false;
+                move.rtRestTimer = PickJumpRestTime(move);
             }
         }
     }
@@ -2194,6 +2275,13 @@ public class MonsterController : MonoBehaviour
         return true;
     }
 
+
+    private static bool HasStraightRest(PatrolMovement m) => Mathf.Max(m.restMin, m.restMax) > 0f; private static bool HasJumpRest(PatrolMovement m) => Mathf.Max(m.jumprestMin, m.jumprestMax) > 0f;
+
+    private float PickStraightRestTime(PatrolMovement move) { float min = Mathf.Max(0f, move.restMin); float max = Mathf.Max(min, move.restMax); return (max > 0f) ? Random.Range(min, max) : 0f; }
+
+    private float PickJumpRestTime(PatrolMovement move) { float min = Mathf.Max(0f, move.jumprestMin); float max = Mathf.Max(min, move.jumprestMax); return (max > 0f) ? Random.Range(min, max) : 0f; }
+
     // ================== 发现阶段：动画特效事件（严格一一对应版） ==================
     // 发现阶段：动画特效事件入口（防抖+稳态版本）
 
@@ -2291,27 +2379,5 @@ public class MonsterController : MonoBehaviour
         PlayEffect(prefab, anchor);
     }
 
-    // 严格播放（去掉 Animator 状态名强校验；仍保留‘配置非空/特效非空/锚点非空’）
-    private void PlayDiscoveryJumpFxForBand(DiscoveryBand band, bool isRest)
-    {
-        if (state != MonsterState.Discovery) return;
-
-        var j = GetD2JumpFor(band);
-        if (j == null) return;
-
-        // 配置的动画字段必须非空（满足“缺动画不播”的规则）
-        string anim = isRest ? j.jumpRestAnimation : j.jumpAnimation;
-        if (string.IsNullOrEmpty(anim)) return;
-
-        // 特效必须非空（满足“缺特效不播”的规则）
-        var prefab = isRest ? j.jumpRestEffectPrefab : j.jumpEffectPrefab;
-        if (prefab == null) return;
-
-        // 统一使用 find 系锚点（已按你的“一一对应，不混用”规则）
-        FxSlot slot = isRest ? FxSlot.FindJumpRest : FxSlot.FindJump;
-        var anchor = ResolveFxAnchor(slot);
-        if (anchor == null) return; // 无锚点不播
-
-        PlayEffect(prefab, anchor);
-    }
+    
 }

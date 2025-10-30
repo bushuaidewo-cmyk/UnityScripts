@@ -141,8 +141,8 @@ public class MonsterSpawner : MonoBehaviour
     /// <summary>
     /// 取本次生成坐标
     /// Points：若仅 1 个点 -> 同一批所有都会用这个点（重叠）
-    ///          多个点时按 sequentialSpawn 顺序/随机挑点
-    /// Area：   在范围内随机
+    /// 多个点时按 sequentialSpawn 顺序/随机挑点
+    /// Area在范围内随机
     /// </summary>
     private Vector3 GetSpawnPosition(SpawnConfig spawn)
     {
