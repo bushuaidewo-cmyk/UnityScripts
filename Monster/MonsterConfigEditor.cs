@@ -20,7 +20,6 @@ public class MonsterConfigEditor : Editor
         var spPatrol = serializedObject.FindProperty("patrolConfig");
         var spDiscoveryV2 = serializedObject.FindProperty("discoveryV2Config");
 
-        // ========== 基础设置 ==========
         Header("基础设置");
         EditorGUILayout.PropertyField(spMonsterID);
         EditorGUILayout.PropertyField(spLevel);
@@ -28,20 +27,15 @@ public class MonsterConfigEditor : Editor
         EditorGUILayout.PropertyField(spExp);
         EditorGUILayout.PropertyField(spPrefab);
 
-        // ========== 出生阶段 ==========
         DrawSpawnConfig(spSpawn);
-
-        // ========== 巡逻阶段 ==========
         DrawPatrolConfig(spPatrol);
-
-        // ========== 发现阶段（V2） ==========
         DrawDiscoveryV2Config(spDiscoveryV2);
 
-        // ========== 导入 / 导出 ==========
         DrawIOButtons();
 
         serializedObject.ApplyModifiedProperties();
     }
+
 
     private void DrawSpawnConfig(SerializedProperty spSpawn)
     {
@@ -163,7 +157,7 @@ public class MonsterConfigEditor : Editor
         var spAccelerationTime = spMove.FindPropertyRelative("accelerationTime");
         var spDecelerationTime = spMove.FindPropertyRelative("decelerationTime");
         var spMoveDuration = spMove.FindPropertyRelative("moveDuration");
-        
+
         // 直线休息区间
         var spRestMin = spMove.FindPropertyRelative("restMin");
         var spRestMax = spMove.FindPropertyRelative("restMax");
@@ -173,7 +167,7 @@ public class MonsterConfigEditor : Editor
         var spJumpHeight = spMove.FindPropertyRelative("jumpHeight");
         var spGravityScale = spMove.FindPropertyRelative("gravityScale");
         var spJumpDuration = spMove.FindPropertyRelative("jumpDuration");
-        
+
         // 跳休区间
         var spJumpRestMin = spMove.FindPropertyRelative("jumprestMin");
         var spJumpRestMax = spMove.FindPropertyRelative("jumprestMax");
@@ -190,7 +184,6 @@ public class MonsterConfigEditor : Editor
         var spJumpFx = spMove.FindPropertyRelative("jumpEffectPrefab");
         var spJumpRestFx = spMove.FindPropertyRelative("jumpRestEffectPrefab");
 
-        
 
         if (type == MovementType.Straight)
         {
@@ -277,15 +270,34 @@ public class MonsterConfigEditor : Editor
             var spReverseR = spV2.FindPropertyRelative("reverseRange");
             var spBackR = spV2.FindPropertyRelative("backRange");
 
+            // 拿到延迟字段
+            var spDelayFollowToBackMin = spV2.FindPropertyRelative("delayFollowToBackstepMin");
+            var spDelayFollowToBackMax = spV2.FindPropertyRelative("delayFollowToBackstepMax");
+
+            var spDelayBackToFollowMin = spV2.FindPropertyRelative("delayBackstepToFollowMin");
+            var spDelayBackToFollowMax = spV2.FindPropertyRelative("delayBackstepToFollowMax");
+
             var spBackAuto = spV2.FindPropertyRelative("enableBackAutoJumpOnObstacle");
             var spBackSuppress = spV2.FindPropertyRelative("suppressBackBandDuringRest");
 
             var spRandom = spV2.FindPropertyRelative("findRandomOrder");
             var spEvents = spV2.FindPropertyRelative("events");
+            var spAttacks = spV2.FindPropertyRelative("attacks");
 
             EditorGUILayout.PropertyField(spFindRange);
             EditorGUILayout.PropertyField(spReverseR);
             EditorGUILayout.PropertyField(spBackR);
+
+            EditorGUILayout.Space(2);
+            
+            // Follow → Backstep
+            EditorGUILayout.PropertyField(spDelayFollowToBackMin, new GUIContent("Follow→Backstep Min"));
+            EditorGUILayout.PropertyField(spDelayFollowToBackMax, new GUIContent("Follow→Backstep Max"));
+
+            // Backstep → Follow
+            EditorGUILayout.PropertyField(spDelayBackToFollowMin, new GUIContent("Backstep→Follow Min"));
+            EditorGUILayout.PropertyField(spDelayBackToFollowMax, new GUIContent("Backstep→Follow Max"));
+            
 
             EditorGUILayout.PropertyField(spBackAuto, new GUIContent("Back: Auto-Jump On Obstacle"));
             EditorGUILayout.PropertyField(spBackSuppress, new GUIContent("Back: Suppress Bands During Rest"));
@@ -305,13 +317,26 @@ public class MonsterConfigEditor : Editor
 
                     EditorGUILayout.BeginHorizontal();
                     if (GUILayout.Button("+ 添加事件"))
-                    {
                         spEvents.InsertArrayElementAtIndex(spEvents.arraySize);
-                    }
                     if (spEvents.arraySize > 0 && GUILayout.Button("- 移除最后"))
-                    {
                         spEvents.DeleteArrayElementAtIndex(spEvents.arraySize - 1);
+                    EditorGUILayout.EndHorizontal();
+                }
+            }
+
+            SpaceMinor();
+            if (Fold("discover.attacks", $"攻击（V2）列表 (Count={spAttacks.arraySize})", true))
+            {
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    for (int i = 0; i < spAttacks.arraySize; i++)
+                    {
+                        var a = spAttacks.GetArrayElementAtIndex(i);
+                        DrawAttackEventV2(a, i);
                     }
+                    EditorGUILayout.BeginHorizontal();
+                    if (GUILayout.Button("+ 添加攻击")) spAttacks.InsertArrayElementAtIndex(spAttacks.arraySize);
+                    if (spAttacks.arraySize > 0 && GUILayout.Button("- 移除最后")) spAttacks.DeleteArrayElementAtIndex(spAttacks.arraySize - 1);
                     EditorGUILayout.EndHorizontal();
                 }
             }
@@ -483,6 +508,242 @@ public class MonsterConfigEditor : Editor
         EditorGUILayout.EndHorizontal();
     }
 
+    private void DrawAttackEventV2(SerializedProperty spAttack, int index)
+    {
+        var label = $"攻击 {index}";
+        if (!Fold($"discover.attacks.{index}", label, true)) return;
+
+        using (new EditorGUI.IndentLevelScope())
+        {
+            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackDuration"));
+            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("repeatedHitsCount"), new GUIContent("repeatedHitsCount"));
+            EditorGUILayout.Space(2);
+            EditorGUILayout.LabelField("攻击休息时长区间（秒）", EditorStyles.miniBoldLabel);
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackRestMin"), new GUIContent("restMin"));
+            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackRestMax"), new GUIContent("restMax"));
+            EditorGUILayout.EndHorizontal();
+
+            // 近战
+            if (Fold($"discover.attacks.{index}.melee", "近战（Melee）", true))
+            {
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("meleeRange"), new GUIContent("触发距离（米）"));
+                    EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackAnimation"), new GUIContent("动画"));
+                    EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackEffectPrefab"), new GUIContent("特效Prefab"));
+                    EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("meleeHitboxChildPath"), new GUIContent("命中体子物体路径"));
+                }
+            }
+
+            // 远程
+            if (Fold($"discover.attacks.{index}.ranged", "远程（Ranged）", true))
+            {
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("rangedRange"), new GUIContent("触发距离（米）"));
+                    EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackFarAnimation"), new GUIContent("动画"));
+                    EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackFarEffectPrefab"), new GUIContent("特效Prefab"));
+
+                    if (Fold($"discover.attacks.{index}.projectile", "Projectile 配置", true))
+                    {
+                        using (new EditorGUI.IndentLevelScope())
+                        {
+                            var spProj = spAttack.FindPropertyRelative("projectile");
+                            if (spProj != null)
+                            {
+                                // 基础 & 分布 & 外观
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("countPerBurst"));
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("intraBurstInterval"));
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("lifeTime"));
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("spreadAngle"));
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("spreadUniform"));
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("FlygunAnimation"));
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("FlygunEffectPrefab"));
+
+                                // 自身旋转（放在表现资源下方）
+                                var spSpinEnable = spProj.FindPropertyRelative("selfRotate");
+                                var spSpinX = spProj.FindPropertyRelative("selfRotateX");
+                                var spSpinY = spProj.FindPropertyRelative("selfRotateY");
+                                var spSpinZ = spProj.FindPropertyRelative("selfRotateZ");
+                                var spSpinSpeed = spProj.FindPropertyRelative("selfRotateSpeedDeg");
+                                EditorGUILayout.PropertyField(spSpinEnable, new GUIContent("自身旋转(启用)"));
+                                if (spSpinEnable.boolValue)
+                                {
+                                    EditorGUILayout.BeginHorizontal();
+                                    EditorGUILayout.PropertyField(spSpinX, new GUIContent("X"), GUILayout.Width(20));
+                                    EditorGUILayout.PropertyField(spSpinY, new GUIContent("Y"), GUILayout.Width(20));
+                                    EditorGUILayout.PropertyField(spSpinZ, new GUIContent("Z"), GUILayout.Width(20));
+                                    EditorGUILayout.EndHorizontal();
+                                    EditorGUILayout.PropertyField(spSpinSpeed, new GUIContent("旋转速度(度/秒)"));
+                                }
+
+                                // 统一“沿移动方向自动朝向”
+                                using (new EditorGUI.DisabledScope(spSpinEnable.boolValue)) // 自旋启用时，该选项失效
+                                {
+                                    EditorGUILayout.PropertyField(spProj.FindPropertyRelative("faceAlongPath"), new GUIContent("沿移动方向自动朝向"));
+                                }
+
+                                // 发射朝向
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("spawnAim"), new GUIContent("发射朝向"));
+
+                                // 命中/爆炸
+
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("radius"), new GUIContent("爆炸半径"));
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("duration"));
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("interval"));
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("FlygunBoomAnimation"));
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("FlygunBoomEffectPrefab"));
+
+                                // 直线
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("linearEnabled"));
+                                if (spProj.FindPropertyRelative("linearEnabled").boolValue)
+                                {
+                                    using (new EditorGUI.IndentLevelScope())
+                                    {
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("speed"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("accel"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("accelTime"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("decel"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("decelTime"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("moveDuration"));
+                                    }
+                                }
+
+                                // S 型直线
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("sinEnabled"));
+                                if (spProj.FindPropertyRelative("sinEnabled").boolValue)
+                                {
+                                    using (new EditorGUI.IndentLevelScope())
+                                    {
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("sinAmplitude"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("sinFrequency"));
+                                    }
+                                }
+
+                                // 抛物线
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("parabolaEnabled"));
+                                if (spProj.FindPropertyRelative("parabolaEnabled").boolValue)
+                                {
+                                    using (new EditorGUI.IndentLevelScope())
+                                    {
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("gravityScale"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceCoefficient"));
+                                        EditorGUILayout.PropertyField(
+                                            spProj.FindPropertyRelative("parabolaApexHeight"),
+                                            new GUIContent("最高点高度(米)")
+                                        );
+                                    }
+                                }
+
+                                // 跟踪导弹
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("homingEnabled"));
+                                if (spProj.FindPropertyRelative("homingEnabled").boolValue)
+                                {
+                                    using (new EditorGUI.IndentLevelScope())
+                                    {
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("homingFrequency"));
+                                    }
+                                }
+
+                                // 半径旋转
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("orbitEnabled"));
+                                if (spProj.FindPropertyRelative("orbitEnabled").boolValue)
+                                {
+                                    using (new EditorGUI.IndentLevelScope())
+                                    {
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("orbitRadius"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("orbitAngularSpeedDeg"));
+                                    }
+                                }
+
+                                // 回旋镖
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("boomerangEnabled"));
+                                if (spProj.FindPropertyRelative("boomerangEnabled").boolValue)
+                                {
+                                    using (new EditorGUI.IndentLevelScope())
+                                    {
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("boomerangOutMaxDistance"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("boomerangApexStopTime"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("boomerangBackUniformSpeed"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("boomerangBackUniformTime"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("boomerangBackAccel"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("boomerangBackAccelTime"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("boomerangBackDecel"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("boomerangBackDecelTime"));
+                                    }
+                                }
+
+                            }
+                        }
+                    }
+                }
+
+                // 攻击叠加运动模式（保持不变）
+                var spMode = spAttack.FindPropertyRelative("attackMotionMode");
+                EditorGUILayout.PropertyField(spMode, new GUIContent("Mode"));
+                var mode = (AttackMotionMode)spMode.enumValueIndex;
+
+                if (mode == AttackMotionMode.Move)
+                {
+                    if (Fold($"discover.attacks.{index}.attackMoveMelee", "移动中攻击（Melee）", false))
+                    {
+                        using (new EditorGUI.IndentLevelScope())
+                        {
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackmoveSpeedMelee"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackaccelerationMelee"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackaccelerationTimeMelee"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackdecelerationMelee"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackdecelerationTimeMelee"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackmoveDurationMelee"));
+                        }
+                    }
+                    if (Fold($"discover.attacks.{index}.attackMoveRanged", "移动中攻击（Ranged）", false))
+                    {
+                        using (new EditorGUI.IndentLevelScope())
+                        {
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackmoveSpeedRanged"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackaccelerationRanged"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackaccelerationTimeRanged"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackdecelerationRanged"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackdecelerationTimeRanged"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackmoveDurationRanged"));
+                        }
+                    }
+                }
+                else if (mode == AttackMotionMode.Jump)
+                {
+                    if (Fold($"discover.attacks.{index}.attackJumpMelee", "跳跃中攻击（Melee）", false))
+                    {
+                        using (new EditorGUI.IndentLevelScope())
+                        {
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackjumpSpeedMelee"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackjumpHeightMelee"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackgravityScaleMelee"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackjumpDurationMelee"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackjumpRestDurationMelee"));
+                        }
+                    }
+                    if (Fold($"discover.attacks.{index}.attackJumpRanged", "跳跃中攻击（Ranged）", false))
+                    {
+                        using (new EditorGUI.IndentLevelScope())
+                        {
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackjumpSpeedRanged"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackjumpHeightRanged"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackgravityScaleRanged"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackjumpDurationRanged"));
+                            EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackjumpRestDurationRanged"));
+                        }
+                    }
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox("未选择叠加运动：本次攻击不附加位移/跳跃，仅播放攻击动画与事件。", MessageType.Info);
+                }
+            }
+        }
+    }
+    
     private void DrawIOButtons()
     {
         EditorGUILayout.Space();
@@ -515,21 +776,18 @@ public class MonsterConfigEditor : Editor
         EditorGUILayout.EndHorizontal();
     }
 
-    // ========== UI Helpers ==========
+    // ===== 通用UI工具 =====
     private static void Header(string title)
     {
         EditorGUILayout.Space();
         EditorGUILayout.LabelField(title, EditorStyles.boldLabel);
     }
-
     private static void Section(string title)
     {
         EditorGUILayout.Space(2);
         EditorGUILayout.LabelField(title, EditorStyles.miniBoldLabel);
     }
-
     private static void SpaceMinor() => EditorGUILayout.Space(4);
-
     private bool Fold(string key, string title, bool defaultState)
     {
         int id = target != null ? target.GetInstanceID() : 0;

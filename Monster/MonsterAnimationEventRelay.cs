@@ -81,4 +81,40 @@ public class MonsterAnimationEventRelay : MonoBehaviour
         if (debugEvents) Debug.Log("[Relay] findjumpRestEffectPrefab()");
         controller?.OnFxFindJumpRest();
     }
+
+    // =============== 攻击：近战/远程 事件 ===============
+
+    // 近战：播放攻击特效（严格校验）
+    public void attackEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] attackEffectPrefab()");
+        controller?.OnFxAttack();
+    }
+
+    // 近战：开启/关闭命中窗口（由动画关键帧调用）
+    public void attackAnimationstart()
+    {
+        if (debugEvents) Debug.Log("[Relay] attackAnimationstart()");
+        controller?.OnAttackAnimationStart();
+    }
+
+    public void attackAnimationend()
+    {
+        if (debugEvents) Debug.Log("[Relay] attackAnimationend()");
+        controller?.OnAttackAnimationEnd();
+    }
+
+    // 远程：播放远程攻击特效（严格校验）
+    public void attackFarEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] attackFarEffectPrefab()");
+        controller?.OnFxAttackFar();
+    }
+
+    // 远程：真正发射投射物（频率完全由关键帧触发次数决定）
+    public void attackFarFire()
+    {
+        if (debugEvents) Debug.Log("[Relay] attackFarFire()");
+        controller?.OnAttackFarFire();
+    }
 }

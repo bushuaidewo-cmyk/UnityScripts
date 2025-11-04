@@ -291,6 +291,9 @@ public class PlayerController : MonoBehaviour
         rb = GetComponent<Rigidbody2D>();
         if (!relay) relay = GetComponentInChildren<AnimationEventRelay>();
 
+        // 开启玩家刚体插值，让渲染帧看到连续位置（相机 LateUpdate 会更稳）
+        if (rb) rb.interpolation = RigidbodyInterpolation2D.Interpolate;
+
         if (standingCollider) standingCollider.enabled = true;
         if (duckCollider) duckCollider.enabled = false;
         colliderDuckActive = false;

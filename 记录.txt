@@ -327,15 +327,25 @@ FX_BackRest / BackRestPoint
 FX_BackJump / BackJumpPoint
 FX_BackJumpRest / BackJumpRestPoint
 
+
+发现阶段，再倒退或后退中给一个选项，就在backRange的下方
+如果勾上就是怪物靠近墙壁或悬崖就自动朝玩家方向跳跃，如果不勾保持现有代码已有原状态
+
+另外reverseRange阶段会让怪物休息的时候朝向玩家，这个可以去掉，休息的时候不在朝向玩家
+
+发现阶段后退和倒退距离休息期间，要关闭后退和倒退的检测距离，例如：后退和倒退移动结束以后，进入休息时间10S，这10S内后退和倒退距离检测关闭，这时候如果玩家再发现距离内， 就执行发现移动或发现跳跃，10S以后玩家还在后退和倒退距离检测内，就执行后退倒退移动或跳跃
+
+
 再发现阶段里还有攻击
 
 攻击列表+ 添加  攻击0 elevent0自己循环，如果添加了攻击0 elevent0、攻击1 elevent1，攻击0 elevent0与攻击1 elevent1按顺序循环
 elevent0 下的参数：
-攻击类型：近战攻击或远程攻击
+攻击类型：近战攻击  和 远程攻击
+
 
 1近战攻击 
 近战攻击距离：近战检测距离，只要再这个距离内，怪物就要攻击，播放攻击动画（需要绘制近战检测距离的圆圈 黄色，不需要定制颜色，直接给颜色）
-攻击时间：攻击时间内怪物发出攻击，如果攻击时间<攻击动画时间，强制攻击结束，进入攻击休息时间；如果攻击时间>攻击动画时间，只攻击一次，停留在攻击最后一帧，直到攻击时间结束
+攻击时间：攻击时间内怪物发出攻击，如果设定攻击时间<攻击动画时间，强制攻击结束，进入攻击休息时间；如果设定攻击时间>攻击动画时间，设定攻击时间除攻击动画时间 向上取整，结束攻击动画再计算攻击休息时间
 攻击休息时间：攻击时间结束后，进入攻击休息时间，关闭攻击距离检测，发现移动距离 或 发现后退移动距离 或 发现倒退移动距离自动生效，例如：攻击最后一帧结束以后，间隔10S，10S内攻击距离检测关闭，这时候如果玩家再发现后退移动距离内 就执行发现后退 或者 再发现倒退移动距离内 就发现倒退 或者 发现移动距离内 就发现移动
 攻击动画资源：attackAnimation
 
@@ -347,21 +357,30 @@ elevent0 下的参数：
 攻击动画播放特效关键帧 ：attackEffectPrefab    
 是新的资源，与elevent0不同）
 
+近战攻击
+动画attackAnimation 里 对应播放特效关键帧 attackEffectPrefab    ，关键帧对应的特效是attackEffectPrefab    
+缺少动画attackAnimation不能播放特效attackEffectPrefab
+缺少关键帧attackEffectPrefab不能播放特效attackEffectPrefab
+
 近战攻击伤害检测体：可以给怪物新子物体指定collider2d istrigger ，并且再attackAnimation 动画内指定function 攻击判定帧 attackAnimationstart、attackAnimationend，再此期间攻击判定
 
 攻击中有移动中攻击或跳跃中攻击：
 
 移动中攻击：
-播放攻击动画的同时可以给怪物移动速度
+播放攻击动画的同时可以给怪物移动速度，这个没有资源，只提供移动
 参数：
-attackmoveSpeed、attackacceleration、attackaccelerationTime、attackdeceleration、attackdecelerationTime ，这几个参数只在攻击时间内有效，攻击休息时间失效，这些只提供移动效果，没有动画特效，这里的移动中攻击的移动逻辑同巡逻移动底层逻辑一致。
+attackmoveSpeed、attackacceleration、attackaccelerationTime、attackdeceleration、attackdecelerationTime ，attackmoveDuration，
+这几个参数只在攻击时间内有效，攻击休息时间失效，这些只提供移动效果，没有动画特效，这里的移动中攻击的移动逻辑同巡逻移动底层逻辑一致。
 举例：由速度0加速1S后到匀速速度1，匀速速度1再匀速移动1S，由匀速速度1减到0速需要1S
 
-
 跳跃中攻击：
-播放攻击动画的同时可以给怪物跳跃能力
+播放攻击动画的同时可以给怪物跳跃能力，这个没有资源，只提供跳跃
 参数：
-attackjumpSpeed 、attackjumpHeight、  attackgravityScale、 attackjumpDuration、attackjumpRestDuration ，当攻击动画时间<跳跃时间 = 空中攻击最后一帧一直保持到落地，落地后才算完成一次攻击；当攻击动画时间>跳跃时间 = 攻击结束最后一帧算完成一次攻击 ；这些只提供跳跃效果，没有动画特效，这里的跳跃中攻击的跳跃逻辑同巡逻移跳跃层逻辑一致
+attackjumpSpeed 、attackjumpHeight、  attackgravityScale、 attackjumpDuration、attackjumpRestDuration ，当设定跳跃时间>攻击动画时间 = 空中攻击最后一帧一直保持到落地，落地后才算完成一次攻击；当设定跳跃时间<攻击动画时间 = 攻击结束最后一帧算完成一次攻击 ；这些只提供跳跃效果，没有动画特效，这里的跳跃中攻击的跳跃逻辑同巡逻移跳跃层逻辑一致
+
+
+
+
 
 2远程攻击
 远程攻击距离：远程攻击检测距离，只要再这个距离内，怪物就要攻击，播放远程攻击动画（需要绘制远程攻击检测距离的圆圈 蓝色，不需要定制颜色，直接给颜色）
@@ -435,6 +454,12 @@ sin 参数：振幅（例如：上下摆动2米）和频率（例如：每秒摆
 向下力
 最高点
 是否一直朝着移动方向，如果是沿着移动方向旋转（自动面向路径切线），如果否不改变自身朝向
+
+飞行物的moveType的类型：直线/S型/抛物线/半径旋转/回旋镖/跟踪，
+再一个类型里，不需要分开
+
+举个例子：给了速度就是沿直线移动，再给半径就可以沿着半径画圆旋转，如果sin就可以S型移动，如果加重力等就可以抛物线，还可以增加回旋飞行模式
+
 
 远程攻击飞行物命中墙壁或玩家会爆炸
 参数：爆炸范围、爆炸伤害、爆炸持续时间(持续时间内一直伤害)、伤害间隔（多少时间伤害一次）
@@ -520,7 +545,7 @@ mode=Jump 时仅响应 findjumpEffectPrefab / findjumpRestEffectPrefab
 
 
 
-
+测试到 抛物线重力 
 
 
 

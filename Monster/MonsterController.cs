@@ -143,10 +143,11 @@ public class MonsterController : MonoBehaviour
     private enum FxSlot
     {
         Spawn, Idle, Move, Rest, Jump, JumpRest,
-        FindMove, FindRest, FindJump, FindJumpRest
+        FindMove, FindRest, FindJump, FindJumpRest,
+        Attack, AttackFar
     }
 
-    // ================== 发现 V2 运行时字段 ==================
+    // ================== 发现 运行 ==================
     private enum DiscoveryBand { Follow, Retreat, Backstep }
     private List<int> discoveryOrder = null;
     private int discoveryOrderPos = 0;
@@ -155,7 +156,7 @@ public class MonsterController : MonoBehaviour
     private DiscoveryBand currentBand = DiscoveryBand.Follow;
     private bool discoveryRestJustFinished = false;
 
-    // 新增：发现-跳跃的“生命周期标记”和“起跳时档位快照”
+    // 发现-跳跃的“生命周期标记”和“起跳时档位快照”
     private bool discoveryJumpActive = false;
     private DiscoveryBand bandAtJumpStart = DiscoveryBand.Follow;
 
@@ -166,6 +167,10 @@ public class MonsterController : MonoBehaviour
     [Tooltip("档位最小驻留时间（秒）；驻留期内不允许切档")]
     public float bandMinDwellTime = 0.35f;
     private float bandDwellTimer = 0f;
+
+    // Follow<->Backstep 切换延迟（运行时计时器）
+    private float followToBackDelayTimer = 0f;
+    private float backToFollowDelayTimer = 0f;
 
     // 发现：映射为“运行时镜像”的 PatrolMovement（直线/跳跃各三档）
     private PatrolMovement d2_move_follow, d2_move_retreat, d2_move_back;
@@ -219,6 +224,44 @@ public class MonsterController : MonoBehaviour
     //后退/倒退检测抑制计时器（秒）
     private float backBandSuppressTimer = 0f;
 
+    // ================== 发现 攻击 ==================
+
+    // 攻击特效锚点
+    [Header("攻击特效锚点")]
+    [SerializeField] private Transform fxAttackPoint;
+    [SerializeField] private Transform fxAttackFarPoint;
+
+    // ================== 攻击运行时（MVP） ==================
+    private int attackCycleIndex = 0;           // 攻击事件轮询序号（预留：二期可换策略）
+    private bool inAttack = false;
+    private float attackTimer = 0f;
+    private float attackRestCooldown = 0f;      // 攻击休息期间屏蔽攻击检测
+    private AttackEventV2 activeAttack = null;  // 当前攻击配置
+    private bool rangedFiredThisAttack = false; // 远程只发一次（由关键帧触发）
+    private string activeAttackAnimName = null; // 当前攻击动画名（用于“停最后一帧”）
+    private float attackAnimFreezeSpeedBackup = 1f;
+    private bool attackAnimFrozen = false;
+    private int attackFaceSign = +1;            // 攻击期间锁面向
+
+    // 攻击期间的叠加移动/跳跃（临时 movement）
+    private PatrolMovement attackMoveRuntime = null;
+    private PatrolMovement attackJumpRuntime = null;
+
+    // 命中体引用（近战）
+    private Collider2D meleeHitboxCached = null;
+
+    // 攻击循环（动画驱动）相关
+    private int attackCyclesPlanned = 1;   // 本次攻击计划播放几次（= repeatedHitsCount 或 1）
+    private int attackCyclesDone = 0;      // 已完成的循环次数（完成一次动画播完计数+1）
+                                           // 远程：每个动画循环内只发一次的保护
+    private bool rangedFiredInCycle = false;
+
+    // 攻击叠加移动的每循环预算与状态
+    private float attackMoveTotalPerCycle = 0f; // 本轮应移动的总时间（= attackmoveDuration）
+    private float attackMoveTimeLeft = 0f;      // 本轮剩余可移动时间
+
+    // 本次攻击的执行模式（近战/远程），由距离决定
+    private AttackType attackExecType = AttackType.Melee;
 
     void Start()
     {
@@ -271,6 +314,8 @@ public class MonsterController : MonoBehaviour
 
         turnCooldown = 1f;
         StartCoroutine(StateMachine());
+        rb.interpolation = RigidbodyInterpolation2D.Interpolate;
+        rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
     }
 
     //Update() 内递减计时器
@@ -289,11 +334,29 @@ public class MonsterController : MonoBehaviour
         // 后退/倒退距离抑制计时器递减
         if (backBandSuppressTimer > 0f) backBandSuppressTimer -= Time.deltaTime;
 
+        if (attackRestCooldown > 0f) attackRestCooldown -= Time.deltaTime;
+
+        // 只有在“最后一个循环已播放完”才冻结；否则由 AttackUpdate 负责重播下一次循环
+        if (inAttack && !string.IsNullOrEmpty(activeAttackAnimName) && animator)
+        {
+            var info = animator.GetCurrentAnimatorStateInfo(0);
+            if (info.IsName(activeAttackAnimName) && info.normalizedTime >= 1f && !attackAnimFrozen)
+            {
+                int planned = Mathf.Max(1, activeAttack != null && activeAttack.repeatedHitsCount > 0 ? activeAttack.repeatedHitsCount : 1);
+                if (attackCyclesDone >= planned - 1)
+                {
+                    attackAnimFreezeSpeedBackup = animator.speed;
+                    animator.speed = 0f;
+                    attackAnimFrozen = true;
+                }
+                // 否则：非最后一循环，不在这里冻结，交给 AttackUpdate 去重播
+            }
+        }
+
         // 若配置关闭，确保不生效
         var dcfgU = config != null ? config.discoveryV2Config : null;
         if (dcfgU != null && !dcfgU.suppressBackBandDuringRest)
             backBandSuppressTimer = 0f;
-
 
         if (autoJumpRearmAfterLanding && !isJumping && !inAutoJumpPermitZone && ignoreCliffFramesLeft <= 0)
         {
@@ -339,6 +402,13 @@ public class MonsterController : MonoBehaviour
         }
     }
 
+   
+    void FixedUpdate()
+    {
+        if (isJumping && activeJumpMove != null)
+            JumpUpdate(activeJumpMove);
+    }
+
     void IdleUpdate()
     {
         if (!string.IsNullOrEmpty(config.spawnConfig.idleAnimation))
@@ -377,7 +447,7 @@ public class MonsterController : MonoBehaviour
 
         if (isJumping && activeJumpMove != null)
         {
-            JumpUpdate(activeJumpMove);
+            
             return;
         }
 
@@ -415,10 +485,7 @@ public class MonsterController : MonoBehaviour
                     return;
                 }
             }
-            else
-            {
-                JumpUpdate(move);
-            }
+            
             return;
         }
 
@@ -478,6 +545,21 @@ public class MonsterController : MonoBehaviour
 
         if (d > dcfg.findRange) { state = MonsterState.Patrol; return; }
 
+        if (!inAttack && attackRestCooldown <= 0f && dcfg.attacks != null && dcfg.attacks.Count > 0)
+        {
+            TryStartAttack(dcfg, d, GetPlayerDistPos(), GetMonsterDistPos());
+            if (inAttack)
+            {
+                AttackUpdate();
+                return;
+            }
+        }
+        else if (inAttack)
+        {
+            AttackUpdate();
+            return;
+        }
+
         // 带选择
         DiscoveryBand wantBand = ComputeWantBandWithHysteresis(d, dcfg);
 
@@ -485,9 +567,60 @@ public class MonsterController : MonoBehaviour
         if (dcfg.suppressBackBandDuringRest && backBandSuppressTimer > 0f && wantBand != DiscoveryBand.Follow)
             wantBand = DiscoveryBand.Follow;
 
+        // Follow -> Backstep 的进入延迟
+        if (currentBand == DiscoveryBand.Follow)
+        {
+            if (wantBand == DiscoveryBand.Backstep)
+            {
+                float min = Mathf.Max(0f, dcfg.delayFollowToBackstepMin);
+                float max = Mathf.Max(min, dcfg.delayFollowToBackstepMax);
+                if (max > 0f)
+                {
+                    if (followToBackDelayTimer <= 0f)
+                        followToBackDelayTimer = Random.Range(min, max); // 只在触发时随机一次
+                    else
+                        followToBackDelayTimer -= Time.deltaTime;
 
-        bool bandChangeAllowedNow = !(activeDiscoveryEvent?.mode == DiscoveryV2Mode.Jump && isJumping)
-                                    && !isResting && (bandDwellTimer <= 0f) && (currentBand != wantBand);
+                    if (followToBackDelayTimer > 0f)
+                        wantBand = DiscoveryBand.Follow; // 计时未到，保持 Follow
+                    else
+                        followToBackDelayTimer = 0f;     // 计时结束，允许切换
+                }
+            }
+            else
+            {
+                // 条件不再成立，清空计时器
+                followToBackDelayTimer = 0f;
+            }
+        }
+
+        // Backstep -> Follow 的进入延迟
+        else if (currentBand == DiscoveryBand.Backstep)
+        {
+            if (wantBand == DiscoveryBand.Follow)
+            {
+                float min = Mathf.Max(0f, dcfg.delayBackstepToFollowMin);
+                float max = Mathf.Max(min, dcfg.delayBackstepToFollowMax);
+                if (max > 0f)
+                {
+                    if (backToFollowDelayTimer <= 0f)
+                        backToFollowDelayTimer = Random.Range(min, max); // 只在触发时随机一次
+                    else
+                        backToFollowDelayTimer -= Time.deltaTime;
+
+                    if (backToFollowDelayTimer > 0f)
+                        wantBand = DiscoveryBand.Backstep; // 计时未到，保持 Backstep
+                    else
+                        backToFollowDelayTimer = 0f;       // 计时结束，允许切换
+                }
+            }
+            else
+            {
+                backToFollowDelayTimer = 0f;
+            }
+        }
+
+        bool bandChangeAllowedNow = !(activeDiscoveryEvent?.mode == DiscoveryV2Mode.Jump && isJumping) && !isResting && (bandDwellTimer <= 0f) && (currentBand != wantBand);
 
         if (bandChangeAllowedNow)
         {
@@ -524,12 +657,11 @@ public class MonsterController : MonoBehaviour
         {
             if (isJumping && activeJumpMove != null)
             {
-                JumpUpdate(activeJumpMove);
-
+                
                 return;
             }
 
-            var move = GetD2MoveFor(currentBand);
+            
 
             bool inFaceLock = obstacleTurnFaceLockTimer > 0f;
 
@@ -565,8 +697,7 @@ public class MonsterController : MonoBehaviour
             {
                 if (isJumping && activeJumpMove != null)
                 {
-                    JumpUpdate(activeJumpMove);
-
+                    
                     return;
                 }
             }
@@ -583,19 +714,14 @@ public class MonsterController : MonoBehaviour
                     allowTurn = false; stopAtCliff = true; break;
             }
 
+            var move = GetD2MoveFor(currentBand);
+
             bool suppressTurnInZone = (activeDiscoveryEvent.obstacleTurnMode != ObstacleTurnMode.AutoTurn);
 
             obstacleTurnedThisFrame = false;
 
-            discoveryRestJustFinished = StraightTickCommon(
-                move,
-                moveSign,
-                useWaypoints: false,
-                useMoveDirForProbes: true,
-                allowTurnOnObstacle: allowTurn,
-                stopAtCliffEdgeWhenNoTurn: stopAtCliff,
-                suppressTurnInAutoJumpZone: suppressTurnInZone
-            );
+            discoveryRestJustFinished = StraightTickCommon(move, moveSign, useWaypoints: false, useMoveDirForProbes: true, allowTurnOnObstacle: allowTurn, stopAtCliffEdgeWhenNoTurn: stopAtCliff,
+                suppressTurnInAutoJumpZone: suppressTurnInZone);
 
             // 仅当开关开启时执行转换（Move 分支：使用 moveSet.back.backrestMin/Max）
             if (dcfg.suppressBackBandDuringRest
@@ -607,12 +733,16 @@ public class MonsterController : MonoBehaviour
                 float max = Mathf.Max(min, activeDiscoveryEvent.moveSet.back.backrestMax);
                 backBandSuppressTimer = (max > 0f) ? Random.Range(min, max) : 0f;
 
+                // 立即允许切档，并把带位压到 Follow（UI/朝向立刻呈现 Follow）
+                bandDwellTimer = 0f;
+                currentBand = DiscoveryBand.Follow;
+
+                // 打断 Back/Retreat 的休息，按旧版策略推进事件
                 ResetStraightRuntime(move);
                 discoveryRestJustFinished = true;
             }
 
             
-
             // 当处于 Retreat/Backstep 且配置 enableBackAutoJumpOnObstacle 开启时，
             // 如果检测到墙/悬崖则尝试触发一次向玩家方向的跳跃（使用当前事件的 jumpSet）
             if (dcfg != null && dcfg.enableBackAutoJumpOnObstacle && (currentBand == DiscoveryBand.Retreat || currentBand == DiscoveryBand.Backstep))
@@ -660,8 +790,7 @@ public class MonsterController : MonoBehaviour
         {
             if (isAutoJumping && activeJumpMove != null)
             {
-                JumpUpdate(activeJumpMove);
-
+                
                 return;
             }
 
@@ -702,8 +831,7 @@ public class MonsterController : MonoBehaviour
             {
                 if (isJumping && activeJumpMove != null)
                 {
-                    JumpUpdate(activeJumpMove);
-
+                    
                     return;
                 }
             }
@@ -723,12 +851,9 @@ public class MonsterController : MonoBehaviour
                     inJumpRestPhase = false;
                     if (jmove != null) jmove.rtRestTimer = 0f;
                     discoveryRestJustFinished = true;
-
                     AdvanceDiscoveryEvent();
                     return;
                 }
-
-                
 
                 if (!string.IsNullOrEmpty(jmove.jumpRestAnimation))
                     PlayAnimIfNotCurrent(jmove.jumpRestAnimation);
@@ -757,17 +882,378 @@ public class MonsterController : MonoBehaviour
                     EnsureJumpPlan(jmove, useAutoParams: false);
                     BeginOneJump(jmove, useAutoParams: false, moveDirOverride: moveDir);
                 }
-                else
-                {
-                    JumpUpdate(jmove);
-                }
             }
 
             if (discoveryRestJustFinished)
                 AdvanceDiscoveryEvent();
         }
+    }
+
+    // 在一个 AttackEventV2 里同时支持近战与远程：先判近战，再判远程
+    private void TryStartAttack(DiscoveryV2Config dcfg, float dToPlayer, Vector2 playerPos, Vector2 monsterPos)
+    {
+        if (dcfg.attacks == null || dcfg.attacks.Count == 0) return;
+
+        // 遍历可用攻击条目，选择第一个满足距离的
+        foreach (var a in dcfg.attacks)
+        {
+            if (a == null) continue;
+
+            bool meleeReady = (a.meleeRange > 0f)
+                              && dToPlayer <= a.meleeRange
+                              && !string.IsNullOrEmpty(a.attackAnimation);
+
+            bool rangedReady = (a.rangedRange > 0f)
+                               && dToPlayer <= a.rangedRange
+                               && !string.IsNullOrEmpty(a.attackFarAnimation)
+                               && a.projectile != null;
+
+            // 近战优先
+            if (meleeReady)
+            {
+                attackExecType = AttackType.Melee;
+                StartAttack(a, playerPos, monsterPos);
+                return;
+            }
+            if (rangedReady)
+            {
+                attackExecType = AttackType.Ranged;
+                StartAttack(a, playerPos, monsterPos);
+                return;
+            }
+        }
+    }
+
+    private void StartAttack(AttackEventV2 a, Vector2 playerPos, Vector2 monsterPos)
+    {
+        inAttack = true;
+        activeAttack = a;
+        attackTimer = Mathf.Max(0.01f, a.attackDuration);
+        rangedFiredThisAttack = false;
+        rangedFiredInCycle = false;
+        attackAnimFrozen = false;
+        activeAttackAnimName = null;
+        if (animator) animator.speed = 1f;
+
+        // 锁面向
+        attackFaceSign = (playerPos.x - monsterPos.x >= 0f) ? +1 : -1;
+        ForceFaceSign(attackFaceSign);
+
+        // 播动画（根据执行模式）
+        if (attackExecType == AttackType.Melee && !string.IsNullOrEmpty(a.attackAnimation))
+        {
+            activeAttackAnimName = a.attackAnimation;
+            animator.CrossFadeInFixedTime(a.attackAnimation, 0f, 0, 0f);
+            animator.Update(0f);
+        }
+        else if (attackExecType == AttackType.Ranged && !string.IsNullOrEmpty(a.attackFarAnimation))
+        {
+            activeAttackAnimName = a.attackFarAnimation;
+            animator.CrossFadeInFixedTime(a.attackFarAnimation, 0f, 0, 0f);
+            animator.Update(0f);
+        }
+
+        // ========== 叠加“移动中攻击”：按执行模式取值 ==========
+        attackMoveRuntime = null;
+        if (a.attackMotionMode == AttackMotionMode.Move)
+        {
+            float spd = (attackExecType == AttackType.Melee) ? a.attackmoveSpeedMelee : a.attackmoveSpeedRanged;
+            float acc = (attackExecType == AttackType.Melee) ? a.attackaccelerationMelee : a.attackaccelerationRanged;
+            float accT = (attackExecType == AttackType.Melee) ? a.attackaccelerationTimeMelee : a.attackaccelerationTimeRanged;
+            float dec = (attackExecType == AttackType.Melee) ? a.attackdecelerationMelee : a.attackdecelerationRanged;
+            float decT = (attackExecType == AttackType.Melee) ? a.attackdecelerationTimeMelee : a.attackdecelerationTimeRanged;
+            float dur = (attackExecType == AttackType.Melee) ? a.attackmoveDurationMelee : a.attackmoveDurationRanged;
+
+            // 回退老字段（兼容旧数据）
+            if (spd <= 0f && a.attackmoveSpeed > 0f) spd = a.attackmoveSpeed;
+            if (acc == 0f && a.attackacceleration != 0f) acc = a.attackacceleration;
+            if (accT == 0f && a.attackaccelerationTime != 0f) accT = a.attackaccelerationTime;
+            if (dec == 0f && a.attackdeceleration != 0f) dec = a.attackdeceleration;
+            if (decT == 0f && a.attackdecelerationTime != 0f) decT = a.attackdecelerationTime;
+            if (dur <= 0f && a.attackmoveDuration > 0f) dur = a.attackmoveDuration;
+
+            if (spd > 0f && dur > 0f)
+            {
+                float totalMoveTime = Mathf.Max(0f, dur);
+                float accelTime = Mathf.Min(Mathf.Max(0f, accT), totalMoveTime);
+                float decelTime = Mathf.Min(Mathf.Max(0f, decT), Mathf.Max(0f, totalMoveTime - accelTime));
+                float cruiseTime = Mathf.Max(0f, totalMoveTime - accelTime - decelTime);
+
+                attackMoveRuntime = new PatrolMovement
+                {
+                    type = MovementType.Straight,
+                    moveSpeed = spd,
+                    acceleration = acc,
+                    deceleration = dec,
+                    accelerationTime = accelTime,
+                    decelerationTime = decelTime,
+                    moveDuration = cruiseTime,
+                    restMin = 0f,
+                    restMax = 0f,
+                    moveAnimation = null,
+                    restAnimation = null
+                };
+                attackMoveRuntime.rtStraightPhase = StraightPhase.None;
+
+                attackMoveTotalPerCycle = totalMoveTime;
+                attackMoveTimeLeft = attackMoveTotalPerCycle;
+            }
+        }
+
+        // ========== 叠加“跳跃中攻击”：按执行模式取值 ==========
+        attackJumpRuntime = null;
+        if (a.attackMotionMode == AttackMotionMode.Jump && isGroundedMC && !isJumping)
+        {
+            float jSpd = (attackExecType == AttackType.Melee) ? a.attackjumpSpeedMelee : a.attackjumpSpeedRanged;
+            float jH = (attackExecType == AttackType.Melee) ? a.attackjumpHeightMelee : a.attackjumpHeightRanged;
+            float jG = (attackExecType == AttackType.Melee) ? a.attackgravityScaleMelee : a.attackgravityScaleRanged;
+            float jDur = (attackExecType == AttackType.Melee) ? a.attackjumpDurationMelee : a.attackjumpDurationRanged;
+            float jRest = (attackExecType == AttackType.Melee) ? a.attackjumpRestDurationMelee : a.attackjumpRestDurationRanged;
+
+            // 兼容旧字段
+            if (jSpd <= 0f && a.attackjumpSpeed > 0f) jSpd = a.attackjumpSpeed;
+            if (jH <= 0f && a.attackjumpHeight > 0f) jH = a.attackjumpHeight;
+            if (Mathf.Approximately(jG, 1f) && !Mathf.Approximately(a.attackgravityScale, 1f)) jG = a.attackgravityScale;
+            if (jDur <= 0f && a.attackjumpDuration > 0f) jDur = a.attackjumpDuration;
+            if (jRest <= 0f && a.attackjumpRestDuration > 0f) jRest = a.attackjumpRestDuration;
+
+            if ((jSpd > 0f || jH > 0f))
+            {
+                attackJumpRuntime = new PatrolMovement
+                {
+                    type = MovementType.Jump,
+                    jumpSpeed = jSpd,
+                    jumpHeight = jH,
+                    gravityScale = Mathf.Max(0.01f, jG),
+                    jumpDuration = jDur,
+                    jumprestMin = Mathf.Max(0f, jRest),
+                    jumprestMax = Mathf.Max(0f, jRest),
+                    // 跳中攻击时也要用当前执行模式的动画
+                    jumpAnimation = (attackExecType == AttackType.Melee) ? a.attackAnimation : a.attackFarAnimation
+                };
+                EnsureJumpPlan(attackJumpRuntime, useAutoParams: false);
+                BeginOneJump(attackJumpRuntime, useAutoParams: false, moveDirOverride: attackFaceSign);
+            }
+        }
+    }
+
+    private void AttackUpdate()
+    {
+        if (!inAttack || activeAttack == null) return;
+
+        // 锁面向
+        ForceFaceSign(attackFaceSign);
+
+        // 每轮动画播放完毕 → 若还有剩余轮次则立即重播；否则在 Update() 那边会冻结在最后一帧
+        if (!string.IsNullOrEmpty(activeAttackAnimName) && animator)
+        {
+            var info = animator.GetCurrentAnimatorStateInfo(0);
+            if (info.IsName(activeAttackAnimName) && info.normalizedTime >= 1f)
+            {
+                int planned = attackCyclesPlanned;
+                if (attackCyclesDone < planned - 1 && attackTimer > 0f)
+                {
+                    // 完成一轮，进入下一轮
+                    attackCyclesDone++;
+
+                    // 解除冻结并从头播放
+                    if (attackAnimFrozen)
+                    {
+                        animator.speed = attackAnimFreezeSpeedBackup;
+                        attackAnimFrozen = false;
+                    }
+                    animator.Play(activeAttackAnimName, 0, 0f);
+                    animator.Update(0f);
+
+                    // 重置“本轮”的远程发射保护
+                    rangedFiredInCycle = false;
+
+                    // 重置“本轮”的移动段（attackmoveDuration 再跑一遍）
+                    if (attackMoveRuntime != null)
+                    {
+                        ResetStraightRuntime(attackMoveRuntime);
+                        attackMoveTimeLeft = attackMoveTotalPerCycle; // 重置本轮预算
+                    }
+                }
+                // 否则：最后一轮，保持现状（Update() 会把动画冻结在最后一帧直到 attackTimer 结束）
+            }
+        }
+
+        // 跳中攻击优先驱动 —— 放在移动逻辑之前
+        if (attackJumpRuntime != null && isJumping){}
+
+        // 移动中攻击（禁止自动转向/落崖）
+        if (attackMoveRuntime != null && !isJumping)
+        {
+            if (attackMoveTimeLeft > 0f)
+            {
+                StraightTickCommon(
+                    attackMoveRuntime,
+                    dirSign: attackFaceSign,
+                    useWaypoints: false,
+                    useMoveDirForProbes: true,
+                    allowTurnOnObstacle: false,
+                    stopAtCliffEdgeWhenNoTurn: true,
+                    suppressTurnInAutoJumpZone: true
+                );
+
+                attackMoveTimeLeft -= Time.deltaTime;
+                if (attackMoveTimeLeft <= 0f)
+                {
+                    // 预算耗尽：立刻停止水平移动，并避免 StraightTickCommon 在同一轮内重新启动
+                    ResetStraightRuntime(attackMoveRuntime);
+                    rb.velocity = new Vector2(0f, rb.velocity.y);
+                    desiredSpeedX = 0f;
+                    ApplySlopeIdleStopIfNoMove();
+                }
+            }
+            else
+            {
+                // 预算已为0：保持不动，直到下一轮动画开始时重置预算
+                rb.velocity = new Vector2(0f, rb.velocity.y);
+                desiredSpeedX = 0f;
+                ApplySlopeIdleStopIfNoMove();
+            }
+        }
+        else if (!isJumping) // 关键：只有“不在跳跃”时才清零 X
+        {
+            // 无叠加移动：维持X速度为0
+            rb.velocity = new Vector2(0f, rb.velocity.y);
+            desiredSpeedX = 0f;
+            ApplySlopeIdleStopIfNoMove();
+        }
+
+        // 计时与强制收尾
+        attackTimer -= Time.deltaTime;
+        if (attackTimer <= 0f)
+        {
+            EndAttack();
+        }
+    }
+    private void EndAttack()
+    {
+        if (attackAnimFrozen && animator)
+        {
+            animator.speed = attackAnimFreezeSpeedBackup;
+        }
+
+        inAttack = false;
+        attackRestCooldown = (activeAttack != null) ? PickAttackRestTime(activeAttack) : 0f;
+
+        activeAttack = null;
+        activeAttackAnimName = null;
+
+        rangedFiredThisAttack = false;
+        rangedFiredInCycle = false;
+
+        attackMoveRuntime = null;
+        attackJumpRuntime = null;
+        meleeHitboxCached = null;
+
+        attackAnimFrozen = false;
+
+        attackCyclesPlanned = 1;
+        attackCyclesDone = 0;
+
+        attackMoveTotalPerCycle = 0f;
+        attackMoveTimeLeft = 0f;
+    }
+
+    private IEnumerator SpawnBurstProjectiles(Transform spawn, ProjectileConfig projCfg)
+    {
+        int count = Mathf.Max(1, projCfg.countPerBurst);
+        float gap = Mathf.Max(0f, projCfg.intraBurstInterval);
+        for (int i = 0; i < count; i++)
+        {
+            SpawnOneProjectile(spawn, projCfg, i, count);
+            if (i < count - 1 && gap > 0f)
+                yield return new WaitForSeconds(gap);
+        }
+    }
+
+    private void SpawnOneProjectile(Transform spawn, ProjectileConfig projCfg, int index, int total)
+    {
+        // 用“发射点 → 玩家瞄准点”的向量，避免因 MonsterDistPoint 高差造成抬头
+        Vector2 s = (Vector2)spawn.position;
+        Vector2 t = GetPlayerDistPos();
+
+        Vector2 baseDir;
+        if (projCfg.spawnAim == SpawnAimMode.TowardsPlayer)
+        {
+            baseDir = (t - s);
+            if (baseDir.sqrMagnitude <= 0.0001f) baseDir = Vector2.right * FacingSign();
+            baseDir.Normalize();
+        }
+        else // HorizontalToPlayer：只看水平差
+        {
+            float dx = t.x - s.x;
+            int sign = (Mathf.Abs(dx) < 0.0001f) ? FacingSign() : (dx >= 0f ? +1 : -1);
+            baseDir = new Vector2(sign, 0f);
+        }
+
+        // 扇形偏转
+        float angleBase = Mathf.Atan2(baseDir.y, baseDir.x) * Mathf.Rad2Deg;
+        float half = Mathf.Max(0f, projCfg.spreadAngle) * 0.5f;
+        float angleOffset = 0f;
+        if (projCfg.spreadAngle > 0f)
+        {
+            if (projCfg.spreadUniform && total > 1)
+            {
+                float step = projCfg.spreadAngle / (total - 1);
+                angleOffset = -half + step * index;
+            }
+            else
+            {
+                angleOffset = Random.Range(-half, half);
+            }
+        }
+        float angle = angleBase + angleOffset;
+        Vector2 shotDir = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)).normalized;
+
+        // 生成 GameObject 并初始化（保持你现有实现）
+        GameObject go = new GameObject("Projectile");
+        go.transform.position = spawn.position;
+
+        // 根：Kinematic 刚体（用于触发/碰撞），不加根 Collider；Collider 在可视预制上
+        var rb2d = go.AddComponent<Rigidbody2D>();
+        rb2d.bodyType = RigidbodyType2D.Kinematic;
+        rb2d.gravityScale = 0f;
+        rb2d.interpolation = RigidbodyInterpolation2D.None; // 与 Update 驱动一致
+
+        var beh = go.AddComponent<ProjectileBehaviour>();
+        beh.Init(player, projCfg, shotDir, groundLayer);
+
+        // 可视（子物体）；若自带刚体，移除；并把自转的目标设为该子物体
+        if (projCfg.FlygunEffectPrefab)
+        {
+            var fx = Instantiate(projCfg.FlygunEffectPrefab, go.transform.position, Quaternion.identity, go.transform);
+
+            var childRBs = fx.GetComponentsInChildren<Rigidbody2D>(includeInactive: true);
+            foreach (var crb in childRBs) Destroy(crb);
+
+            var ps = fx.GetComponentInChildren<ParticleSystem>(true);
+            if (ps) ps.Play();
+
+            // 告诉行为脚本：自旋目标为可视子物体（优先只转可视，不转根）
+            beh.SetSpinTarget(fx.transform);
+        }
+        else
+        {
+            // 没有可视预制：自旋目标回退为根
+            beh.SetSpinTarget(go.transform);
+        }
+
+        // 统一设置层
+        int projLayer = LayerMask.NameToLayer("Projectile");
+        if (projLayer >= 0) SetLayerRecursively(go, projLayer);
+    }
 
 
+    // 递归设层小工具
+    private void SetLayerRecursively(GameObject go, int layer)
+    {
+        go.layer = layer;
+        foreach (Transform c in go.transform) SetLayerRecursively(c.gameObject, layer);
     }
 
     private int StabilizeFaceSign(int wantFaceSign, float dxToPlayer)
@@ -1248,6 +1734,9 @@ public class MonsterController : MonoBehaviour
         activeDiscoveryEvent = dcfg.events[activeDiscoveryIndex];
 
         currentBand = DiscoveryBand.Follow; // 初次进入默认 Follow
+        // ：重置延迟计时器
+        followToBackDelayTimer = 0f;
+        backToFollowDelayTimer = 0f;
 
         if (resetRuntimes)
         {
@@ -1549,7 +2038,7 @@ public class MonsterController : MonoBehaviour
         }
 
         vY = Mathf.Sqrt(Mathf.Max(0.01f, 2f * hY * g));
-        transform.position += Vector3.up * 0.05f;
+        rb.position = rb.position + Vector2.up * 0.05f;
 
         // 关键：无论是否自动跳，都强制把跳跃动画从 0 重播
         if (!string.IsNullOrEmpty(move.jumpAnimation))
@@ -1563,7 +2052,7 @@ public class MonsterController : MonoBehaviour
         }
 
         currentJumpDirSign = moveDirOverride.HasValue ? System.Math.Sign(moveDirOverride.Value) : FacingSign();
-        rb.velocity = new Vector2(spdX * currentJumpDirSign, vY);
+        rb.velocity = new Vector2(spdX * currentJumpDirSign, 0f);
 
         move.rtUsingAutoJumpParams = useAutoParams;
 
@@ -1581,21 +2070,26 @@ public class MonsterController : MonoBehaviour
         float spdX = move.rtUsingAutoJumpParams ? Mathf.Max(move.autojumpSpeed, 0f)
                                             : Mathf.Max(move.jumpSpeed, 0f);
 
-        if (!move.rtUsingAutoJumpParams && turnCooldown <= 0f && CheckWallInDir(currentJumpDirSign))
+        // 建议不要在空中翻面（你已加 isGroundedMC 判定，OK）
+        if (!move.rtUsingAutoJumpParams && turnCooldown <= 0f && CheckWallInDir(currentJumpDirSign))   //撞墙就反转
+        //if (isGroundedMC && !move.rtUsingAutoJumpParams && turnCooldown <= 0f && CheckWallInDir(currentJumpDirSign))  //跳跃到地面才反转
         {
             TurnAround(ignoreCooldown: true);
             currentJumpDirSign = -currentJumpDirSign;
-            turnCooldown = 0.10f;
+            turnCooldown = 0.20f;
         }
 
         float g = (move.rtUsingAutoJumpParams ? Mathf.Max(0.01f, move.autogravityScale)
                                               : Mathf.Max(0.01f, move.gravityScale)) * BASE_G;
 
-        vY -= g * Time.deltaTime;
+        // 用 fixedDeltaTime
+        vY -= g * Time.fixedDeltaTime;
 
-        SafeMoveVertical(vY * Time.deltaTime, groundLayer);
+        // 本物理步：按 vY 推 Y；按 rb.velocity.x 推 X（SafeMoveVertical 内已合并 dx）
+        SafeMoveVertical(vY * Time.fixedDeltaTime, groundLayer);
 
-        rb.velocity = new Vector2(spdX * currentJumpDirSign, rb.velocity.y);
+        // X 用速度驱动，Y 由 SafeMoveVertical 管
+        rb.velocity = new Vector2(spdX * currentJumpDirSign, 0f);
 
         if (groundedAfterVerticalMove && vY <= 0f)
         {
@@ -1662,6 +2156,9 @@ public class MonsterController : MonoBehaviour
         groundedAfterVerticalMove = false;
         if (Mathf.Approximately(dy, 0f) || col == null) return;
 
+        // 本物理步应当前进的 X 距离（由当前 rb.velocity.x 决定）
+        float dx = rb.velocity.x * Time.fixedDeltaTime;
+
         float rayLen = Mathf.Abs(dy) + SKIN;
         bool down = dy < 0f;
 
@@ -1672,14 +2169,15 @@ public class MonsterController : MonoBehaviour
             float sign = Mathf.Sign(dy);
             float applied = Mathf.Min(Mathf.Abs(dy), allowed) * sign;
 
-            transform.Translate(Vector3.up * applied, Space.World);
+            // 原：只加 Y；改：同时把 dx 也加进去
+            rb.MovePosition(rb.position + new Vector2(dx, applied));
 
             if (down && allowed <= Mathf.Abs(dy))
                 groundedAfterVerticalMove = true;
         }
         else
         {
-            transform.Translate(Vector3.up * dy, Space.World);
+            rb.MovePosition(rb.position + new Vector2(dx, dy));
         }
     }
 
@@ -2050,11 +2548,13 @@ public class MonsterController : MonoBehaviour
             case FxSlot.Jump: return fxJumpPoint;
             case FxSlot.JumpRest: return fxJumpRestPoint;
 
-            // Find* 槽位全部公用通用锚点
             case FxSlot.FindMove: return fxMovePoint;
             case FxSlot.FindRest: return fxRestPoint;
             case FxSlot.FindJump: return fxJumpPoint;
             case FxSlot.FindJumpRest: return fxJumpRestPoint;
+
+            case FxSlot.Attack: return fxAttackPoint != null ? fxAttackPoint : fxMovePoint;
+            case FxSlot.AttackFar: return fxAttackFarPoint != null ? fxAttackFarPoint : fxMovePoint;
 
             default: return null;
         }
@@ -2112,6 +2612,8 @@ public class MonsterController : MonoBehaviour
         }
     }
 
+    
+    // 爆炸范围改为由每个飞行物自身在飞行过程中绘制（见 ProjectileBehaviour.OnDrawGizmos）
     void OnDrawGizmosSelected()
     {
         var dcfg2 = config?.discoveryV2Config;
@@ -2126,9 +2628,25 @@ public class MonsterController : MonoBehaviour
         UnityEditor.Handles.Label(pos + Vector3.up * 0.15f, monsterDistPoint ? "monsterDistPoint" : "transform");
 #endif
 
+        // 发现三圈
         Gizmos.color = Color.red; DrawCircleXY(pos, dcfg2.findRange);
         Gizmos.color = Color.white; DrawCircleXY(pos, dcfg2.reverseRange);
         Gizmos.color = Color.black; DrawCircleXY(pos, dcfg2.backRange);
+
+        // 近战/远程参考圈（无视 attackType，直接取最大值；远程=紫色）
+        var atkCfg = dcfg2.attacks;
+        if (atkCfg != null && atkCfg.Count > 0)
+        {
+            float meleeMax = 0f, rangedMax = 0f;
+            foreach (var a in atkCfg)
+            {
+                if (a == null) continue;
+                meleeMax = Mathf.Max(meleeMax, Mathf.Max(0f, a.meleeRange));
+                rangedMax = Mathf.Max(rangedMax, Mathf.Max(0f, a.rangedRange));
+            }
+            if (meleeMax > 0f) { Gizmos.color = Color.yellow; DrawCircleXY(pos, meleeMax); }
+            if (rangedMax > 0f) { Gizmos.color = new Color(0.5f, 0f, 0.5f); DrawCircleXY(pos, rangedMax); }
+        }
     }
 
     private void DrawCircleXY(Vector3 center, float radius, int segments = 64)
@@ -2169,6 +2687,11 @@ public class MonsterController : MonoBehaviour
             d.findRange = Mathf.Max(0f, d.findRange);
             d.reverseRange = Mathf.Max(0f, d.reverseRange);
             d.backRange = Mathf.Max(0f, d.backRange);
+
+            d.delayFollowToBackstepMin = Mathf.Max(0f, d.delayFollowToBackstepMin);
+            d.delayFollowToBackstepMax = Mathf.Max(d.delayFollowToBackstepMin, d.delayFollowToBackstepMax);
+            d.delayBackstepToFollowMin = Mathf.Max(0f, d.delayBackstepToFollowMin);
+            d.delayBackstepToFollowMax = Mathf.Max(d.delayBackstepToFollowMin, d.delayBackstepToFollowMax);
 
             if (d.events != null)
             {
@@ -2276,11 +2799,30 @@ public class MonsterController : MonoBehaviour
     }
 
 
-    private static bool HasStraightRest(PatrolMovement m) => Mathf.Max(m.restMin, m.restMax) > 0f; private static bool HasJumpRest(PatrolMovement m) => Mathf.Max(m.jumprestMin, m.jumprestMax) > 0f;
+    private static bool HasStraightRest(PatrolMovement m) 
+        => Mathf.Max(m.restMin, m.restMax) > 0f; 
 
-    private float PickStraightRestTime(PatrolMovement move) { float min = Mathf.Max(0f, move.restMin); float max = Mathf.Max(min, move.restMax); return (max > 0f) ? Random.Range(min, max) : 0f; }
+    private float PickStraightRestTime(PatrolMovement move) 
+    { 
+        float min = Mathf.Max(0f, move.restMin); 
+        float max = Mathf.Max(min, move.restMax); 
+        return (max > 0f) ? Random.Range(min, max) : 0f; 
+    }
 
-    private float PickJumpRestTime(PatrolMovement move) { float min = Mathf.Max(0f, move.jumprestMin); float max = Mathf.Max(min, move.jumprestMax); return (max > 0f) ? Random.Range(min, max) : 0f; }
+    private float PickAttackRestTime(AttackEventV2 a)
+    {
+        if (a == null) return 0f;
+        float min = Mathf.Max(0f, a.attackRestMin);
+        float max = Mathf.Max(min, a.attackRestMax);
+        return (max > 0f) ? Random.Range(min, max) : 0f;
+    }
+
+    private float PickJumpRestTime(PatrolMovement move) 
+    { 
+        float min = Mathf.Max(0f, move.jumprestMin); 
+        float max = Mathf.Max(min, move.jumprestMax); 
+        return (max > 0f) ? Random.Range(min, max) : 0f; 
+    }
 
     // ================== 发现阶段：动画特效事件（严格一一对应版） ==================
     // 发现阶段：动画特效事件入口（防抖+稳态版本）
@@ -2354,6 +2896,87 @@ public class MonsterController : MonoBehaviour
 
         PlayEffect(prefab, anchor);
     }
+
+    // 近战 FX（严格：需在攻击中、配置齐全）
+    public void OnFxAttack()
+    {
+        if (!inAttack || activeAttack == null) return;
+        if (attackExecType != AttackType.Melee) return; // 修改处
+        if (string.IsNullOrEmpty(activeAttack.attackAnimation)) return;
+        if (activeAttack.attackEffectPrefab == null) return;
+        var anchor = ResolveFxAnchor(FxSlot.Attack);
+        if (!anchor) return;
+        PlayEffect(activeAttack.attackEffectPrefab, anchor);
+    }
+
+    public void OnAttackAnimationStart()
+    {
+        if (!inAttack || activeAttack == null) return;
+        if (attackExecType != AttackType.Melee) return; // 修改处
+        var hit = ResolveHitboxCollider(activeAttack.meleeHitboxChildPath);
+        if (hit) hit.enabled = true;
+    }
+
+    public void OnAttackAnimationEnd()
+    {
+        if (!inAttack || activeAttack == null) return;
+        if (attackExecType != AttackType.Melee) return; // 修改处
+        var hit = ResolveHitboxCollider(activeAttack.meleeHitboxChildPath);
+        if (hit) hit.enabled = false;
+    }
+
+    private Collider2D ResolveHitboxCollider(string childPath)
+    {
+        if (meleeHitboxCached) return meleeHitboxCached;
+        if (string.IsNullOrEmpty(childPath)) return null;
+        var t = transform.Find(childPath);
+        if (!t) return null;
+        meleeHitboxCached = t.GetComponent<Collider2D>();
+        if (meleeHitboxCached) meleeHitboxCached.isTrigger = true;
+        return meleeHitboxCached;
+    }
+
+    // 远程 FX
+    public void OnFxAttackFar()
+    {
+        if (!inAttack || activeAttack == null) return;
+        if (attackExecType != AttackType.Ranged) return; // 修改处
+        if (string.IsNullOrEmpty(activeAttack.attackFarAnimation)) return;
+        if (activeAttack.attackFarEffectPrefab == null) return;
+        var anchor = ResolveFxAnchor(FxSlot.AttackFar);
+        if (!anchor) return;
+        PlayEffect(activeAttack.attackFarEffectPrefab, anchor);
+    }
+
+    // 远程发射：删掉对 projectileSpawnChildPath 的解析
+    public void OnAttackFarFire()
+    {
+        if (!inAttack || activeAttack == null) return;
+        if (attackExecType != AttackType.Ranged) return;
+
+        if (activeAttack.repeatedHitsCount > 0)
+        {
+            if (rangedFiredInCycle) return;
+            rangedFiredInCycle = true;
+        }
+        else
+        {
+            if (rangedFiredThisAttack) return;
+            rangedFiredThisAttack = true;
+        }
+
+        // 统一从 fxAttackFarPoint 发射；若未设置则回退到怪物根
+        Transform spawn = ResolveFxAnchor(FxSlot.AttackFar) ?? transform;
+
+        var projCfg = activeAttack.projectile;
+        if (projCfg == null)
+        {
+            Debug.LogWarning("[MonsterController] 远程攻击未配置 projectile");
+            return;
+        }
+        StartCoroutine(SpawnBurstProjectiles(spawn, projCfg));
+    }
+    
 
     // 严格播放（去掉 Animator 状态名强校验；保留‘配置非空/特效非空/锚点非空’）
     private void PlayDiscoveryMoveFxForBand(DiscoveryBand band, bool isRest)
