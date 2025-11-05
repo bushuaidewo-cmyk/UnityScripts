@@ -25,7 +25,15 @@ public class MonsterController : MonoBehaviour
     public float wallCheckDistance = 0.4f;
     public float wallCheckHeightOffset = 0.2f;
     public float cliffCheckDistance = 0.6f;
-    public float cliffCheckOffsetX = 0.3f;
+
+    // 拆为两条检测射线各自独立的前移量
+    [SerializeField, Tooltip("脚尖向前的额外外扩（米）")]
+    private float cliffCheckToeOffsetX = 0.3f;
+    [SerializeField, Tooltip("脚底中点向前的额外外扩（米）")]
+    private float cliffCheckHalfOffsetX = 0.15f;
+
+    // 旧字段（仅用于迁移，已不再使用）
+    [SerializeField, HideInInspector] private float cliffCheckOffsetX = 0.3f;
 
     // === 跳跃运行时状态 ===
     private bool isJumping = false;
@@ -61,6 +69,9 @@ public class MonsterController : MonoBehaviour
     private int waypointTargetIndex = 0;
     private int waypointDir = +1;
     private int suppressUpwardOnGroundFrames = 0;
+    // 落地后短暂抑制水平速度的帧计数
+    private int suppressHorizontalOnGroundFrames = 0;
+
     private int FacingSign() => (transform.rotation.eulerAngles.y == 0f) ? +1 : -1;
     private float desiredSpeedX = 0f;
     private List<int> moveOrder = null;
@@ -178,6 +189,7 @@ public class MonsterController : MonoBehaviour
 
     [Header("发现阶段朝向抖动抑制")]
     public float faceFlipDeadZone = 0.15f; // 玩家与怪物X差在此死区内不翻转朝向
+    private float faceProximityLockTimer = 0f;
 
     //AutoTurn 后的朝向/移动方向冻结
     [Header("发现阶段：自动转向后的朝向冻结")]
@@ -231,8 +243,11 @@ public class MonsterController : MonoBehaviour
     [SerializeField] private Transform fxAttackPoint;
     [SerializeField] private Transform fxAttackFarPoint;
 
+    private List<int> attackOrder = null;
+    private int attackOrderPos = 0;
+
     // ================== 攻击运行时（MVP） ==================
-    private int attackCycleIndex = 0;           // 攻击事件轮询序号（预留：二期可换策略）
+    
     private bool inAttack = false;
     private float attackTimer = 0f;
     private float attackRestCooldown = 0f;      // 攻击休息期间屏蔽攻击检测
@@ -262,6 +277,8 @@ public class MonsterController : MonoBehaviour
 
     // 本次攻击的执行模式（近战/远程），由距离决定
     private AttackType attackExecType = AttackType.Melee;
+
+
 
     void Start()
     {
@@ -312,6 +329,9 @@ public class MonsterController : MonoBehaviour
             EnsureActiveDiscoveryEventSetup(resetRuntimes: true);
         }
 
+        // 构建攻击顺序
+        BuildAttackOrderFromConfig();
+
         turnCooldown = 1f;
         StartCoroutine(StateMachine());
         rb.interpolation = RigidbodyInterpolation2D.Interpolate;
@@ -321,6 +341,7 @@ public class MonsterController : MonoBehaviour
     //Update() 内递减计时器
     void Update()
     {
+
         if (turnCooldown > 0f) turnCooldown -= Time.deltaTime;
         if (bandDwellTimer > 0f) bandDwellTimer -= Time.deltaTime;
 
@@ -335,6 +356,8 @@ public class MonsterController : MonoBehaviour
         if (backBandSuppressTimer > 0f) backBandSuppressTimer -= Time.deltaTime;
 
         if (attackRestCooldown > 0f) attackRestCooldown -= Time.deltaTime;
+
+        if (faceProximityLockTimer > 0f) faceProximityLockTimer -= Time.deltaTime;
 
         // 只有在“最后一个循环已播放完”才冻结；否则由 AttackUpdate 负责重播下一次循环
         if (inAttack && !string.IsNullOrEmpty(activeAttackAnimName) && animator)
@@ -544,6 +567,13 @@ public class MonsterController : MonoBehaviour
         float d = discoveryUseHorizontalDistanceOnly ? Mathf.Abs(p.x - m.x) : Vector2.Distance(p, m);
 
         if (d > dcfg.findRange) { state = MonsterState.Patrol; return; }
+        float dxToPlayer = p.x - m.x;
+        int dirToPlayer = (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone) ? FacingSign() : (dxToPlayer >= 0f ? +1 : -1);
+        // 靠近玩家的人形面向锁（在重叠/很近区间内，启用一段时间的锁定）
+        if (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone)
+            faceProximityLockTimer = Mathf.Max(faceProximityLockTimer, faceFlipMinDwellTime);
+        bool inProximityFaceLock = faceProximityLockTimer > 0f;
+
 
         if (!inAttack && attackRestCooldown <= 0f && dcfg.attacks != null && dcfg.attacks.Count > 0)
         {
@@ -633,8 +663,7 @@ public class MonsterController : MonoBehaviour
             bandDwellTimer = Mathf.Max(0.05f, bandMinDwellTime);
         }
 
-        float dxToPlayer = p.x - m.x;
-        int dirToPlayer = (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone) ? FacingSign() : (dxToPlayer >= 0f ? +1 : -1);
+        
 
         // 抑制窗口期间，重叠区间内冻结 dirToPlayer 为当前朝向，避免快速左右闪
         if (dcfg.suppressBackBandDuringRest && backBandSuppressTimer > 0f)
@@ -666,7 +695,7 @@ public class MonsterController : MonoBehaviour
             bool inFaceLock = obstacleTurnFaceLockTimer > 0f;
 
             int faceSign, moveSign;
-            if (inFaceLock)
+            if (inFaceLock || inProximityFaceLock)
             {
                 faceSign = FacingSign();
                 moveSign = FacingSign();
@@ -679,15 +708,14 @@ public class MonsterController : MonoBehaviour
                 }
                 else if (currentBand == DiscoveryBand.Retreat)
                 {
-                    // 统一退却时朝向为远离玩家（不在休息时强制朝向玩家）
                     faceSign = -dirToPlayer;
                     moveSign = -dirToPlayer;
                 }
                 else // Backstep
                 {
-                    faceSign = dirToPlayer; moveSign = -dirToPlayer;
+                    faceSign = dirToPlayer;
+                    moveSign = -dirToPlayer;
                 }
-
                 faceSign = StabilizeFaceSign(faceSign, dxToPlayer);
             }
 
@@ -798,14 +826,26 @@ public class MonsterController : MonoBehaviour
 
             int faceSign = (currentBand == DiscoveryBand.Retreat) ? -dirToPlayer : dirToPlayer;
 
-            if (lockFaceWhileAirborne && isJumping && faceSignLockedDuringAir != 0)
+            // 新增靠近玩家锁
+            if (inProximityFaceLock)
+                faceSign = FacingSign();
+            else if (lockFaceWhileAirborne && isJumping && faceSignLockedDuringAir != 0)
                 faceSign = faceSignLockedDuringAir;
             else
                 faceSign = StabilizeFaceSign(faceSign, dxToPlayer);
 
             ForceFaceSign(faceSign);
-
             int moveDir = (currentBand == DiscoveryBand.Follow) ? dirToPlayer : -dirToPlayer;
+            
+            // 若靠近玩家锁生效，也让移动方向与面向一致，避免“背对走动”造成摩擦触发抖动
+            if (inProximityFaceLock) moveDir = faceSign;
+
+            if (lockFaceWhileAirborne && isJumping && faceSignLockedDuringAir != 0)
+                faceSign = faceSignLockedDuringAir;
+            else
+                faceSign = StabilizeFaceSign(faceSign, dxToPlayer);
+
+            
 
             if (suppressNextDiscoveryJumpOnce)
             {
@@ -889,39 +929,55 @@ public class MonsterController : MonoBehaviour
         }
     }
 
-    // 在一个 AttackEventV2 里同时支持近战与远程：先判近战，再判远程
+    // 按“顺序/随机循环 + 可用性筛选”挑下一条
     private void TryStartAttack(DiscoveryV2Config dcfg, float dToPlayer, Vector2 playerPos, Vector2 monsterPos)
     {
-        if (dcfg.attacks == null || dcfg.attacks.Count == 0) return;
+        if (dcfg == null) return;
+        var list = dcfg.attacks;
+        if (list == null || list.Count == 0) return;
 
-        // 遍历可用攻击条目，选择第一个满足距离的
-        foreach (var a in dcfg.attacks)
+        if (attackOrder == null || attackOrder.Count != list.Count)
+            BuildAttackOrderFromConfig();
+
+        int n = attackOrder.Count;
+        if (n <= 0) return;
+
+        // 从当前顺位起，循环最多 n 次，找第一条“可用”的攻击
+        int startPos = attackOrderPos;
+        for (int step = 0; step < n; step++)
         {
-            if (a == null) continue;
-
-            bool meleeReady = (a.meleeRange > 0f)
-                              && dToPlayer <= a.meleeRange
-                              && !string.IsNullOrEmpty(a.attackAnimation);
-
-            bool rangedReady = (a.rangedRange > 0f)
-                               && dToPlayer <= a.rangedRange
-                               && !string.IsNullOrEmpty(a.attackFarAnimation)
-                               && a.projectile != null;
-
-            // 近战优先
-            if (meleeReady)
+            int idx = attackOrder[attackOrderPos];
+            var a = list[idx];
+            if (a != null)
             {
-                attackExecType = AttackType.Melee;
-                StartAttack(a, playerPos, monsterPos);
-                return;
+                bool meleeReady = (a.meleeRange > 0f)
+                                  && dToPlayer <= a.meleeRange
+                                  && !string.IsNullOrEmpty(a.attackAnimation);
+
+                bool rangedReady = (a.rangedRange > 0f)
+                                   && dToPlayer <= a.rangedRange
+                                   && !string.IsNullOrEmpty(a.attackFarAnimation)
+                                   && a.projectile != null;
+
+                // 近战优先；近战不可用时再尝试远程
+                if (meleeReady || rangedReady)
+                {
+                    attackExecType = meleeReady ? AttackType.Melee : AttackType.Ranged;
+                    StartAttack(a, playerPos, monsterPos);
+
+                    // 前进顺位；若回到 0 且随机开启，整轮结束后重新洗牌
+                    attackOrderPos = (attackOrderPos + 1) % n;
+                    if (attackOrderPos == 0 && dcfg.attacksRandomOrder && n > 1)
+                        Shuffle(attackOrder);
+                    return;
+                }
             }
-            if (rangedReady)
-            {
-                attackExecType = AttackType.Ranged;
-                StartAttack(a, playerPos, monsterPos);
-                return;
-            }
+
+            // 不可用：顺位后移，继续找下一条
+            attackOrderPos = (attackOrderPos + 1) % n;
         }
+
+        // 本轮没有任何可用的攻击：不发起攻击（等距离满足时再试）
     }
 
     private void StartAttack(AttackEventV2 a, Vector2 playerPos, Vector2 monsterPos)
@@ -1173,7 +1229,7 @@ public class MonsterController : MonoBehaviour
 
     private void SpawnOneProjectile(Transform spawn, ProjectileConfig projCfg, int index, int total)
     {
-        // 用“发射点 → 玩家瞄准点”的向量，避免因 MonsterDistPoint 高差造成抬头
+        // 计算发射方向（与现有一致）
         Vector2 s = (Vector2)spawn.position;
         Vector2 t = GetPlayerDistPos();
 
@@ -1184,7 +1240,7 @@ public class MonsterController : MonoBehaviour
             if (baseDir.sqrMagnitude <= 0.0001f) baseDir = Vector2.right * FacingSign();
             baseDir.Normalize();
         }
-        else // HorizontalToPlayer：只看水平差
+        else
         {
             float dx = t.x - s.x;
             int sign = (Mathf.Abs(dx) < 0.0001f) ? FacingSign() : (dx >= 0f ? +1 : -1);
@@ -1210,43 +1266,86 @@ public class MonsterController : MonoBehaviour
         float angle = angleBase + angleOffset;
         Vector2 shotDir = new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)).normalized;
 
-        // 生成 GameObject 并初始化（保持你现有实现）
+        // 生成根物体 + 刚体
         GameObject go = new GameObject("Projectile");
         go.transform.position = spawn.position;
 
-        // 根：Kinematic 刚体（用于触发/碰撞），不加根 Collider；Collider 在可视预制上
         var rb2d = go.AddComponent<Rigidbody2D>();
         rb2d.bodyType = RigidbodyType2D.Kinematic;
         rb2d.gravityScale = 0f;
-        rb2d.interpolation = RigidbodyInterpolation2D.None; // 与 Update 驱动一致
+        rb2d.interpolation = RigidbodyInterpolation2D.None;
 
-        var beh = go.AddComponent<ProjectileBehaviour>();
-
-        beh.Init(player, projCfg, shotDir, groundLayer);
-
-        // 可视（子物体）；若自带刚体，移除；并把自转的目标设为该子物体
+        // 可视（子物体），并指定自旋目标
+        GameObject fxInstance = null;
         if (projCfg.FlygunEffectPrefab)
         {
-            var fx = Instantiate(projCfg.FlygunEffectPrefab, go.transform.position, Quaternion.identity, go.transform);
+            fxInstance = Instantiate(projCfg.FlygunEffectPrefab, go.transform.position, Quaternion.identity, go.transform);
 
-            var childRBs = fx.GetComponentsInChildren<Rigidbody2D>(includeInactive: true);
+            // 清理子层级上的刚体，避免干预
+            var childRBs = fxInstance.GetComponentsInChildren<Rigidbody2D>(includeInactive: true);
             foreach (var crb in childRBs) Destroy(crb);
 
-            var ps = fx.GetComponentInChildren<ParticleSystem>(true);
+            var ps = fxInstance.GetComponentInChildren<ParticleSystem>(true);
             if (ps) ps.Play();
-
-            // 告诉行为脚本：自旋目标为可视子物体（优先只转可视，不转根）
-            beh.SetSpinTarget(fx.transform);
-        }
-        else
-        {
-            // 没有可视预制：自旋目标回退为根
-            beh.SetSpinTarget(go.transform);
         }
 
-        // 统一设置层
+        // 确保存在触发器 Collider2D（在 Init 之前）
+        EnsureProjectileTriggerCollider(go, fxInstance, projCfg);
+
+        // 加入行为，设置自旋目标（优先转可视子物体，其次根）
+        var beh = go.AddComponent<ProjectileBehaviour>();
+        if (fxInstance) beh.SetSpinTarget(fxInstance.transform);
+        else beh.SetSpinTarget(go.transform);
+
+        // 统一设置层（确保与 Physics2D 矩阵中 Player 层有交互）
         int projLayer = LayerMask.NameToLayer("Projectile");
         if (projLayer >= 0) SetLayerRecursively(go, projLayer);
+
+        // 最后再 Init（此时已存在触发器 Collider，不会再有警告）
+        beh.Init(player, projCfg, shotDir, groundLayer);
+    }
+
+    // 保障投射物层级下存在“触发器 Collider2D”的小工具
+    private Collider2D EnsureProjectileTriggerCollider(GameObject root, GameObject visual, ProjectileConfig cfg)
+    {
+        if (!root) return null;
+
+        // 1) 若已存在任意 Collider2D，直接改为 Trigger
+        var existing = root.GetComponentInChildren<Collider2D>(includeInactive: true);
+        if (existing)
+        {
+            existing.isTrigger = true;
+            return existing;
+        }
+
+        // 2) 估算一个半径：优先用可视渲染器的 bounds，其次用配置 radius 的一个保守比例
+        float radius = 0.1f;
+        if (visual)
+        {
+            var sr = visual.GetComponentInChildren<SpriteRenderer>(true);
+            if (sr)
+            {
+                float maxExt = Mathf.Max(sr.bounds.extents.x, sr.bounds.extents.y);
+                if (maxExt > 0.005f) radius = Mathf.Clamp(maxExt * 0.6f, 0.05f, 0.6f);
+            }
+            else
+            {
+                var rend = visual.GetComponentInChildren<Renderer>(true);
+                if (rend)
+                {
+                    float maxExt = Mathf.Max(rend.bounds.extents.x, rend.bounds.extents.y);
+                    if (maxExt > 0.005f) radius = Mathf.Clamp(maxExt * 0.5f, 0.05f, 0.6f);
+                }
+            }
+        }
+        if (radius <= 0.05f && cfg != null && cfg.radius > 0f)
+            radius = Mathf.Clamp(cfg.radius * 0.25f, 0.05f, 0.6f);
+
+        // 3) 在根上挂一个 CircleCollider2D 作为命中体（Trigger）
+        var cc = root.AddComponent<CircleCollider2D>();
+        cc.isTrigger = true;
+        cc.radius = radius;
+        return cc;
     }
 
 
@@ -1671,12 +1770,34 @@ public class MonsterController : MonoBehaviour
             WaypointUpdateAndMaybeTurn(canTurnNow);
 
         float clampedSpeed = Mathf.Clamp(move.rtCurrentSpeed, 0f, targetSpeed);
-        bool stopAtCliffEdge = (!allowTurnOnObstacle) && stopAtCliffEdgeWhenNoTurn && cliffAhead && isGroundedMC;
-        desiredSpeedX = (stopAtCliffEdge ? 0f : clampedSpeed * effectiveDir);
+
+        // 关键改动：将“仅悬崖”改为“墙或悬崖任一命中即停”，并且停时不再调用压地投影
+        bool stopAtObstacleEdge = (!allowTurnOnObstacle) && stopAtCliffEdgeWhenNoTurn && (isGroundedMC && (cliffAhead || wallAhead));
+
+        desiredSpeedX = stopAtObstacleEdge ? 0f : (clampedSpeed * effectiveDir);
+
         if (isGroundedMC)
-            ApplyProjectedVelocityAlongSlope(Mathf.Abs(desiredSpeedX), effectiveDir);
+        {
+            if (stopAtObstacleEdge)
+            {
+                // 稳态停止：清零水平，不保留任何向上速度，避免“上抬后缓落”的抖动
+                Vector2 v = rb.velocity;
+                if (v.y > 0f) v.y = 0f;
+                rb.velocity = new Vector2(0f, v.y);
+
+                // 进入“坡面静止”逻辑（按需冻结重力/去除切向漂移），避免边缘缓慢滑落
+                ApplySlopeIdleStopIfNoMove();
+            }
+            else
+            {
+                // 正常沿地形投影推进
+                ApplyProjectedVelocityAlongSlope(Mathf.Abs(desiredSpeedX), effectiveDir);
+            }
+        }
         else
+        {
             rb.velocity = new Vector2(desiredSpeedX, rb.velocity.y);
+        }
         return false;
     }
 
@@ -1746,6 +1867,23 @@ public class MonsterController : MonoBehaviour
             isResting = false;
             isJumping = false;
         }
+
+        // 每次刷新发现运行态时，同步刷新攻击顺序
+        BuildAttackOrderFromConfig();
+    }
+
+    // 4) 构建/重建攻击顺序（仿照 BuildDiscoveryOrderFromConfig）
+    private void BuildAttackOrderFromConfig()
+    {
+        var dcfg = config?.discoveryV2Config;
+        var list = dcfg?.attacks;
+        attackOrder = new List<int>();
+        if (list != null)
+        {
+            for (int i = 0; i < list.Count; i++) attackOrder.Add(i);
+            if (dcfg.attacksRandomOrder && attackOrder.Count > 1) Shuffle(attackOrder);
+        }
+        attackOrderPos = 0;
     }
 
     private void ForceFaceSign(int sign)
@@ -1825,6 +1963,7 @@ public class MonsterController : MonoBehaviour
         return BestVerticalHit(0.12f, true).collider != null;
     }
 
+    // CheckWallAhead：忽略玩家（避免把玩家当墙）
     bool CheckWallAhead()
     {
         if (col == null) return false;
@@ -1842,12 +1981,17 @@ public class MonsterController : MonoBehaviour
         if (hit.collider.isTrigger) return false;
         if (hit.collider.CompareTag(autoJumpPermitTag)) return false;
 
+        // 新增：玩家不计入“墙”判定
+        if (hit.collider.CompareTag("Player")) return false;
+        if (player && hit.collider.transform.root == player.root) return false;
+
         Vector2 n = hit.normal.normalized;
         if (n.y >= groundMinNormalYMC) return false;
 
         return Vector2.Dot(n, dir) < -0.4f;
     }
 
+    // CheckCliffAhead(bool permitCountsAsGround)
     bool CheckCliffAhead(bool permitCountsAsGround)
     {
         if (col == null) return false;
@@ -1860,8 +2004,10 @@ public class MonsterController : MonoBehaviour
         float rayDist = Mathf.Max(cliffCheckDistance, STEP_DOWN_ALLOW + 0.1f);
 
         Vector2 forward = (Vector2)transform.right;
-        Vector2 originToe = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0.0f, cliffCheckOffsetX));
-        Vector2 originHalf = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0.0f, cliffCheckOffsetX) * 0.5f);
+        float toeFwd = b.extents.x + Mathf.Max(0.0f, cliffCheckToeOffsetX);
+        float halfFwd = b.extents.x + Mathf.Max(0.0f, cliffCheckHalfOffsetX);
+        Vector2 originToe = new Vector2(b.center.x, baseY) + forward * toeFwd;
+        Vector2 originHalf = new Vector2(b.center.x, baseY) + forward * halfFwd;
 
         bool IsSafe(Vector2 origin)
         {
@@ -1885,6 +2031,7 @@ public class MonsterController : MonoBehaviour
         return !(safeToe || safeHalf);
     }
 
+    // CheckWallInDir：忽略玩家（避免把玩家当墙）
     bool CheckWallInDir(int dirSign)
     {
         if (col == null) return false;
@@ -1902,12 +2049,17 @@ public class MonsterController : MonoBehaviour
         if (hit.collider.isTrigger) return false;
         if (hit.collider.CompareTag(autoJumpPermitTag)) return false;
 
+        // 新增：玩家不计入“墙”判定
+        if (hit.collider.CompareTag("Player")) return false;
+        if (player && hit.collider.transform.root == player.root) return false;
+
         Vector2 n = hit.normal.normalized;
         if (n.y >= groundMinNormalYMC) return false;
 
         return Vector2.Dot(n, dir) < -0.4f;
     }
 
+    // CheckCliffInDir(int dirSign, bool permitCountsAsGround)
     bool CheckCliffInDir(int dirSign, bool permitCountsAsGround)
     {
         if (col == null) return false;
@@ -1920,8 +2072,10 @@ public class MonsterController : MonoBehaviour
         float rayDist = Mathf.Max(cliffCheckDistance, STEP_DOWN_ALLOW + 0.1f);
 
         Vector2 forward = Vector2.right * Mathf.Sign(dirSign);
-        Vector2 originToe = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0.0f, cliffCheckOffsetX));
-        Vector2 originHalf = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0.0f, cliffCheckOffsetX) * 0.5f);
+        float toeFwd = b.extents.x + Mathf.Max(0.0f, cliffCheckToeOffsetX);
+        float halfFwd = b.extents.x + Mathf.Max(0.0f, cliffCheckHalfOffsetX);
+        Vector2 originToe = new Vector2(b.center.x, baseY) + forward * toeFwd;
+        Vector2 originHalf = new Vector2(b.center.x, baseY) + forward * halfFwd;
 
         bool IsSafe(Vector2 origin)
         {
@@ -1953,6 +2107,7 @@ public class MonsterController : MonoBehaviour
         turnCooldown = 0.25f;
     }
 
+    // ProbeCliffNoGroundAhead(bool permitCountsAsGround)
     private bool ProbeCliffNoGroundAhead(bool permitCountsAsGround)
     {
         if (col == null) return false;
@@ -1963,8 +2118,10 @@ public class MonsterController : MonoBehaviour
         float rayDist = Mathf.Max(cliffCheckDistance, STEP_DOWN_ALLOW + 0.1f);
 
         Vector2 forward = (Vector2)transform.right;
-        Vector2 originToe = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0f, cliffCheckOffsetX));
-        Vector2 originHalf = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0f, cliffCheckOffsetX) * 0.5f);
+        float toeFwd = b.extents.x + Mathf.Max(0f, cliffCheckToeOffsetX);
+        float halfFwd = b.extents.x + Mathf.Max(0f, cliffCheckHalfOffsetX);
+        Vector2 originToe = new Vector2(b.center.x, baseY) + forward * toeFwd;
+        Vector2 originHalf = new Vector2(b.center.x, baseY) + forward * halfFwd;
 
         bool IsSafe(Vector2 origin)
         {
@@ -1981,6 +2138,7 @@ public class MonsterController : MonoBehaviour
         return !(IsSafe(originToe) || IsSafe(originHalf));
     }
 
+    // ProbeCliffNoGroundInDir(int dirSign, bool permitCountsAsGround)
     private bool ProbeCliffNoGroundInDir(int dirSign, bool permitCountsAsGround)
     {
         if (col == null) return false;
@@ -1991,8 +2149,10 @@ public class MonsterController : MonoBehaviour
         float rayDist = Mathf.Max(cliffCheckDistance, STEP_DOWN_ALLOW + 0.1f);
 
         Vector2 forward = Vector2.right * Mathf.Sign(dirSign);
-        Vector2 originToe = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0f, cliffCheckOffsetX));
-        Vector2 originHalf = new Vector2(b.center.x, baseY) + forward * (b.extents.x + Mathf.Max(0f, cliffCheckOffsetX) * 0.5f);
+        float toeFwd = b.extents.x + Mathf.Max(0f, cliffCheckToeOffsetX);
+        float halfFwd = b.extents.x + Mathf.Max(0f, cliffCheckHalfOffsetX);
+        Vector2 originToe = new Vector2(b.center.x, baseY) + forward * toeFwd;
+        Vector2 originHalf = new Vector2(b.center.x, baseY) + forward * halfFwd;
 
         bool IsSafe(Vector2 origin)
         {
@@ -2101,7 +2261,8 @@ public class MonsterController : MonoBehaviour
 
             postLandingFaceLockTimer = Mathf.Max(0f, postLandingFaceLockTime);
 
-            rb.velocity = new Vector2(rb.velocity.x, 0f);
+            rb.velocity = Vector2.zero;
+            suppressHorizontalOnGroundFrames = 2;
             suppressUpwardOnGroundFrames = 2;
 
             if (move.rtUsingAutoJumpParams)
@@ -2274,6 +2435,7 @@ public class MonsterController : MonoBehaviour
         }
     }
 
+    // ApplyProjectedVelocityAlongSlope() 内，若抑制计数>0 或 本帧目标速度≈0，则不施加切向分量，避免沿坡滑动
     private void ApplyProjectedVelocityAlongSlope(float speedAbs, int dirSign)
     {
         if (!isGroundedMC)
@@ -2285,8 +2447,13 @@ public class MonsterController : MonoBehaviour
         Vector2 n = groundNormalMC.normalized;
         Vector2 t = new Vector2(n.y, -n.x).normalized;
 
-        Vector2 v = t * (speedAbs * dirSign);
+        // 当着陆抑制窗口内，或目标水平速度极小，强制切向分量为 0
+        bool suppressTan = (suppressHorizontalOnGroundFrames > 0) || (speedAbs < 0.0001f);
+        float tanSpeed = suppressTan ? 0f : (speedAbs * dirSign);
 
+        Vector2 v = t * tanSpeed;
+
+        // 仍保留轻微贴地量，保证贴附
         const float stickDown = 0.005f;
         v += -n * stickDown;
 
@@ -2296,6 +2463,7 @@ public class MonsterController : MonoBehaviour
         rb.velocity = new Vector2(v.x, v.y + addUp);
 
         if (suppressUpwardOnGroundFrames > 0) suppressUpwardOnGroundFrames--;
+        if (suppressHorizontalOnGroundFrames > 0) suppressHorizontalOnGroundFrames--;
     }
 
     private void ApplySlopeIdleStopIfNoMove()
@@ -2708,6 +2876,16 @@ public class MonsterController : MonoBehaviour
                     }
                 }
             }
+        }
+        // 一次性迁移：若新参数均为0且旧字段非0，则迁移并清空旧字段
+        if (Mathf.Approximately(cliffCheckToeOffsetX, 0f) && Mathf.Approximately(cliffCheckHalfOffsetX, 0f) && !Mathf.Approximately(cliffCheckOffsetX, 0f))
+        {
+            cliffCheckToeOffsetX = cliffCheckOffsetX;
+            cliffCheckHalfOffsetX = cliffCheckOffsetX * 0.5f;
+            cliffCheckOffsetX = 0f; // 清空旧字段，防止重复迁移
+#if UNITY_EDITOR
+            UnityEditor.EditorUtility.SetDirty(this);
+#endif
         }
     }
 

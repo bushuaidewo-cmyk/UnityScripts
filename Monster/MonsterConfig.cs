@@ -232,6 +232,9 @@ public class DiscoveryV2Config
     [Header("攻击（V2）- 无数据即不开启攻击")]
     [Tooltip("可选的攻击事件列表（近战/远程各一条或多条），空则不攻击")]
     public List<AttackEventV2> attacks = new List<AttackEventV2>();
+
+    [Tooltip("攻击列表是否随机顺序（true：随机轮询；false：按 0,1,2… 顺序循环）")]
+    public bool attacksRandomOrder = false;
 }
 
 public enum ObstacleTurnMode

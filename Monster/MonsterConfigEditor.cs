@@ -282,14 +282,16 @@ public class MonsterConfigEditor : Editor
 
             var spRandom = spV2.FindPropertyRelative("findRandomOrder");
             var spEvents = spV2.FindPropertyRelative("events");
+
             var spAttacks = spV2.FindPropertyRelative("attacks");
+            var spAttacksRandom = spV2.FindPropertyRelative("attacksRandomOrder");
 
             EditorGUILayout.PropertyField(spFindRange);
             EditorGUILayout.PropertyField(spReverseR);
             EditorGUILayout.PropertyField(spBackR);
 
             EditorGUILayout.Space(2);
-            
+
             // Follow → Backstep
             EditorGUILayout.PropertyField(spDelayFollowToBackMin, new GUIContent("Follow→Backstep Min"));
             EditorGUILayout.PropertyField(spDelayFollowToBackMax, new GUIContent("Follow→Backstep Max"));
@@ -297,12 +299,12 @@ public class MonsterConfigEditor : Editor
             // Backstep → Follow
             EditorGUILayout.PropertyField(spDelayBackToFollowMin, new GUIContent("Backstep→Follow Min"));
             EditorGUILayout.PropertyField(spDelayBackToFollowMax, new GUIContent("Backstep→Follow Max"));
-            
 
             EditorGUILayout.PropertyField(spBackAuto, new GUIContent("Back: Auto-Jump On Obstacle"));
             EditorGUILayout.PropertyField(spBackSuppress, new GUIContent("Back: Suppress Bands During Rest"));
 
-            EditorGUILayout.PropertyField(spRandom);
+            // 事件顺序（发现事件）
+            EditorGUILayout.PropertyField(spRandom, new GUIContent("Events Random Order"));
 
             SpaceMinor();
             if (Fold("discover.events", $"事件列表 (Count={spEvents.arraySize})", true))
@@ -324,7 +326,10 @@ public class MonsterConfigEditor : Editor
                 }
             }
 
+            // 攻击顺序（攻击V2）
             SpaceMinor();
+            EditorGUILayout.PropertyField(spAttacksRandom, new GUIContent("Attacks Random Order"));
+
             if (Fold("discover.attacks", $"攻击（V2）列表 (Count={spAttacks.arraySize})", true))
             {
                 using (new EditorGUI.IndentLevelScope())
@@ -334,9 +339,12 @@ public class MonsterConfigEditor : Editor
                         var a = spAttacks.GetArrayElementAtIndex(i);
                         DrawAttackEventV2(a, i);
                     }
+
                     EditorGUILayout.BeginHorizontal();
-                    if (GUILayout.Button("+ 添加攻击")) spAttacks.InsertArrayElementAtIndex(spAttacks.arraySize);
-                    if (spAttacks.arraySize > 0 && GUILayout.Button("- 移除最后")) spAttacks.DeleteArrayElementAtIndex(spAttacks.arraySize - 1);
+                    if (GUILayout.Button("+ 添加攻击"))
+                        spAttacks.InsertArrayElementAtIndex(spAttacks.arraySize);
+                    if (spAttacks.arraySize > 0 && GUILayout.Button("- 移除最后"))
+                        spAttacks.DeleteArrayElementAtIndex(spAttacks.arraySize - 1);
                     EditorGUILayout.EndHorizontal();
                 }
             }
@@ -588,7 +596,6 @@ public class MonsterConfigEditor : Editor
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("spawnAim"), new GUIContent("发射朝向"));
 
                                 // 命中/爆炸
-
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("radius"), new GUIContent("爆炸半径"));
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("duration"));
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("interval"));
@@ -627,17 +634,15 @@ public class MonsterConfigEditor : Editor
                                 {
                                     using (new EditorGUI.IndentLevelScope())
                                     {
-                                        // “抛物线”折叠区内，紧跟 bounceCoefficient 后面追加三行
                                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("gravityScale"));
                                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceCoefficient"));
-                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceEnergyMode"));   // 新增
-                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceDecayFactor"));  // 新增
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceEnergyMode"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceDecayFactor"));
                                         EditorGUILayout.PropertyField(
                                             spProj.FindPropertyRelative("parabolaApexHeight"),
                                             new GUIContent("最高点高度(米)")
                                         );
-                                        // 在合适位置追加阈值（仅 DecayToZero 生效，简单起见总是展示）
-                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceEndVyThreshold")); // 新增
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceEndVyThreshold"));
                                     }
                                 }
 
@@ -648,7 +653,6 @@ public class MonsterConfigEditor : Editor
                                     using (new EditorGUI.IndentLevelScope())
                                     {
                                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("homingFrequency"));
-                                        // 显示跟踪强度（0~1）
                                         EditorGUILayout.PropertyField(
                                             spProj.FindPropertyRelative("homingStrength"),
                                             new GUIContent("Homing Strength (0~1)")
@@ -656,7 +660,7 @@ public class MonsterConfigEditor : Editor
                                     }
                                 }
 
-                                // 半径旋转 Inspector（移除了 orbitTangentialSpeed 的一行）
+                                // 半径旋转 Inspector（保留三参数）
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("orbitEnabled"));
                                 if (spProj.FindPropertyRelative("orbitEnabled").boolValue)
                                 {
@@ -749,12 +753,12 @@ public class MonsterConfigEditor : Editor
                 }
                 else
                 {
-                    EditorGUILayout.HelpBox("未选择叠加运动：本次攻击不附加位移/跳跃，仅播放攻击动画与事件。", MessageType.Info);
+                    EditorGUILayout.HelpBox("未选择叠加移动：本次攻击不附加位移/跳跃，仅播放攻击动画与事件。", MessageType.Info);
                 }
             }
         }
     }
-    
+
     private void DrawIOButtons()
     {
         EditorGUILayout.Space();
