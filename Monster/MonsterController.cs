@@ -1221,6 +1221,7 @@ public class MonsterController : MonoBehaviour
         rb2d.interpolation = RigidbodyInterpolation2D.None; // 与 Update 驱动一致
 
         var beh = go.AddComponent<ProjectileBehaviour>();
+
         beh.Init(player, projCfg, shotDir, groundLayer);
 
         // 可视（子物体）；若自带刚体，移除；并把自转的目标设为该子物体

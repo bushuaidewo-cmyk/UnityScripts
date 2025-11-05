@@ -563,6 +563,7 @@ public class AttackEventV2
     public float attackjumpRestDurationRanged = 0f;
 }
 
+
 [System.Serializable]
 public class ProjectileConfig
 {
@@ -644,7 +645,7 @@ public class ProjectileConfig
     [Tooltip("正弦摆动频率（Hz）")]
     public float sinFrequency = 3f;
 
-    // ========== 抛物线（重力） ==========
+    // ProjectileConfig 内“抛物线（重力）”区块追加字段
     [Header("抛物线（重力）")]
     [Tooltip("启用抛物线重力效果")]
     public bool parabolaEnabled = false;
@@ -652,8 +653,17 @@ public class ProjectileConfig
     [Tooltip("抛物线运动重力缩放")]
     public float gravityScale = 1f;
 
-    [Tooltip("落地反弹系数（0=不反弹）")]
+    [Tooltip("落地反弹系数（0=不反弹，>1 可越弹越高，不夹 [0,1]）")]
     public float bounceCoefficient = 0.0f;
+
+    [Tooltip("反弹能量模式：Constant=每次相同；DecayToZero=每次按衰减因子衰减，低于阈值即销毁")]
+    public BounceEnergyMode bounceEnergyMode = BounceEnergyMode.Constant;
+
+    [Tooltip("每次反弹额外衰减因子（<1 逐渐变小；=1 不变；>1 逐渐变大）")]
+    public float bounceDecayFactor = 1f;
+
+    [Tooltip("竖直反弹速度低于该阈值则销毁（仅 DecayToZero 生效）")]
+    public float bounceEndVyThreshold = 0.05f;
 
     [Tooltip("最高点高度（米，>0 时用来计算初始竖直速度 vy0 = sqrt(2*g*h)）")]
     public float parabolaApexHeight = 0f;
@@ -666,20 +676,23 @@ public class ProjectileConfig
     [Tooltip("跟踪频率（Hz）：每秒更新朝向的次数。0 表示不更新（关闭）。")]
     public float homingFrequency = 0f;
 
-   
+    [Range(0f, 1f)]
+    public float homingStrength = 1f;   // 0=不跟踪，1=最强跟踪
 
-    // ========== 半径旋转（螺旋） ==========
-    [Header("半径旋转（螺旋）")]
-    [Tooltip("启用半径旋转：围绕‘前进基线’的载体位置做半径为 R 的圆周（形成螺旋前进）")]
+    // ProjectileConfig 中“半径旋转”相关字段（移除了 orbitTangentialSpeed）
+    [Header("半径旋转（相对载体，PathTangent 空间）")]
+    [Tooltip("启用半径旋转：相对载体按半径做圆周偏移")]
     public bool orbitEnabled = false;
 
     [Tooltip("半径（米）")]
     public float orbitRadius = 0f;
 
-    [Tooltip("角速度（度/秒），正=逆时针，负=顺时针")]
-    public float orbitAngularSpeedDeg = 0f;
+    [Tooltip("每次要旋转的角度（度）。例如 90/180/360。达到该角度后从0重新开始下一次 sweep。")]
+    public float orbitAngular = 360f;
 
-    
+    [Tooltip("沿半径转动的角速度（度/秒）。符号决定方向：>0 逆时针，<0 顺时针。")]
+    public float orbitSweepSpeedDeg = 360f;
+
     // ========== 回旋镖 ==========
     [Header("回旋镖")]
     [Tooltip("启用回旋镖：飞到最远距离 -> 停顿 -> 返回起点/发射者")]
@@ -711,3 +724,9 @@ public enum Orientation { FacePlayer, FaceLeft, FaceRight }
 public enum MovementType { Straight, Jump }
 public enum SpawnPositionType { Points, Area }
 public enum SpawnAimMode { TowardsPlayer = 0, HorizontalToPlayer = 1 }
+// 新增一个枚举，放在现有枚举区域附近
+public enum BounceEnergyMode
+{
+    Constant = 0,    // 每次反弹强度不变
+    DecayToZero = 1  // 每次乘以衰减因子，低于阈值即销毁
+}

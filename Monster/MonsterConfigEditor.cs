@@ -627,12 +627,17 @@ public class MonsterConfigEditor : Editor
                                 {
                                     using (new EditorGUI.IndentLevelScope())
                                     {
+                                        // “抛物线”折叠区内，紧跟 bounceCoefficient 后面追加三行
                                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("gravityScale"));
                                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceCoefficient"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceEnergyMode"));   // 新增
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceDecayFactor"));  // 新增
                                         EditorGUILayout.PropertyField(
                                             spProj.FindPropertyRelative("parabolaApexHeight"),
                                             new GUIContent("最高点高度(米)")
                                         );
+                                        // 在合适位置追加阈值（仅 DecayToZero 生效，简单起见总是展示）
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("bounceEndVyThreshold")); // 新增
                                     }
                                 }
 
@@ -643,17 +648,23 @@ public class MonsterConfigEditor : Editor
                                     using (new EditorGUI.IndentLevelScope())
                                     {
                                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("homingFrequency"));
+                                        // 显示跟踪强度（0~1）
+                                        EditorGUILayout.PropertyField(
+                                            spProj.FindPropertyRelative("homingStrength"),
+                                            new GUIContent("Homing Strength (0~1)")
+                                        );
                                     }
                                 }
 
-                                // 半径旋转
+                                // 半径旋转 Inspector（移除了 orbitTangentialSpeed 的一行）
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("orbitEnabled"));
                                 if (spProj.FindPropertyRelative("orbitEnabled").boolValue)
                                 {
                                     using (new EditorGUI.IndentLevelScope())
                                     {
                                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("orbitRadius"));
-                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("orbitAngularSpeedDeg"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("orbitAngular"));
+                                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("orbitSweepSpeedDeg"));
                                     }
                                 }
 
