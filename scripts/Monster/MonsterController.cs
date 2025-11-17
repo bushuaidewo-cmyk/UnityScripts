@@ -88,13 +88,16 @@ public class MonsterController : MonoBehaviour
     [SerializeField] private float slopeEnterIdleSpeedEpsilonMC = 0.50f;
     [SerializeField] private float slopeStopVyThresholdMC = -0.05f;
 
-    [Header("特效锚点（可选）")]
+    [Header("特效锚点")]
     [SerializeField] private Transform fxSpawnPoint;
     [SerializeField] private Transform fxIdlePoint;
     [SerializeField] private Transform fxMovePoint;
     [SerializeField] private Transform fxRestPoint;
     [SerializeField] private Transform fxJumpPoint;
     [SerializeField] private Transform fxJumpRestPoint;
+
+    [SerializeField] private Transform fxAttackPoint;
+    [SerializeField] private Transform fxAttackFarPoint;
 
     // 1) 地形检测参数后，新增一组“前方低矮障碍自动跳（双射线）”配置
     [Header("前方低矮障碍自动跳（双射线）")]
@@ -179,9 +182,11 @@ public class MonsterController : MonoBehaviour
     public float bandMinDwellTime = 0.35f;
     private float bandDwellTimer = 0f;
 
-    // Follow<->Backstep 切换延迟（运行时计时器）
-    private float followToBackDelayTimer = 0f;
-    private float backToFollowDelayTimer = 0f;
+    private enum BackstepSuppressionPhase { Normal, Suppressed }
+    private BackstepSuppressionPhase currentSuppressionPhase = BackstepSuppressionPhase.Normal;
+    private float suppressionPhaseTimer = 0f;
+    private float originalReverseRange;
+    private float originalBackRange;
 
     // 发现：映射为“运行时镜像”的 PatrolMovement（直线/跳跃各三档）
     private PatrolMovement d2_move_follow, d2_move_retreat, d2_move_back;
@@ -233,15 +238,7 @@ public class MonsterController : MonoBehaviour
     private bool suppressOneDiscoveryJumpAfterAuto = true;
     private bool suppressNextDiscoveryJumpOnce = false;
 
-    //后退/倒退检测抑制计时器（秒）
-    private float backBandSuppressTimer = 0f;
-
-    // ================== 发现 攻击 ==================
-
-    // 攻击特效锚点
-    [Header("攻击特效锚点")]
-    [SerializeField] private Transform fxAttackPoint;
-    [SerializeField] private Transform fxAttackFarPoint;
+    
 
     private List<int> attackOrder = null;
     private int attackOrderPos = 0;
@@ -326,6 +323,24 @@ public class MonsterController : MonoBehaviour
             config.discoveryV2Config.events.Count > 0)
         {
             BuildDiscoveryOrderFromConfig();
+
+            var dcfg = config?.discoveryV2Config;
+            if (dcfg != null)
+            {
+                originalReverseRange = dcfg.reverseRange;
+                originalBackRange = dcfg.backRange;
+
+                if (dcfg.backDCTMax > 0f)
+                {
+                    currentSuppressionPhase = BackstepSuppressionPhase.Normal;
+                    // 使用新的随机区间
+                    suppressionPhaseTimer = Random.Range(dcfg.backDCTMin, dcfg.backDCTMax);
+                }
+            }
+
+            turnCooldown = 1f;
+            StartCoroutine(StateMachine());
+
             EnsureActiveDiscoveryEventSetup(resetRuntimes: true);
         }
 
@@ -345,18 +360,51 @@ public class MonsterController : MonoBehaviour
         if (turnCooldown > 0f) turnCooldown -= Time.deltaTime;
         if (bandDwellTimer > 0f) bandDwellTimer -= Time.deltaTime;
 
+        // 周期性后退检测屏蔽状态机
+        if (suppressionPhaseTimer > 0f)
+        {
+            suppressionPhaseTimer -= Time.deltaTime;
+        }
+        else
+        {
+            var dcfg = config?.discoveryV2Config;
+            // 只有在功能开启时才运行状态机 (判断条件改为Max > 0)
+            if (dcfg != null && dcfg.backDCTMax > 0f)
+            {
+                if (suppressionPhaseTimer > 0f)
+                {
+                    suppressionPhaseTimer -= Time.deltaTime;
+                }
+                else
+                {
+                    // 时间到，切换到下一个状态
+                    if (currentSuppressionPhase == BackstepSuppressionPhase.Normal)
+                    {
+                        // 从 正常 -> 屏蔽
+                        currentSuppressionPhase = BackstepSuppressionPhase.Suppressed;
+                        dcfg.reverseRange = 0f;
+                        dcfg.backRange = 0f;
+                    }
+                    else // Suppressed
+                    {
+                        // 从 屏蔽 -> 正常
+                        currentSuppressionPhase = BackstepSuppressionPhase.Normal;
+                        dcfg.reverseRange = originalReverseRange;
+                        dcfg.backRange = originalBackRange;
+                    }
+                    // 修改：重新从随机区间设置计时器
+                    suppressionPhaseTimer = Random.Range(dcfg.backDCTMin, dcfg.backDCTMax);
+                }
+            }
+        }
+
+
         if (ignoreCliffFramesLeft > 0) ignoreCliffFramesLeft--;
         if (autoJumpFxCooldownLeft > 0) autoJumpFxCooldownLeft--;
-
         if (obstacleTurnFaceLockTimer > 0f) obstacleTurnFaceLockTimer -= Time.deltaTime;
         if (postLandingFaceLockTimer > 0f) postLandingFaceLockTimer -= Time.deltaTime;
         if (faceFlipDwellTimer > 0f) faceFlipDwellTimer -= Time.deltaTime;
-
-        // 后退/倒退距离抑制计时器递减
-        if (backBandSuppressTimer > 0f) backBandSuppressTimer -= Time.deltaTime;
-
         if (attackRestCooldown > 0f) attackRestCooldown -= Time.deltaTime;
-
         if (faceProximityLockTimer > 0f) faceProximityLockTimer -= Time.deltaTime;
 
         // 只有在“最后一个循环已播放完”才冻结；否则由 AttackUpdate 负责重播下一次循环
@@ -376,10 +424,7 @@ public class MonsterController : MonoBehaviour
             }
         }
 
-        // 若配置关闭，确保不生效
-        var dcfgU = config != null ? config.discoveryV2Config : null;
-        if (dcfgU != null && !dcfgU.suppressBackBandDuringRest)
-            backBandSuppressTimer = 0f;
+        
 
         if (autoJumpRearmAfterLanding && !isJumping && !inAutoJumpPermitZone && ignoreCliffFramesLeft <= 0)
         {
@@ -555,34 +600,45 @@ public class MonsterController : MonoBehaviour
     {
         discoveryRestJustFinished = false;
 
+        // 玩家引用丢失回巡逻
         if (!player) { state = MonsterState.Patrol; return; }
 
         var dcfg = config.discoveryV2Config;
-        if (dcfg == null || dcfg.events == null || dcfg.events.Count == 0) { state = MonsterState.Patrol; return; }
+        if (dcfg == null || dcfg.events == null || dcfg.events.Count == 0)
+        {
+            state = MonsterState.Patrol;
+            return;
+        }
 
         UpdateGroundedAndSlope();
 
-        var p = GetPlayerDistPos();
-        var m = GetMonsterDistPos();
-        float d = discoveryUseHorizontalDistanceOnly ? Mathf.Abs(p.x - m.x) : Vector2.Distance(p, m);
+        Vector2 p = GetPlayerDistPos();
+        Vector2 m = GetMonsterDistPos();
+        float d = discoveryUseHorizontalDistanceOnly
+            ? Mathf.Abs(p.x - m.x)
+            : Vector2.Distance(p, m);
 
-        if (d > dcfg.findRange) { state = MonsterState.Patrol; return; }
+        // 超出发现范围 → 回巡逻
+        if (d > dcfg.findRange)
+        {
+            state = MonsterState.Patrol;
+            return;
+        }
+
         float dxToPlayer = p.x - m.x;
-        int dirToPlayer = (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone) ? FacingSign() : (dxToPlayer >= 0f ? +1 : -1);
-        // 靠近玩家的人形面向锁（在重叠/很近区间内，启用一段时间的锁定）
+        int dirToPlayer = (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone)
+            ? FacingSign()
+            : (dxToPlayer >= 0f ? +1 : -1);
+
         if (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone)
             faceProximityLockTimer = Mathf.Max(faceProximityLockTimer, faceFlipMinDwellTime);
         bool inProximityFaceLock = faceProximityLockTimer > 0f;
 
-
+        // 攻击优先
         if (!inAttack && attackRestCooldown <= 0f && dcfg.attacks != null && dcfg.attacks.Count > 0)
         {
-            TryStartAttack(dcfg, d, GetPlayerDistPos(), GetMonsterDistPos());
-            if (inAttack)
-            {
-                AttackUpdate();
-                return;
-            }
+            TryStartAttack(dcfg, d, p, m);
+            if (inAttack) { AttackUpdate(); return; }
         }
         else if (inAttack)
         {
@@ -590,344 +646,196 @@ public class MonsterController : MonoBehaviour
             return;
         }
 
-        // 带选择
-        DiscoveryBand wantBand = ComputeWantBandWithHysteresis(d, dcfg);
-
-        // 仅当开关开启时才抑制 Back/Retreat 检测
-        if (dcfg.suppressBackBandDuringRest && backBandSuppressTimer > 0f && wantBand != DiscoveryBand.Follow)
-            wantBand = DiscoveryBand.Follow;
-
-        // Follow -> Backstep 的进入延迟
-        if (currentBand == DiscoveryBand.Follow)
-        {
-            if (wantBand == DiscoveryBand.Backstep)
-            {
-                float min = Mathf.Max(0f, dcfg.delayFollowToBackstepMin);
-                float max = Mathf.Max(min, dcfg.delayFollowToBackstepMax);
-                if (max > 0f)
-                {
-                    if (followToBackDelayTimer <= 0f)
-                        followToBackDelayTimer = Random.Range(min, max); // 只在触发时随机一次
-                    else
-                        followToBackDelayTimer -= Time.deltaTime;
-
-                    if (followToBackDelayTimer > 0f)
-                        wantBand = DiscoveryBand.Follow; // 计时未到，保持 Follow
-                    else
-                        followToBackDelayTimer = 0f;     // 计时结束，允许切换
-                }
-            }
-            else
-            {
-                // 条件不再成立，清空计时器
-                followToBackDelayTimer = 0f;
-            }
-        }
-
-        // Backstep -> Follow 的进入延迟
-        else if (currentBand == DiscoveryBand.Backstep)
-        {
-            if (wantBand == DiscoveryBand.Follow)
-            {
-                float min = Mathf.Max(0f, dcfg.delayBackstepToFollowMin);
-                float max = Mathf.Max(min, dcfg.delayBackstepToFollowMax);
-                if (max > 0f)
-                {
-                    if (backToFollowDelayTimer <= 0f)
-                        backToFollowDelayTimer = Random.Range(min, max); // 只在触发时随机一次
-                    else
-                        backToFollowDelayTimer -= Time.deltaTime;
-
-                    if (backToFollowDelayTimer > 0f)
-                        wantBand = DiscoveryBand.Backstep; // 计时未到，保持 Backstep
-                    else
-                        backToFollowDelayTimer = 0f;       // 计时结束，允许切换
-                }
-            }
-            else
-            {
-                backToFollowDelayTimer = 0f;
-            }
-        }
-
-        bool bandChangeAllowedNow = !(activeDiscoveryEvent?.mode == DiscoveryV2Mode.Jump && isJumping) && !isResting && (bandDwellTimer <= 0f) && (currentBand != wantBand);
-
-        if (bandChangeAllowedNow)
-        {
-            currentBand = wantBand;
-            if (activeDiscoveryEvent != null && activeDiscoveryEvent.mode == DiscoveryV2Mode.Move && !isResting)
-            {
-                var moveForNewBand = GetD2MoveFor(currentBand);
-                ResetStraightRuntime(moveForNewBand);
-            }
-            bandDwellTimer = Mathf.Max(0.05f, bandMinDwellTime);
-        }
-
-        
-
-        // 抑制窗口期间，重叠区间内冻结 dirToPlayer 为当前朝向，避免快速左右闪
-        if (dcfg.suppressBackBandDuringRest && backBandSuppressTimer > 0f)
-        {
-            // 锁定区间：基于现有死区与滞回之和（可按需调大一点）
-            float lockZone = Mathf.Max(faceFlipDeadZone, 0.15f) + Mathf.Max(0f, faceFlipHysteresis);
-            if (Mathf.Abs(dxToPlayer) <= lockZone)
-            {
-                dirToPlayer = FacingSign();
-            }
-        }
-
+        // 保证事件已选
         if (activeDiscoveryEvent == null)
         {
             AdvanceDiscoveryEvent(orderResetIfEmpty: true);
             if (activeDiscoveryEvent == null) { state = MonsterState.Patrol; return; }
         }
 
+        // ================= 1) 执行当前档位下的行为（移动或跳跃） =================
         if (activeDiscoveryEvent.mode == DiscoveryV2Mode.Move)
         {
-            if (isJumping && activeJumpMove != null)
+            if (!(isJumping && activeJumpMove != null))
             {
-                
-                return;
-            }
+                bool inFaceLock = obstacleTurnFaceLockTimer > 0f;
 
-            
-
-            bool inFaceLock = obstacleTurnFaceLockTimer > 0f;
-
-            int faceSign, moveSign;
-            if (inFaceLock || inProximityFaceLock)
-            {
-                faceSign = FacingSign();
-                moveSign = FacingSign();
-            }
-            else
-            {
-                if (currentBand == DiscoveryBand.Follow)
+                int faceSign, moveSign;
+                if (inFaceLock || inProximityFaceLock)
                 {
-                    faceSign = dirToPlayer; moveSign = dirToPlayer;
+                    faceSign = FacingSign();
+                    moveSign = FacingSign();
                 }
-                else if (currentBand == DiscoveryBand.Retreat)
+                else
                 {
-                    faceSign = -dirToPlayer;
-                    moveSign = -dirToPlayer;
+                    if (currentBand == DiscoveryBand.Follow)
+                    {
+                        faceSign = dirToPlayer;
+                        moveSign = dirToPlayer;
+                    }
+                    else if (currentBand == DiscoveryBand.Retreat)
+                    {
+                        faceSign = -dirToPlayer;
+                        moveSign = -dirToPlayer;
+                    }
+                    else // Backstep
+                    {
+                        faceSign = dirToPlayer;
+                        moveSign = -dirToPlayer;
+                    }
+                    faceSign = StabilizeFaceSign(faceSign, dxToPlayer);
                 }
-                else // Backstep
+
+                ForceFaceSign(faceSign);
+
+                if (!isJumping && isGroundedMC && MaybeAutoJumpOverLowObstacle(moveSign))
                 {
-                    faceSign = dirToPlayer;
-                    moveSign = -dirToPlayer;
+                    if (isJumping && activeJumpMove != null) return;
                 }
-                faceSign = StabilizeFaceSign(faceSign, dxToPlayer);
-            }
 
-            ForceFaceSign(faceSign);
-
-            if (!isJumping && isGroundedMC && MaybeAutoJumpOverLowObstacle(moveSign))
-            {
-                if (isJumping && activeJumpMove != null)
+                bool allowTurn, stopAtCliff;
+                switch (activeDiscoveryEvent.obstacleTurnMode)
                 {
-                    
-                    return;
+                    case ObstacleTurnMode.AutoTurn: allowTurn = true; stopAtCliff = false; break;
+                    case ObstacleTurnMode.NoTurnCanFall: allowTurn = false; stopAtCliff = false; break;
+                    case ObstacleTurnMode.NoTurnStopAtCliff:
+                    default: allowTurn = false; stopAtCliff = true; break;
                 }
-            }
 
-            bool allowTurn, stopAtCliff;
-            switch (activeDiscoveryEvent.obstacleTurnMode)
-            {
-                case ObstacleTurnMode.AutoTurn:
-                    allowTurn = true; stopAtCliff = false; break;
-                case ObstacleTurnMode.NoTurnCanFall:
-                    allowTurn = false; stopAtCliff = false; break;
-                case ObstacleTurnMode.NoTurnStopAtCliff:
-                default:
-                    allowTurn = false; stopAtCliff = true; break;
-            }
+                var move = GetD2MoveFor(currentBand);
+                bool suppressTurnInZone = (activeDiscoveryEvent.obstacleTurnMode != ObstacleTurnMode.AutoTurn);
 
-            var move = GetD2MoveFor(currentBand);
+                obstacleTurnedThisFrame = false;
 
-            bool suppressTurnInZone = (activeDiscoveryEvent.obstacleTurnMode != ObstacleTurnMode.AutoTurn);
+                discoveryRestJustFinished = StraightTickCommon(
+                    move,
+                    moveSign,
+                    useWaypoints: false,
+                    useMoveDirForProbes: true,
+                    allowTurnOnObstacle: allowTurn,
+                    stopAtCliffEdgeWhenNoTurn: stopAtCliff,
+                    suppressTurnInAutoJumpZone: suppressTurnInZone
+                );
 
-            obstacleTurnedThisFrame = false;
-
-            discoveryRestJustFinished = StraightTickCommon(move, moveSign, useWaypoints: false, useMoveDirForProbes: true, allowTurnOnObstacle: allowTurn, stopAtCliffEdgeWhenNoTurn: stopAtCliff,
-                suppressTurnInAutoJumpZone: suppressTurnInZone);
-
-            // 仅当开关开启时执行转换（Move 分支：使用 moveSet.back.backrestMin/Max）
-            if (dcfg.suppressBackBandDuringRest
-                && (currentBand == DiscoveryBand.Retreat || currentBand == DiscoveryBand.Backstep)
-                && isResting
-                && backBandSuppressTimer <= 0f)
-            {
-                float min = Mathf.Max(0f, activeDiscoveryEvent.moveSet.back.backrestMin);
-                float max = Mathf.Max(min, activeDiscoveryEvent.moveSet.back.backrestMax);
-                backBandSuppressTimer = (max > 0f) ? Random.Range(min, max) : 0f;
-
-                // 立即允许切档，并把带位压到 Follow（UI/朝向立刻呈现 Follow）
-                bandDwellTimer = 0f;
-                currentBand = DiscoveryBand.Follow;
-
-                // 打断 Back/Retreat 的休息，按旧版策略推进事件
-                ResetStraightRuntime(move);
-                discoveryRestJustFinished = true;
-            }
-
-            
-            // 当处于 Retreat/Backstep 且配置 enableBackAutoJumpOnObstacle 开启时，
-            // 如果检测到墙/悬崖则尝试触发一次向玩家方向的跳跃（使用当前事件的 jumpSet）
-            if (dcfg != null && dcfg.enableBackAutoJumpOnObstacle && (currentBand == DiscoveryBand.Retreat || currentBand == DiscoveryBand.Backstep))
-            {
-                // 仅在地面、非跳跃、非休息时尝试
-                if (!isJumping && isGroundedMC && !isResting)
+                // 后退档位障碍触发向玩家方向跳
+                if (dcfg.enableBackAutoJumpOnObstacle &&
+                    (currentBand == DiscoveryBand.Retreat || currentBand == DiscoveryBand.Backstep) &&
+                    !isJumping && isGroundedMC && !isResting)
                 {
-                    // 判定“前方有墙或悬崖”
                     bool wallAhead = CheckWallInDir(moveSign);
                     bool cliffAhead = CheckCliffInDir(moveSign, permitCountsAsGround: true);
-                    if (wallAhead || cliffAhead)
+                    if ((wallAhead || cliffAhead) && activeDiscoveryEvent.jumpSet != null)
                     {
-                        // 需要当前事件配置有 jumpSet 才能执行
-                        if (activeDiscoveryEvent != null && activeDiscoveryEvent.jumpSet != null)
+                        var jmove = GetD2JumpFor(currentBand);
+                        if (jmove != null)
                         {
-                            var jmove = GetD2JumpFor(currentBand);
-                            if (jmove != null)
-                            {
-                                // 准备并起跳：跳跃方向按“朝玩家方向”
-                                int dirToPlayerLocal = (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone) ? FacingSign() : (dxToPlayer >= 0f ? +1 : -1);
-                                EnsureJumpPlan(jmove, useAutoParams: false);
-                                BeginOneJump(jmove, useAutoParams: false, moveDirOverride: dirToPlayerLocal);
-                                // 一次触发后跳出，不再继续 StraightTick 后续处理
-                                obstacleTurnedThisFrame = false;
-                                discoveryRestJustFinished = false;
-                                // 直接 return ，避免后续重复逻辑（DiscoveryUpdate 会在下一帧继续处理 JumpUpdate）
-                                return;
-                            }
+                            int dirToPlayerLocal =
+                                (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone)
+                                    ? FacingSign()
+                                    : (dxToPlayer >= 0f ? +1 : -1);
+
+                            EnsureJumpPlan(jmove, useAutoParams: false);
+                            BeginOneJump(jmove, useAutoParams: false, moveDirOverride: dirToPlayerLocal);
+
+                            obstacleTurnedThisFrame = false;
+                            discoveryRestJustFinished = false;
+                            return;
                         }
                     }
                 }
-            }
 
-            if (obstacleTurnedThisFrame)
-            {
-                obstacleTurnFaceLockTimer = Mathf.Max(0f, obstacleTurnFaceLockTime);
-                obstacleTurnedThisFrame = false;
-            }
-
-            if (discoveryRestJustFinished)
-                AdvanceDiscoveryEvent();
-
-        }
-        else
-        {
-            if (isAutoJumping && activeJumpMove != null)
-            {
-                
-                return;
-            }
-
-            var jmove = GetD2JumpFor(currentBand);
-
-            int faceSign = (currentBand == DiscoveryBand.Retreat) ? -dirToPlayer : dirToPlayer;
-
-            // 新增靠近玩家锁
-            if (inProximityFaceLock)
-                faceSign = FacingSign();
-            else if (lockFaceWhileAirborne && isJumping && faceSignLockedDuringAir != 0)
-                faceSign = faceSignLockedDuringAir;
-            else
-                faceSign = StabilizeFaceSign(faceSign, dxToPlayer);
-
-            ForceFaceSign(faceSign);
-            int moveDir = (currentBand == DiscoveryBand.Follow) ? dirToPlayer : -dirToPlayer;
-            
-            // 若靠近玩家锁生效，也让移动方向与面向一致，避免“背对走动”造成摩擦触发抖动
-            if (inProximityFaceLock) moveDir = faceSign;
-
-            if (lockFaceWhileAirborne && isJumping && faceSignLockedDuringAir != 0)
-                faceSign = faceSignLockedDuringAir;
-            else
-                faceSign = StabilizeFaceSign(faceSign, dxToPlayer);
-
-            
-
-            if (suppressNextDiscoveryJumpOnce)
-            {
-                suppressNextDiscoveryJumpOnce = false;
-
-                isResting = true;
-                inJumpRestPhase = true;
-
-                if (!string.IsNullOrEmpty(jmove.jumpRestAnimation))
-                    PlayAnimIfNotCurrent(jmove.jumpRestAnimation);
-
-                jmove.rtRestTimer = PickJumpRestTime(jmove);
-
-                rb.velocity = new Vector2(0f, rb.velocity.y);
-                desiredSpeedX = 0f;
-                ApplySlopeIdleStopIfNoMove();
-
-
-                return;
-            }
-
-            if (!isJumping && isGroundedMC && MaybeAutoJumpOverLowObstacle(moveDir))
-            {
-                if (isJumping && activeJumpMove != null)
+                if (obstacleTurnedThisFrame)
                 {
-                    
-                    return;
+                    obstacleTurnFaceLockTimer = Mathf.Max(0f, obstacleTurnFaceLockTime);
+                    obstacleTurnedThisFrame = false;
                 }
-            }
 
-            if (isResting && inJumpRestPhase)
-            {
-                // 抑制开关：把跳休转为抑制窗口（用 backjumpRestMin/Max 随机）
-                if (dcfg.suppressBackBandDuringRest
-                    && (currentBand == DiscoveryBand.Retreat || currentBand == DiscoveryBand.Backstep)
-                    && backBandSuppressTimer <= 0f)
-                {
-                    float min = Mathf.Max(0f, activeDiscoveryEvent.jumpSet.back.backjumpRestMin);
-                    float max = Mathf.Max(min, activeDiscoveryEvent.jumpSet.back.backjumpRestMax);
-                    backBandSuppressTimer = (max > 0f) ? Random.Range(min, max) : 0f;
-
-                    isResting = false;
-                    inJumpRestPhase = false;
-                    if (jmove != null) jmove.rtRestTimer = 0f;
-                    discoveryRestJustFinished = true;
+                                if (discoveryRestJustFinished)
                     AdvanceDiscoveryEvent();
-                    return;
-                }
-
-                if (!string.IsNullOrEmpty(jmove.jumpRestAnimation))
-                    PlayAnimIfNotCurrent(jmove.jumpRestAnimation);
-
-                rb.velocity = new Vector2(0f, rb.velocity.y);
-                desiredSpeedX = 0f;
-                ApplySlopeIdleStopIfNoMove();
-
-                if (jmove.rtRestTimer <= 0f) jmove.rtRestTimer = PickJumpRestTime(jmove);
-                jmove.rtRestTimer -= Time.deltaTime;
-
-                if (jmove.rtRestTimer <= 0f)
-                {
-                    isResting = false;
-                    inJumpRestPhase = false;
-                    jmove.rtRestTimer = 0f;
-                    discoveryRestJustFinished = true;
-                    // 一次发现-跳跃循环彻底结束（从起跳到跳休结束）——清除生命周期标记
-                    discoveryJumpActive = false;
-                }
             }
-            else
+        }
+        else // Jump 模式
+        {
+            if (!(isAutoJumping && activeJumpMove != null))
             {
-                if (!isJumping)
+                var jmove = GetD2JumpFor(currentBand);
+                int faceSign = (currentBand == DiscoveryBand.Retreat) ? -dirToPlayer : dirToPlayer;
+
+                if (inProximityFaceLock)
+                    faceSign = FacingSign();
+                else if (lockFaceWhileAirborne && isJumping && faceSignLockedDuringAir != 0)
+                    faceSign = faceSignLockedDuringAir;
+                else
+                    faceSign = StabilizeFaceSign(faceSign, dxToPlayer);
+
+                ForceFaceSign(faceSign);
+
+                int moveDir = (currentBand == DiscoveryBand.Follow) ? dirToPlayer : -dirToPlayer;
+                if (inProximityFaceLock) moveDir = faceSign;
+
+                if (!isJumping && isGroundedMC && MaybeAutoJumpOverLowObstacle(moveDir))
                 {
-                    EnsureJumpPlan(jmove, useAutoParams: false);
-                    BeginOneJump(jmove, useAutoParams: false, moveDirOverride: moveDir);
+                    if (isJumping && activeJumpMove != null) return;
+                }
+
+                if (isResting && inJumpRestPhase)
+                {
+                    if (!string.IsNullOrEmpty(jmove.jumpRestAnimation))
+                        PlayAnimIfNotCurrent(jmove.jumpRestAnimation);
+
+                    rb.velocity = new Vector2(0f, rb.velocity.y);
+                    desiredSpeedX = 0f;
+                    ApplySlopeIdleStopIfNoMove();
+
+                    if (jmove.rtRestTimer <= 0f) jmove.rtRestTimer = PickJumpRestTime(jmove);
+                    jmove.rtRestTimer -= Time.deltaTime;
+
+                    if (jmove.rtRestTimer <= 0f)
+                    {
+                        isResting = false;
+                        inJumpRestPhase = false;
+                        jmove.rtRestTimer = 0f;
+                        discoveryRestJustFinished = true;
+                        discoveryJumpActive = false;
+                        AdvanceDiscoveryEvent();
+                    }
+                }
+                else
+                {
+                    if (!isJumping)
+                    {
+                        EnsureJumpPlan(jmove, useAutoParams: false);
+                        BeginOneJump(jmove, useAutoParams: false, moveDirOverride: moveDir);
+                    }
                 }
             }
+        }
 
-            if (discoveryRestJustFinished)
-                AdvanceDiscoveryEvent();
+        // ================= 2) & 3) 计算期望档位并处理切换 =================
+        DiscoveryBand wantBand = ComputeWantBandWithHysteresis(d, dcfg);
+        // 最终的切档逻辑 (此部分保持不变)
+        bool bandChangeAllowedNow =
+            !(activeDiscoveryEvent?.mode == DiscoveryV2Mode.Jump && isJumping) &&
+            !isResting &&
+            (bandDwellTimer <= 0f) &&
+            (currentBand != wantBand);
+
+        if (bandChangeAllowedNow)
+        {
+            currentBand = wantBand;
+
+            if (activeDiscoveryEvent != null &&
+                activeDiscoveryEvent.mode == DiscoveryV2Mode.Move &&
+                !isResting)
+            {
+                var moveForNewBand = GetD2MoveFor(currentBand);
+                ResetStraightRuntime(moveForNewBand);
+            }
+
+            bandDwellTimer = Mathf.Max(0.05f, bandMinDwellTime);
         }
     }
+
 
     // 按“顺序/随机循环 + 可用性筛选”挑下一条
     private void TryStartAttack(DiscoveryV2Config dcfg, float dToPlayer, Vector2 playerPos, Vector2 monsterPos)
@@ -976,8 +884,6 @@ public class MonsterController : MonoBehaviour
             // 不可用：顺位后移，继续找下一条
             attackOrderPos = (attackOrderPos + 1) % n;
         }
-
-        // 本轮没有任何可用的攻击：不发起攻击（等距离满足时再试）
     }
 
     private void StartAttack(AttackEventV2 a, Vector2 playerPos, Vector2 monsterPos)
@@ -1433,8 +1339,8 @@ public class MonsterController : MonoBehaviour
             moveDuration = set.find.findmoveDuration,
 
             // Follow 段只有单值 → 映射为区间[min=max=单值]
-            restMin = Mathf.Max(0f, set.find.findrestDuration),
-            restMax = Mathf.Max(0f, set.find.findrestDuration),
+            restMin = Mathf.Max(0f, set.find.findrestMin),
+            restMax = Mathf.Max(0f, set.find.findrestMax),
 
             moveAnimation = set.findmoveAnimation,
             restAnimation = set.findrestAnimation,
@@ -1511,9 +1417,9 @@ public class MonsterController : MonoBehaviour
             gravityScale = set.find.findgravityScale,
             jumpDuration = set.find.findjumpDuration,
 
-            // Follow 段只有单值 → 映射为区间[min=max=单值]
-            jumprestMin = Mathf.Max(0f, set.find.findjumpRestDuration),
-            jumprestMax = Mathf.Max(0f, set.find.findjumpRestDuration),
+            // 原来是映射单个值，现在直接使用区间
+            jumprestMin = Mathf.Max(0f, set.find.findjumpRestMin),
+            jumprestMax = Mathf.Max(set.find.findjumpRestMin, set.find.findjumpRestMax),
 
             jumpAnimation = set.findjumpAnimation,
             jumpRestAnimation = set.findjumpRestAnimation,
@@ -1854,11 +1760,7 @@ public class MonsterController : MonoBehaviour
         }
         activeDiscoveryIndex = Mathf.Clamp(activeDiscoveryIndex, 0, dcfg.events.Count - 1);
         activeDiscoveryEvent = dcfg.events[activeDiscoveryIndex];
-
         currentBand = DiscoveryBand.Follow; // 初次进入默认 Follow
-        // ：重置延迟计时器
-        followToBackDelayTimer = 0f;
-        backToFollowDelayTimer = 0f;
 
         if (resetRuntimes)
         {
@@ -2856,11 +2758,6 @@ public class MonsterController : MonoBehaviour
             d.findRange = Mathf.Max(0f, d.findRange);
             d.reverseRange = Mathf.Max(0f, d.reverseRange);
             d.backRange = Mathf.Max(0f, d.backRange);
-
-            d.delayFollowToBackstepMin = Mathf.Max(0f, d.delayFollowToBackstepMin);
-            d.delayFollowToBackstepMax = Mathf.Max(d.delayFollowToBackstepMin, d.delayFollowToBackstepMax);
-            d.delayBackstepToFollowMin = Mathf.Max(0f, d.delayBackstepToFollowMin);
-            d.delayBackstepToFollowMax = Mathf.Max(d.delayBackstepToFollowMin, d.delayBackstepToFollowMax);
 
             if (d.events != null)
             {

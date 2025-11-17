@@ -20,7 +20,7 @@ public class MonsterConfigEditor : Editor
         var spPatrol = serializedObject.FindProperty("patrolConfig");
         var spDiscoveryV2 = serializedObject.FindProperty("discoveryV2Config");
 
-        Header("基础设置");
+        
         EditorGUILayout.PropertyField(spMonsterID);
         EditorGUILayout.PropertyField(spLevel);
         EditorGUILayout.PropertyField(spMaxHP);
@@ -113,14 +113,14 @@ public class MonsterConfigEditor : Editor
             EditorGUILayout.PropertyField(spRandomOrder);
 
             SpaceMinor();
-            if (Fold("patrol.movements", $"巡逻动作列表 (Count={spMovements.arraySize})", true))
+            if (Fold("patrol.movements", $"巡逻移动/跳跃列表 (Count={spMovements.arraySize})", true))
             {
                 using (new EditorGUI.IndentLevelScope())
                 {
                     for (int i = 0; i < spMovements.arraySize; i++)
                     {
                         var elem = spMovements.GetArrayElementAtIndex(i);
-                        if (Fold($"patrol.movements.{i}", $"元素 {i}", true))
+                        if (Fold($"patrol.movements.{i}", $"动作 {i}", true))
                         {
                             using (new EditorGUI.IndentLevelScope())
                             {
@@ -187,7 +187,7 @@ public class MonsterConfigEditor : Editor
 
         if (type == MovementType.Straight)
         {
-            Section("直线参数");
+            
             EditorGUILayout.PropertyField(spMoveSpeed);
             EditorGUILayout.PropertyField(spAcceleration);
             EditorGUILayout.PropertyField(spDeceleration);
@@ -197,7 +197,7 @@ public class MonsterConfigEditor : Editor
 
             // 区间
             EditorGUILayout.Space(2);
-            EditorGUILayout.LabelField("巡逻休息时长区间（秒）", EditorStyles.miniBoldLabel);
+            
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.PropertyField(spRestMin, new GUIContent("restMin"));
             EditorGUILayout.PropertyField(spRestMax, new GUIContent("restMax"));
@@ -205,7 +205,7 @@ public class MonsterConfigEditor : Editor
         }
         else
         {
-            Section("跳跃参数");
+            
             EditorGUILayout.PropertyField(spJumpSpeed);
             EditorGUILayout.PropertyField(spJumpHeight);
             EditorGUILayout.PropertyField(spGravityScale);
@@ -213,7 +213,7 @@ public class MonsterConfigEditor : Editor
 
             // 区间
             EditorGUILayout.Space(2);
-            EditorGUILayout.LabelField("巡逻跳休时长区间（秒）", EditorStyles.miniBoldLabel);
+            
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.PropertyField(spJumpRestMin, new GUIContent("jumprestMin"));
             EditorGUILayout.PropertyField(spJumpRestMax, new GUIContent("jumprestMax"));
@@ -262,27 +262,16 @@ public class MonsterConfigEditor : Editor
     private void DrawDiscoveryV2Config(SerializedProperty spV2)
     {
         if (spV2 == null) return;
-        if (!Fold("discover", "发现阶段配置（V2）", true)) return;
+        if (!Fold("discover", "发现阶段配置", true)) return;
 
         using (new EditorGUI.IndentLevelScope())
         {
             var spFindRange = spV2.FindPropertyRelative("findRange");
             var spReverseR = spV2.FindPropertyRelative("reverseRange");
             var spBackR = spV2.FindPropertyRelative("backRange");
-
-            // 拿到延迟字段
-            var spDelayFollowToBackMin = spV2.FindPropertyRelative("delayFollowToBackstepMin");
-            var spDelayFollowToBackMax = spV2.FindPropertyRelative("delayFollowToBackstepMax");
-
-            var spDelayBackToFollowMin = spV2.FindPropertyRelative("delayBackstepToFollowMin");
-            var spDelayBackToFollowMax = spV2.FindPropertyRelative("delayBackstepToFollowMax");
-
             var spBackAuto = spV2.FindPropertyRelative("enableBackAutoJumpOnObstacle");
-            var spBackSuppress = spV2.FindPropertyRelative("suppressBackBandDuringRest");
-
             var spRandom = spV2.FindPropertyRelative("findRandomOrder");
             var spEvents = spV2.FindPropertyRelative("events");
-
             var spAttacks = spV2.FindPropertyRelative("attacks");
             var spAttacksRandom = spV2.FindPropertyRelative("attacksRandomOrder");
 
@@ -290,24 +279,24 @@ public class MonsterConfigEditor : Editor
             EditorGUILayout.PropertyField(spReverseR);
             EditorGUILayout.PropertyField(spBackR);
 
+            Header("后退检测周期性屏蔽");
+            var spCycleMin = spV2.FindPropertyRelative("backDCTMin");
+
+            var spCycleMax = spV2.FindPropertyRelative("backDCTMax");
+
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.PropertyField(spCycleMin); // 不使用 GUIContent.none，它会默认使用字段名作为标签
+            EditorGUILayout.PropertyField(spCycleMax); // 同上
+            EditorGUILayout.EndHorizontal();
+
             EditorGUILayout.Space(2);
-
-            // Follow → Backstep
-            EditorGUILayout.PropertyField(spDelayFollowToBackMin, new GUIContent("Follow→Backstep Min"));
-            EditorGUILayout.PropertyField(spDelayFollowToBackMax, new GUIContent("Follow→Backstep Max"));
-
-            // Backstep → Follow
-            EditorGUILayout.PropertyField(spDelayBackToFollowMin, new GUIContent("Backstep→Follow Min"));
-            EditorGUILayout.PropertyField(spDelayBackToFollowMax, new GUIContent("Backstep→Follow Max"));
-
             EditorGUILayout.PropertyField(spBackAuto, new GUIContent("Back: Auto-Jump On Obstacle"));
-            EditorGUILayout.PropertyField(spBackSuppress, new GUIContent("Back: Suppress Bands During Rest"));
 
             // 事件顺序（发现事件）
             EditorGUILayout.PropertyField(spRandom, new GUIContent("Events Random Order"));
 
             SpaceMinor();
-            if (Fold("discover.events", $"事件列表 (Count={spEvents.arraySize})", true))
+            if (Fold("discover.events", $"发现移动/跳跃列表 (Count={spEvents.arraySize})", true))
             {
                 using (new EditorGUI.IndentLevelScope())
                 {
@@ -326,11 +315,11 @@ public class MonsterConfigEditor : Editor
                 }
             }
 
-            // 攻击顺序（攻击V2）
+            // 攻击顺序（攻击）
             SpaceMinor();
             EditorGUILayout.PropertyField(spAttacksRandom, new GUIContent("Attacks Random Order"));
 
-            if (Fold("discover.attacks", $"攻击（V2）列表 (Count={spAttacks.arraySize})", true))
+            if (Fold("discover.attacks", $"攻击列表 (Count={spAttacks.arraySize})", true))
             {
                 using (new EditorGUI.IndentLevelScope())
                 {
@@ -353,7 +342,7 @@ public class MonsterConfigEditor : Editor
 
     private void DrawDiscoveryEvent(SerializedProperty spEvent, int index)
     {
-        var label = $"事件 {index}";
+        var label = $"动作 {index}";
         if (!Fold($"discover.events.{index}", label, true)) return;
 
         using (new EditorGUI.IndentLevelScope())
@@ -396,19 +385,19 @@ public class MonsterConfigEditor : Editor
 
         var spBackAnim = spMoveSet.FindPropertyRelative("backmoveAnimation");
 
-        Section("Follow（发现移动 参数）");
+        
         using (new EditorGUI.IndentLevelScope())
         {
             DrawMoveParamsFind(spFind);
         }
 
-        Section("Backstep（倒退/后退 公用 参数）");
+       
         using (new EditorGUI.IndentLevelScope())
         {
             DrawMoveParamsBack(spBack);
         }
 
-        Section("动画/特效（find 与 retreat 共用；back 仅 move 动画不同，特效复用 find）");
+        
         using (new EditorGUI.IndentLevelScope())
         {
             EditorGUILayout.PropertyField(spFindAnim, new GUIContent("Findmove Animation"));
@@ -465,7 +454,15 @@ public class MonsterConfigEditor : Editor
         EditorGUILayout.PropertyField(spFind.FindPropertyRelative("finddeceleration"));
         EditorGUILayout.PropertyField(spFind.FindPropertyRelative("finddecelerationTime"));
         EditorGUILayout.PropertyField(spFind.FindPropertyRelative("findmoveDuration"));
-        EditorGUILayout.PropertyField(spFind.FindPropertyRelative("findrestDuration"));
+
+        var spMin = spFind.FindPropertyRelative("findrestMin");
+        var spMax = spFind.FindPropertyRelative("findrestMax");
+        EditorGUILayout.Space(2);
+        
+        EditorGUILayout.BeginHorizontal();
+        EditorGUILayout.PropertyField(spMin, new GUIContent("findrestMin"));
+        EditorGUILayout.PropertyField(spMax, new GUIContent("findrestMax"));
+        EditorGUILayout.EndHorizontal();
     }
 
     private void DrawMoveParamsBack(SerializedProperty spBack)
@@ -481,7 +478,7 @@ public class MonsterConfigEditor : Editor
         var spMin = spBack.FindPropertyRelative("backrestMin");
         var spMax = spBack.FindPropertyRelative("backrestMax");
         EditorGUILayout.Space(2);
-        EditorGUILayout.LabelField("Back 休息时长区间（秒）", EditorStyles.miniBoldLabel);
+        
         EditorGUILayout.BeginHorizontal();
         EditorGUILayout.PropertyField(spMin, new GUIContent("backrestMin"));
         EditorGUILayout.PropertyField(spMax, new GUIContent("backrestMax"));
@@ -495,7 +492,15 @@ public class MonsterConfigEditor : Editor
         EditorGUILayout.PropertyField(spFind.FindPropertyRelative("findjumpHeight"));
         EditorGUILayout.PropertyField(spFind.FindPropertyRelative("findgravityScale"));
         EditorGUILayout.PropertyField(spFind.FindPropertyRelative("findjumpDuration"));
-        EditorGUILayout.PropertyField(spFind.FindPropertyRelative("findjumpRestDuration"));
+
+        var spMin = spFind.FindPropertyRelative("findjumpRestMin");
+        var spMax = spFind.FindPropertyRelative("findjumpRestMax");
+        EditorGUILayout.Space(2);
+        EditorGUILayout.LabelField("Find 跳休时长区间（秒）", EditorStyles.miniBoldLabel);
+        EditorGUILayout.BeginHorizontal();
+        EditorGUILayout.PropertyField(spMin, new GUIContent("findjumpRestMin"));
+        EditorGUILayout.PropertyField(spMax, new GUIContent("findjumpRestMax"));
+        EditorGUILayout.EndHorizontal();
     }
 
     private void DrawJumpParamsBack(SerializedProperty spBack)
@@ -526,7 +531,7 @@ public class MonsterConfigEditor : Editor
             EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackDuration"));
             EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("repeatedHitsCount"), new GUIContent("repeatedHitsCount"));
             EditorGUILayout.Space(2);
-            EditorGUILayout.LabelField("攻击休息时长区间（秒）", EditorStyles.miniBoldLabel);
+            
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackRestMin"), new GUIContent("restMin"));
             EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackRestMax"), new GUIContent("restMax"));

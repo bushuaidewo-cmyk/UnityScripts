@@ -14,7 +14,7 @@ public class MonsterConfig : ScriptableObject
     [Tooltip("被击败后给予的经验值")]
     public int exp;
 
-    [Header("基础设置")]
+    [Header("资源配置")]
     [Tooltip("怪物的Prefab（包含动画、碰撞体、脚本等）")]
     public GameObject monsterPrefab;
 
@@ -102,7 +102,6 @@ public class PatrolMovement
     [Tooltip("动作类型：直线移动 或 跳跃")]
     public MovementType type;
 
-    [Header("直线移动参数")]
     [Tooltip("匀速阶段的目标水平速度（单位：米/秒）")]
     public float moveSpeed;
     [Tooltip("加速度（单位：米/秒²），当 accelerationTime<=0 时使用该值，否则由时间推算")]
@@ -122,7 +121,7 @@ public class PatrolMovement
     [Tooltip("直线动作结束后的休息时长上限（秒）")]
     public float restMax = 0f;
 
-    [Header("移动动画配置")]
+    
     [Tooltip("直线移动时播放的动画状态名")]
     public string moveAnimation;
     [Tooltip("直线休息时播放的动画状态名")]
@@ -132,7 +131,7 @@ public class PatrolMovement
     [Tooltip("直线休息时播放的特效")]
     public GameObject restEffectPrefab;
 
-    [Header("跳跃移动参数(type=Jump 时使用)")]
+    
     [Tooltip("跳跃的水平速度（米/秒）")]
     public float jumpSpeed;
     [Tooltip("跳跃的竖直高度（米）")]
@@ -148,7 +147,7 @@ public class PatrolMovement
     [Tooltip("跳跃到地面后的休息时长上限（秒）")]
     public float jumprestMax = 0f;
 
-    [Header("跳跃动画/特效(Jump 与 AutoJump 资源共用)")]
+    
     [Tooltip("起跳/空中阶段播放的动画状态名")]
     public string jumpAnimation;
     [Tooltip("落地休息阶段播放的动画状态名")]
@@ -158,7 +157,7 @@ public class PatrolMovement
     [Tooltip("跳休时播放的特效")]
     public GameObject jumpRestEffectPrefab;
 
-    [Header("Auto Jump 参数")]
+    
     [Tooltip("自动跳时的水平速度（米/秒）")]
     public float autojumpSpeed;
     [Tooltip("自动跳时的竖直高度（米）")]
@@ -197,31 +196,24 @@ public class DiscoveryV2Config
 {
     [Header("三档水平距离(Gizmos:红=发现,白=后退,黑=倒退)")]
     [Tooltip("发现距离（<=该距离进入“跟随/靠近”带）")]
+
     public float findRange = 6f;
     [Tooltip("后退距离（<=该距离进入“后退”带）")]
     public float reverseRange = 3.5f;
     [Tooltip("倒退距离（<=该距离进入“倒退/回拉”带）")]
     public float backRange = 1.5f;
 
-    // Follow<->Backstep 切换延迟
-    [Header("发现阶段：档位切换延迟区间（秒）")]
-    [Tooltip("Follow(发现移动) → Backstep(倒退) 进入延迟下限")]
-    public float delayFollowToBackstepMin = 0f;
-    [Tooltip("Follow(发现移动) → Backstep(倒退) 进入延迟上限")]
-    public float delayFollowToBackstepMax = 0f;
-
-    [Tooltip("Backstep(倒退) → Follow(发现移动) 进入延迟下限")]
-    public float delayBackstepToFollowMin = 0f;
-    [Tooltip("Backstep(倒退) → Follow(发现移动) 进入延迟上限")]
-    public float delayBackstepToFollowMax = 0f;
+    
+    [Tooltip("周期内单个状态（正常/屏蔽）的随机持续时间下限（秒）。和上限均为0则关闭此功能。")]
+    public float backDCTMin = 0f;
+    [Tooltip("周期内单个状态（正常/屏蔽）的随机持续时间上限（秒）。")]
+    public float backDCTMax = 0f;
 
     [Header("Back 档额外选项")]
     [Tooltip("勾选后：处于 Retreat/Backstep 且靠近墙或悬崖时，自动向玩家方向跳跃（使用事件的 JumpSet）。")]
     public bool enableBackAutoJumpOnObstacle = false;
 
-    [Tooltip("勾选后：后退/倒退进入休息期间，临时关闭后退/倒退距离检测；计时结束后若玩家仍在该距离内再恢复后退/倒退。")]
-    public bool suppressBackBandDuringRest = true;
-
+    
     [Header("事件播放")]
     [Tooltip("是否随机播放事件列表（否则顺序播放）")]
     public bool findRandomOrder = false;
@@ -235,6 +227,7 @@ public class DiscoveryV2Config
 
     [Tooltip("攻击列表是否随机顺序（true：随机轮询；false：按 0,1,2… 顺序循环）")]
     public bool attacksRandomOrder = false;
+
 }
 
 public enum ObstacleTurnMode
@@ -276,7 +269,7 @@ public class MoveSetV2
     [Tooltip("后退/倒退档位的移动参数")]
     public BackstepMoveParams back;
 
-    [Header("动画/特效")]
+    [Header("动画/特效（（find 与 retreat 共用；back 仅 move 动画不同，特效复用 find））")]
     [Tooltip("跟随/后退档位通用的移动动画")]
     public string findmoveAnimation;
     [Tooltip("跟随/后退档位通用的休息动画")]
@@ -290,8 +283,10 @@ public class MoveSetV2
 }
 
 [System.Serializable]
+
 public class FollowMoveParams
 {
+    [Header("Follow阶段")]
     [Tooltip("跟随档位：目标水平速度")]
     public float findmoveSpeed = 1f;
     [Tooltip("跟随档位：加速度")]
@@ -304,13 +299,16 @@ public class FollowMoveParams
     public float finddecelerationTime = 0f;
     [Tooltip("跟随档位：匀速阶段持续时间")]
     public float findmoveDuration = 0f;
-    [Tooltip("跟随档位：动作后休息时长（单值）")]
-    public float findrestDuration = 0f;
+    [Tooltip("跟随档位：休息时长下限")]
+    public float findrestMin = 0f;
+    [Tooltip("跟随档位：休息时长上限")]
+    public float findrestMax = 0f;
 }
 
 [System.Serializable]
 public class RetreatMoveParams
 {
+    
     [Tooltip("后退档位：目标水平速度")]
     public float reversemoveSpeed = 1f;
     [Tooltip("后退档位：加速度")]
@@ -330,6 +328,7 @@ public class RetreatMoveParams
 [System.Serializable]
 public class BackstepMoveParams
 {
+    [Header("Backstep阶段")]
     [Tooltip("倒退档位：目标水平速度")]
     public float backmoveSpeed = 1f;
     [Tooltip("倒退档位：加速度")]
@@ -390,8 +389,11 @@ public class FollowJumpParams
     public float findgravityScale = 1f;
     [Tooltip("跟随档位：按时长预算来决定连跳次数（0=仅一次）")]
     public float findjumpDuration = 0f;
-    [Tooltip("跟随档位：落地休息时长（单值）")]
-    public float findjumpRestDuration = 0f;
+    [Tooltip("跟随档位：落地休息时长下限")]
+    public float findjumpRestMin = 0f;
+    [Tooltip("跟随档位：落地休息时长上限")]
+    public float findjumpRestMax = 0f;
+
 }
 
 [System.Serializable]
@@ -512,7 +514,7 @@ public class AttackEventV2
     public float attackjumpRestDuration = 0f;
 
     // 新增：按类型分开的“移动中攻击”参数
-    [Header("移动中攻击（Melee 专用）")]
+    
     [Tooltip("近战时的攻击位移速度")]
     public float attackmoveSpeedMelee = 0f;
     [Tooltip("近战时的攻击位移加速度")]
@@ -526,7 +528,7 @@ public class AttackEventV2
     [Tooltip("近战时的总位移时长（含加/匀/减）")]
     public float attackmoveDurationMelee = 0f;
 
-    [Header("移动中攻击（Ranged 专用）")]
+    
     [Tooltip("远程时的攻击位移速度")]
     public float attackmoveSpeedRanged = 0f;
     [Tooltip("远程时的攻击位移加速度")]
@@ -541,7 +543,7 @@ public class AttackEventV2
     public float attackmoveDurationRanged = 0f;
 
     // 按类型分开的“跳跃中攻击”参数
-    [Header("跳跃中攻击（Melee 专用）")]
+    
     [Tooltip("近战时攻击起跳的水平速度")]
     public float attackjumpSpeedMelee = 0f;
     [Tooltip("近战时攻击起跳的高度")]
@@ -553,7 +555,7 @@ public class AttackEventV2
     [Tooltip("近战时攻击跳跃落地后的休息时长")]
     public float attackjumpRestDurationMelee = 0f;
 
-    [Header("跳跃中攻击（Ranged 专用）")]
+    
     [Tooltip("远程时攻击起跳的水平速度")]
     public float attackjumpSpeedRanged = 0f;
     [Tooltip("远程时攻击起跳的高度")]
@@ -565,7 +567,6 @@ public class AttackEventV2
     [Tooltip("远程时攻击跳跃落地后的休息时长")]
     public float attackjumpRestDurationRanged = 0f;
 }
-
 
 [System.Serializable]
 public class ProjectileConfig
@@ -600,11 +601,10 @@ public class ProjectileConfig
     public float selfRotateSpeedDeg = 360f;
 
     // 统一的“沿移动方向自动朝向”
-    [Header("朝向")]
+    
     [Tooltip("勾选后：根对象沿移动方向自动朝向；若“自身旋转”启用，本项失效")]
     public bool faceAlongPath = true;
-
-    [Header("发射朝向")]
+    
     [Tooltip("TowardsPlayer=朝向玩家飞；HorizontalToPlayer=按水平朝向玩家飞（忽略Y）")]
     public SpawnAimMode spawnAim = SpawnAimMode.TowardsPlayer;
 
