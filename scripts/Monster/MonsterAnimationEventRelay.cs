@@ -117,4 +117,16 @@ public class MonsterAnimationEventRelay : MonoBehaviour
         if (debugEvents) Debug.Log("[Relay] attackFarFire()");
         controller?.OnAttackFarFire();
     }
+
+    public void skymoveEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] skymoveEffectPrefab()");
+        controller?.OnFxSkyMove();
+    }
+
+    public void skyrestEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] skyrestEffectPrefab()");
+        controller?.OnFxSkyRest();
+    }
 }

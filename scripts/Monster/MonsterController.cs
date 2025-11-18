@@ -1,10 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-
-/// 怪物控制器：出生 → 巡逻 → 发现
-/// 移除了空中阶段/地空切换/死亡阶段相关代码；发现阶段使用 discoveryV2Config。
-public class MonsterController : MonoBehaviour
+public partial class MonsterController : MonoBehaviour
 {
     [Header("怪物配置 ScriptableObject")]
     public MonsterConfig config;
@@ -50,7 +47,10 @@ public class MonsterController : MonoBehaviour
     private bool autoJumpReady = true;
     private bool autoJumpRearmAfterLanding = false;
     private bool isAutoJumping = false;
-    private enum MonsterState { Idle, Patrol, Discovery, Dead }
+    private enum MonsterState { Idle, Patrol, Discovery, Air, Dead }
+
+
+
     private MonsterState state = MonsterState.Idle;
 
     // 四通道各自独立的“当前段”引用
@@ -88,7 +88,7 @@ public class MonsterController : MonoBehaviour
     [SerializeField] private float slopeEnterIdleSpeedEpsilonMC = 0.50f;
     [SerializeField] private float slopeStopVyThresholdMC = -0.05f;
 
-    [Header("特效锚点")]
+    [Header("地面特效锚点")]
     [SerializeField] private Transform fxSpawnPoint;
     [SerializeField] private Transform fxIdlePoint;
     [SerializeField] private Transform fxMovePoint;
@@ -98,6 +98,10 @@ public class MonsterController : MonoBehaviour
 
     [SerializeField] private Transform fxAttackPoint;
     [SerializeField] private Transform fxAttackFarPoint;
+
+    [Header("空中特效锚点")]
+    [SerializeField] private Transform fxSkyMovePoint;
+    [SerializeField] private Transform fxSkyRestPoint;
 
     // 1) 地形检测参数后，新增一组“前方低矮障碍自动跳（双射线）”配置
     [Header("前方低矮障碍自动跳（双射线）")]
@@ -236,15 +240,12 @@ public class MonsterController : MonoBehaviour
     [Header("发现阶段：自动跳后抑制一次常规跳")]
     [SerializeField, Tooltip("开启后：自动跳落地后抑制下一次发现阶段的常规跳跃")]
     private bool suppressOneDiscoveryJumpAfterAuto = true;
-    private bool suppressNextDiscoveryJumpOnce = false;
-
     
-
     private List<int> attackOrder = null;
     private int attackOrderPos = 0;
 
     // ================== 攻击运行时（MVP） ==================
-    
+
     private bool inAttack = false;
     private float attackTimer = 0f;
     private float attackRestCooldown = 0f;      // 攻击休息期间屏蔽攻击检测
@@ -309,6 +310,17 @@ public class MonsterController : MonoBehaviour
         if (config != null)
             config = ScriptableObject.Instantiate(config);
 
+        var ap = config?.airPhaseConfig;
+        if (ap != null && ap.airPhaseID == 0)
+        {
+            state = MonsterState.Air;
+            EnterAirPhaseSetup(); // 内部有 _airSetupDone 保护，可重复调用
+        }
+        else if (ap != null && ap.groundPhaseID == 0)
+        {
+            state = MonsterState.Patrol; // 锁地面时保持原行为：出生后落地
+        }
+
         // 巡逻运行态
         if (config && config.patrolConfig != null && config.patrolConfig.movements != null)
             patrolRuntimeMoves = config.patrolConfig.movements;
@@ -339,18 +351,15 @@ public class MonsterController : MonoBehaviour
             }
 
             turnCooldown = 1f;
-            StartCoroutine(StateMachine());
-
             EnsureActiveDiscoveryEventSetup(resetRuntimes: true);
         }
 
-        // 构建攻击顺序
         BuildAttackOrderFromConfig();
-
+        
         turnCooldown = 1f;
-        StartCoroutine(StateMachine());
         rb.interpolation = RigidbodyInterpolation2D.Interpolate;
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+        StartCoroutine(StateMachine());
     }
 
     //Update() 内递减计时器
@@ -424,7 +433,7 @@ public class MonsterController : MonoBehaviour
             }
         }
 
-        
+
 
         if (autoJumpRearmAfterLanding && !isJumping && !inAutoJumpPermitZone && ignoreCliffFramesLeft <= 0)
         {
@@ -435,7 +444,7 @@ public class MonsterController : MonoBehaviour
 
     IEnumerator StateMachine()
     {
-        // 出生
+        // 出生动画
         if (!string.IsNullOrEmpty(config.spawnConfig.spawnAnimation))
         {
             animator.CrossFadeInFixedTime(config.spawnConfig.spawnAnimation, 0f, 0, 0f);
@@ -450,7 +459,14 @@ public class MonsterController : MonoBehaviour
             yield return new WaitForSeconds(idleTime);
         }
 
-        state = MonsterState.Patrol;
+        // 3) 出生后立刻按 ID 判定初始阶段
+        DecidePhaseAfterSpawn();
+
+        // 保持已有的初始化（若未设置为 Air 则默认 Patrol）
+        state = (state == MonsterState.Air) ? MonsterState.Air : MonsterState.Patrol;
+
+        if (state == MonsterState.Air)
+            EnterAirPhaseSetup();
 
         while (!isDead)
         {
@@ -462,6 +478,9 @@ public class MonsterController : MonoBehaviour
                 case MonsterState.Discovery:
                     DiscoveryUpdate();
                     break;
+                case MonsterState.Air:
+                    AirPatrolUpdate();
+                    break;
                 default:
                     IdleUpdate();
                     break;
@@ -470,7 +489,43 @@ public class MonsterController : MonoBehaviour
         }
     }
 
-   
+    public void DecidePhaseAfterSpawn()
+    {
+        // 默认：若配置缺失，则按原来地面逻辑
+        if (config == null || config.airPhaseConfig == null)
+        {
+            state = MonsterState.Patrol;
+            return;
+        }
+
+        int groundID = Mathf.Max(0, config.airPhaseConfig.groundPhaseID);
+        int airID = Mathf.Max(0, config.airPhaseConfig.airPhaseID);
+
+        if (airID == 0 && groundID == 0)
+        {
+            // 都为 0：按原地面行为
+            state = MonsterState.Patrol;
+            return;
+        }
+
+        if (airID == 0)
+        {
+            // 锁定空中：不要再运行地面配置逻辑
+            state = MonsterState.Air;
+            return;
+        }
+
+        if (groundID == 0)
+        {
+            // 锁定地面
+            state = MonsterState.Patrol;
+            return;
+        }
+
+        // 双阶段：较小 ID 为起始
+        state = (airID < groundID) ? MonsterState.Air : MonsterState.Patrol;
+    }
+
     void FixedUpdate()
     {
         if (isJumping && activeJumpMove != null)
@@ -515,7 +570,7 @@ public class MonsterController : MonoBehaviour
 
         if (isJumping && activeJumpMove != null)
         {
-            
+
             return;
         }
 
@@ -553,15 +608,15 @@ public class MonsterController : MonoBehaviour
                     return;
                 }
             }
-            
+
             return;
         }
 
         if (isResting)
         {
             string restAnim =
-                (move.type == MovementType.Jump && !string.IsNullOrEmpty(move.jumpRestAnimation)) 
-                ? move.jumpRestAnimation 
+                (move.type == MovementType.Jump && !string.IsNullOrEmpty(move.jumpRestAnimation))
+                ? move.jumpRestAnimation
                 : move.restAnimation;
 
             PlayAnimIfNotCurrent(restAnim);
@@ -750,7 +805,7 @@ public class MonsterController : MonoBehaviour
                     obstacleTurnedThisFrame = false;
                 }
 
-                                if (discoveryRestJustFinished)
+                if (discoveryRestJustFinished)
                     AdvanceDiscoveryEvent();
             }
         }
@@ -1042,7 +1097,7 @@ public class MonsterController : MonoBehaviour
         }
 
         // 跳中攻击优先驱动 —— 放在移动逻辑之前
-        if (attackJumpRuntime != null && isJumping){}
+        if (attackJumpRuntime != null && isJumping) { }
 
         // 移动中攻击（禁止自动转向/落崖）
         if (attackMoveRuntime != null && !isJumping)
@@ -2181,7 +2236,7 @@ public class MonsterController : MonoBehaviour
                 isAutoJumping = false;
 
                 if (suppressOneDiscoveryJumpAfterAuto && state == MonsterState.Discovery)
-                    suppressNextDiscoveryJumpOnce = true;
+                { }
 
                 float restAfterAuto = (move.type == MovementType.Jump) ? PickJumpRestTime(move) : PickStraightRestTime(move);
 
@@ -2659,13 +2714,15 @@ public class MonsterController : MonoBehaviour
     {
         if (!other.CompareTag(autoJumpPermitTag)) return;
 
+        // NEW: 空中阶段忽略 AutoJumpZone
+        if (state == MonsterState.Air) return;
+
         inAutoJumpPermitZone = true;
 
         if (!autoJumpReady || ignoreCliffFramesLeft > 0) return;
         if (patrolRuntimeMoves == null || patrolRuntimeMoves.Count == 0) return;
 
         var move = patrolRuntimeMoves[patrolIndex];
-
         EnsureJumpPlan(move, useAutoParams: true);
         move.rtExecuteRemain = 1;
 
@@ -2677,13 +2734,15 @@ public class MonsterController : MonoBehaviour
 
     void OnTriggerExit2D(Collider2D other)
     {
-        if (other.CompareTag(autoJumpPermitTag))
-        {
-            inAutoJumpPermitZone = false;
-        }
+        if (!other.CompareTag(autoJumpPermitTag)) return;
+
+        // NEW: 空中阶段忽略 AutoJumpZone
+        if (state == MonsterState.Air) return;
+
+        inAutoJumpPermitZone = false;
     }
 
-    
+
     // 爆炸范围改为由每个飞行物自身在飞行过程中绘制（见 ProjectileBehaviour.OnDrawGizmos）
     void OnDrawGizmosSelected()
     {
@@ -2699,24 +2758,37 @@ public class MonsterController : MonoBehaviour
         UnityEditor.Handles.Label(pos + Vector3.up * 0.15f, monsterDistPoint ? "monsterDistPoint" : "transform");
 #endif
 
-        // 发现三圈
-        Gizmos.color = Color.red; DrawCircleXY(pos, dcfg2.findRange);
-        Gizmos.color = Color.white; DrawCircleXY(pos, dcfg2.reverseRange);
-        Gizmos.color = Color.black; DrawCircleXY(pos, dcfg2.backRange);
-
-        // 近战/远程参考圈（无视 attackType，直接取最大值；远程=紫色）
-        var atkCfg = dcfg2.attacks;
-        if (atkCfg != null && atkCfg.Count > 0)
+        bool showGroundDebug = true;
+        var phaseCfg = config?.airPhaseConfig;
+        if (phaseCfg != null)
         {
-            float meleeMax = 0f, rangedMax = 0f;
-            foreach (var a in atkCfg)
+            // 隐藏条件：进入空中锁定 (airPhaseID == 0) 或 groundPhaseID == 2
+            if (phaseCfg.airPhaseID == 0 || phaseCfg.groundPhaseID == 2)
+                showGroundDebug = false;
+        }
+
+        // 仅在允许显示时绘制发现与攻击参考圈
+        if (showGroundDebug)
+        {
+            // 发现三圈
+            Gizmos.color = Color.red; DrawCircleXY(pos, dcfg2.findRange);
+            Gizmos.color = Color.white; DrawCircleXY(pos, dcfg2.reverseRange);
+            Gizmos.color = Color.black; DrawCircleXY(pos, dcfg2.backRange);
+
+            // 近战/远程参考圈
+            var atkCfg = dcfg2.attacks;
+            if (atkCfg != null && atkCfg.Count > 0)
             {
-                if (a == null) continue;
-                meleeMax = Mathf.Max(meleeMax, Mathf.Max(0f, a.meleeRange));
-                rangedMax = Mathf.Max(rangedMax, Mathf.Max(0f, a.rangedRange));
+                float meleeMax = 0f, rangedMax = 0f;
+                foreach (var a in atkCfg)
+                {
+                    if (a == null) continue;
+                    meleeMax = Mathf.Max(meleeMax, Mathf.Max(0f, a.meleeRange));
+                    rangedMax = Mathf.Max(rangedMax, Mathf.Max(0f, a.rangedRange));
+                }
+                if (meleeMax > 0f) { Gizmos.color = Color.yellow; DrawCircleXY(pos, meleeMax); }
+                if (rangedMax > 0f) { Gizmos.color = new Color(0.5f, 0f, 0.5f); DrawCircleXY(pos, rangedMax); }
             }
-            if (meleeMax > 0f) { Gizmos.color = Color.yellow; DrawCircleXY(pos, meleeMax); }
-            if (rangedMax > 0f) { Gizmos.color = new Color(0.5f, 0f, 0.5f); DrawCircleXY(pos, rangedMax); }
         }
     }
 
@@ -2875,14 +2947,14 @@ public class MonsterController : MonoBehaviour
     }
 
 
-    private static bool HasStraightRest(PatrolMovement m) 
-        => Mathf.Max(m.restMin, m.restMax) > 0f; 
+    private static bool HasStraightRest(PatrolMovement m)
+        => Mathf.Max(m.restMin, m.restMax) > 0f;
 
-    private float PickStraightRestTime(PatrolMovement move) 
-    { 
-        float min = Mathf.Max(0f, move.restMin); 
-        float max = Mathf.Max(min, move.restMax); 
-        return (max > 0f) ? Random.Range(min, max) : 0f; 
+    private float PickStraightRestTime(PatrolMovement move)
+    {
+        float min = Mathf.Max(0f, move.restMin);
+        float max = Mathf.Max(min, move.restMax);
+        return (max > 0f) ? Random.Range(min, max) : 0f;
     }
 
     private float PickAttackRestTime(AttackEventV2 a)
@@ -2893,11 +2965,11 @@ public class MonsterController : MonoBehaviour
         return (max > 0f) ? Random.Range(min, max) : 0f;
     }
 
-    private float PickJumpRestTime(PatrolMovement move) 
-    { 
-        float min = Mathf.Max(0f, move.jumprestMin); 
-        float max = Mathf.Max(min, move.jumprestMax); 
-        return (max > 0f) ? Random.Range(min, max) : 0f; 
+    private float PickJumpRestTime(PatrolMovement move)
+    {
+        float min = Mathf.Max(0f, move.jumprestMin);
+        float max = Mathf.Max(min, move.jumprestMax);
+        return (max > 0f) ? Random.Range(min, max) : 0f;
     }
 
     // ================== 发现阶段：动画特效事件（严格一一对应版） ==================
@@ -3052,7 +3124,7 @@ public class MonsterController : MonoBehaviour
         }
         StartCoroutine(SpawnBurstProjectiles(spawn, projCfg));
     }
-    
+
 
     // 严格播放（去掉 Animator 状态名强校验；保留‘配置非空/特效非空/锚点非空’）
     private void PlayDiscoveryMoveFxForBand(DiscoveryBand band, bool isRest)
@@ -3078,5 +3150,5 @@ public class MonsterController : MonoBehaviour
         PlayEffect(prefab, anchor);
     }
 
-    
+
 }

@@ -1,7 +1,8 @@
 #if UNITY_EDITOR
+using System;
+using System.IO;
 using UnityEditor;
 using UnityEngine;
-using System.IO;
 
 [CustomEditor(typeof(MonsterConfig))]
 public class MonsterConfigEditor : Editor
@@ -10,32 +11,230 @@ public class MonsterConfigEditor : Editor
     {
         serializedObject.Update();
 
+        // 基础字段
         var spMonsterID = serializedObject.FindProperty("monsterID");
         var spLevel = serializedObject.FindProperty("level");
         var spMaxHP = serializedObject.FindProperty("maxHP");
         var spExp = serializedObject.FindProperty("exp");
         var spPrefab = serializedObject.FindProperty("monsterPrefab");
 
+        // 各配置块
         var spSpawn = serializedObject.FindProperty("spawnConfig");
         var spPatrol = serializedObject.FindProperty("patrolConfig");
         var spDiscoveryV2 = serializedObject.FindProperty("discoveryV2Config");
 
-        
-        EditorGUILayout.PropertyField(spMonsterID);
-        EditorGUILayout.PropertyField(spLevel);
-        EditorGUILayout.PropertyField(spMaxHP);
-        EditorGUILayout.PropertyField(spExp);
-        EditorGUILayout.PropertyField(spPrefab);
+        // 空中：阶段ID 与 功能占位
+        var spAirIDs = serializedObject.FindProperty("airPhaseConfig");
+        var spAirStage = serializedObject.FindProperty("airStageConfig");
 
+        // 1) 基础属性（新增折叠三角）
+        if (Fold("basic", "基础属性", true))
+        {
+            using (new EditorGUI.IndentLevelScope())
+            {
+                EditorGUILayout.PropertyField(spMonsterID);
+                EditorGUILayout.PropertyField(spLevel);
+                EditorGUILayout.PropertyField(spMaxHP);
+                EditorGUILayout.PropertyField(spExp);
+                EditorGUILayout.PropertyField(spPrefab);
+            }
+        }
+
+        // 2) 出生阶段配置
         DrawSpawnConfig(spSpawn);
-        DrawPatrolConfig(spPatrol);
-        DrawDiscoveryV2Config(spDiscoveryV2);
 
+        // 3) 地面配置与空中配置ID（移动至“出生阶段配置”下面，“地面配置”上面）
+        DrawAirPhaseConfig(spAirIDs);
+
+        // 4) 地面配置（巡逻 + 发现）
+        bool groundFoldOpen = Fold("ground", "地面配置", true);
+        if (groundFoldOpen)
+        {
+            using (new EditorGUI.IndentLevelScope())
+            {
+                DrawPatrolConfig(spPatrol);
+                DrawDiscoveryV2Config(spDiscoveryV2);
+            }
+        }
+
+        // 5) 空中配置（占位：巡逻/发现）
+        DrawAirStageConfig(spAirStage);
+
+        // 6) 导入/导出
         DrawIOButtons();
 
         serializedObject.ApplyModifiedProperties();
     }
 
+    private void DrawAirStageConfig(SerializedProperty spAirStage)
+    {
+        if (spAirStage == null) return;
+        if (!Fold("air.stage", "空中配置", true)) return;
+
+        using (new EditorGUI.IndentLevelScope())
+        {
+            var spAirPatrol = spAirStage.FindPropertyRelative("patrol");
+            if (Fold("air.stage.patrol", "巡逻阶段配置(空中)", true))
+            {
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    // 通用选项
+                    var spRandom = spAirPatrol.FindPropertyRelative("randomOrder");
+                    var spPass = spAirPatrol.FindPropertyRelative("canPassThroughScene");
+                    var spFaceAlong = spAirPatrol.FindPropertyRelative("faceAlongMove");
+
+                    var spSelfRot = spAirPatrol.FindPropertyRelative("selfRotate");
+                    var spSelfX = spAirPatrol.FindPropertyRelative("selfRotateX");
+                    var spSelfY = spAirPatrol.FindPropertyRelative("selfRotateY");
+                    var spSelfZ = spAirPatrol.FindPropertyRelative("selfRotateZ");
+                    var spSelfSpeed = spAirPatrol.FindPropertyRelative("selfRotateSpeedDeg");
+
+                    var spSkyMoveAnim = spAirPatrol.FindPropertyRelative("skymoveAnimation");
+                    var spSkyRestAnim = spAirPatrol.FindPropertyRelative("skyrestAnimation");
+                    var spSkyMoveFx = spAirPatrol.FindPropertyRelative("skymoveEffectPrefab");
+                    var spSkyRestFx = spAirPatrol.FindPropertyRelative("skyrestEffectPrefab");
+
+                    var spPathType = spAirPatrol.FindPropertyRelative("pathType");
+                    var spElems = spAirPatrol.FindPropertyRelative("elements");
+
+                    EditorGUILayout.PropertyField(spRandom, new GUIContent("随机播放巡逻动作"));
+
+                    // 路径类型 + 提示
+                    if (spPathType != null)
+                    {
+                        var pt = (AirPatrolPathType)spPathType.enumValueIndex;
+                        string hint = pt switch
+                        {
+                            AirPatrolPathType.AreaRandom => "随机方向：每轮启动重新挑随机的2D方向",
+                            AirPatrolPathType.AreaRandomH => "随机固定方向：段起点不重新随机；撞墙/出界按法线反弹，方向会延续到下一段",
+                            AirPatrolPathType.AreaHorizontal => "水平：在区域左右边缘之间往返（X 方向）",
+                            AirPatrolPathType.AreaVertical => "垂直：在区域上下边缘之间往返（Y 方向），不自动改变朝向",
+                            _ => ""
+                        };
+                        if (!string.IsNullOrEmpty(hint))
+                            EditorGUILayout.HelpBox(hint, MessageType.None);
+                    }
+                    EditorGUILayout.PropertyField(spPathType, new GUIContent("区域移动类型"));
+
+                    if (spElems != null)
+                    {
+                        int n = spElems.arraySize;
+                        if (n <= 0)
+                        {
+                            EditorGUILayout.HelpBox("添加至少一个元素后可编辑区域（areaCenter / areaSize）。", MessageType.Info);
+                        }
+                        else
+                        {
+                            var first = spElems.GetArrayElementAtIndex(0);
+                            var spAreaCenterGlobal = first.FindPropertyRelative("areaCenter");
+                            var spAreaSizeGlobal = first.FindPropertyRelative("areaSize");
+                            EditorGUI.BeginChangeCheck();
+                            EditorGUILayout.PropertyField(spAreaCenterGlobal, new GUIContent("areaCenter"));
+                            EditorGUILayout.PropertyField(spAreaSizeGlobal, new GUIContent("areaSize"));
+                            if (EditorGUI.EndChangeCheck())
+                            {
+                                // 批量同步到全部元素
+                                for (int i = 0; i < n; i++)
+                                {
+                                    var e = spElems.GetArrayElementAtIndex(i);
+                                    e.FindPropertyRelative("areaCenter").vector2Value = spAreaCenterGlobal.vector2Value;
+                                    e.FindPropertyRelative("areaSize").vector2Value = spAreaSizeGlobal.vector2Value;
+                                }
+                            }
+                        }
+                    }
+
+                    EditorGUILayout.PropertyField(spPass, new GUIContent("受区域限制"));
+                    
+
+                    EditorGUILayout.Space(2);
+                    EditorGUILayout.PropertyField(spSelfRot, new GUIContent("自转"));
+                    if (spSelfRot.boolValue)
+                    {
+                        EditorGUILayout.BeginHorizontal();
+                        EditorGUILayout.PropertyField(spSelfX, new GUIContent("X"), GUILayout.Width(40));
+                        EditorGUILayout.PropertyField(spSelfY, new GUIContent("Y"), GUILayout.Width(40));
+                        EditorGUILayout.PropertyField(spSelfZ, new GUIContent("Z"), GUILayout.Width(40));
+                        EditorGUILayout.EndHorizontal();
+                        EditorGUILayout.PropertyField(spSelfSpeed, new GUIContent("速度(度/秒)"));
+                    }
+
+                    EditorGUILayout.Space(4);
+                    EditorGUILayout.PropertyField(spSkyMoveAnim, new GUIContent("Skymove Animation"));
+                    EditorGUILayout.PropertyField(spSkyRestAnim, new GUIContent("Skyrest Animation"));
+                    EditorGUILayout.PropertyField(spSkyMoveFx, new GUIContent("Skymove Effect Prefab"));
+                    EditorGUILayout.PropertyField(spSkyRestFx, new GUIContent("Skyrest Effect Prefab"));
+
+                    if (Fold("air.stage.patrol.elements", $"空中巡逻元素列表 (Count={spElems.arraySize})", true))
+                    {
+                        using (new EditorGUI.IndentLevelScope())
+                        {
+                            for (int i = 0; i < spElems.arraySize; i++)
+                            {
+                                var elem = spElems.GetArrayElementAtIndex(i);
+                                if (Fold($"air.stage.patrol.elements.{i}", $"element {i}", true))
+                                {
+                                    using (new EditorGUI.IndentLevelScope())
+                                    {
+                                        // 线性移动核心字段
+                                        var spMove = elem.FindPropertyRelative("move");
+                                        DrawAirPatrolMoveCore(spMove);
+
+                                        // S 型叠加
+                                        var spSinOn = elem.FindPropertyRelative("sinEnabled");
+                                        var spFreq = elem.FindPropertyRelative("sinFrequency");
+                                        var spAmp = elem.FindPropertyRelative("sinAmplitude");
+                                        EditorGUILayout.Space(2);
+                                        EditorGUILayout.PropertyField(spSinOn, new GUIContent("启用上下摆动(S型)"));
+                                        if (spSinOn.boolValue)
+                                        {
+                                            EditorGUILayout.PropertyField(spFreq, new GUIContent("上下摆动频率(Hz)"));
+                                            EditorGUILayout.PropertyField(spAmp, new GUIContent("上下摆动幅度(米)"));
+                                        }
+                                    }
+                                }
+                            }
+
+                            EditorGUILayout.BeginHorizontal();
+                            if (GUILayout.Button("+ 添加"))
+                                spElems.InsertArrayElementAtIndex(spElems.arraySize);
+                            if (spElems.arraySize > 0 && GUILayout.Button("- 移除最后"))
+                                spElems.DeleteArrayElementAtIndex(spElems.arraySize - 1);
+                            EditorGUILayout.EndHorizontal();
+                        }
+                    }
+                }
+            }
+
+            // 发现（空中）
+            var spAirDiscovery = spAirStage.FindPropertyRelative("discovery");
+            if (Fold("air.stage.discovery", "发现阶段配置(空中)", true))
+            {
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    EditorGUILayout.HelpBox("空中发现配置占位：参考‘地面-发现阶段配置’布局。后续会加入空中发现事件、攻击等。", MessageType.Info);
+                    if (spAirDiscovery != null)
+                    {
+                        EditorGUILayout.PropertyField(spAirDiscovery.FindPropertyRelative("placeholder"), new GUIContent("占位开关"));
+                    }
+                }
+            }
+        }
+    }
+
+    private void DrawAirPhaseConfig(SerializedProperty spAir)
+    {
+        if (spAir == null) return;
+        if (!Fold("air", "地面配置与空中配置ID", true)) return;
+
+        using (new EditorGUI.IndentLevelScope())
+        {
+            var spGroundID = spAir.FindPropertyRelative("groundPhaseID");
+            var spAirID = spAir.FindPropertyRelative("airPhaseID");
+            EditorGUILayout.PropertyField(spGroundID, new GUIContent("groundPhaseID"));
+            EditorGUILayout.PropertyField(spAirID, new GUIContent("airPhaseID"));
+        }
+    }
 
     private void DrawSpawnConfig(SerializedProperty spSpawn)
     {
@@ -111,6 +310,7 @@ public class MonsterConfigEditor : Editor
 
             EditorGUILayout.PropertyField(spPatrolPoints, true);
             EditorGUILayout.PropertyField(spRandomOrder);
+            DrawPatrolGlobalResources(spMovements);
 
             SpaceMinor();
             if (Fold("patrol.movements", $"巡逻移动/跳跃列表 (Count={spMovements.arraySize})", true))
@@ -144,6 +344,8 @@ public class MonsterConfigEditor : Editor
         }
     }
 
+    // 位置：替换 DrawPatrolMovement(SerializedProperty spMove) 方法为“无资源UI、无类型切换的版本（仅绘制数值+区间+AutoJump块保留或按需移除）”
+    // 注意：如果你仍需显示 type，可保留第一行 PropertyField(spType)；若完全不需要可删除它。
     private void DrawPatrolMovement(SerializedProperty spMove)
     {
         var spType = spMove.FindPropertyRelative("type");
@@ -172,22 +374,8 @@ public class MonsterConfigEditor : Editor
         var spJumpRestMin = spMove.FindPropertyRelative("jumprestMin");
         var spJumpRestMax = spMove.FindPropertyRelative("jumprestMax");
 
-        // 资源（直线）
-        var spMoveAnim = spMove.FindPropertyRelative("moveAnimation");
-        var spRestAnim = spMove.FindPropertyRelative("restAnimation");
-        var spMoveFx = spMove.FindPropertyRelative("moveEffectPrefab");
-        var spRestFx = spMove.FindPropertyRelative("restEffectPrefab");
-
-        // 资源（跳跃）
-        var spJumpAnim = spMove.FindPropertyRelative("jumpAnimation");
-        var spJumpRestAnim = spMove.FindPropertyRelative("jumpRestAnimation");
-        var spJumpFx = spMove.FindPropertyRelative("jumpEffectPrefab");
-        var spJumpRestFx = spMove.FindPropertyRelative("jumpRestEffectPrefab");
-
-
         if (type == MovementType.Straight)
         {
-            
             EditorGUILayout.PropertyField(spMoveSpeed);
             EditorGUILayout.PropertyField(spAcceleration);
             EditorGUILayout.PropertyField(spDeceleration);
@@ -195,25 +383,20 @@ public class MonsterConfigEditor : Editor
             EditorGUILayout.PropertyField(spDecelerationTime);
             EditorGUILayout.PropertyField(spMoveDuration);
 
-            // 区间
             EditorGUILayout.Space(2);
-            
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.PropertyField(spRestMin, new GUIContent("restMin"));
             EditorGUILayout.PropertyField(spRestMax, new GUIContent("restMax"));
             EditorGUILayout.EndHorizontal();
         }
-        else
+        else // Jump
         {
-            
             EditorGUILayout.PropertyField(spJumpSpeed);
             EditorGUILayout.PropertyField(spJumpHeight);
             EditorGUILayout.PropertyField(spGravityScale);
             EditorGUILayout.PropertyField(spJumpDuration);
 
-            // 区间
             EditorGUILayout.Space(2);
-            
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.PropertyField(spJumpRestMin, new GUIContent("jumprestMin"));
             EditorGUILayout.PropertyField(spJumpRestMax, new GUIContent("jumprestMax"));
@@ -221,31 +404,9 @@ public class MonsterConfigEditor : Editor
         }
 
         SpaceMinor();
-
-        if (Fold(spMove.propertyPath + ".res.move", "资源（直线 Move/Rest）", false))
-        {
-            using (new EditorGUI.IndentLevelScope())
-            {
-                EditorGUILayout.PropertyField(spMoveAnim, new GUIContent("Move Animation"));
-                EditorGUILayout.PropertyField(spRestAnim, new GUIContent("Rest Animation"));
-                EditorGUILayout.PropertyField(spMoveFx, new GUIContent("Move Effect Prefab"));
-                EditorGUILayout.PropertyField(spRestFx, new GUIContent("Rest Effect Prefab"));
-            }
-        }
-
-        if (Fold(spMove.propertyPath + ".res.jump", "资源（跳跃 Jump/JumpRest）", false))
-        {
-            using (new EditorGUI.IndentLevelScope())
-            {
-                EditorGUILayout.PropertyField(spJumpAnim, new GUIContent("Jump Animation"));
-                EditorGUILayout.PropertyField(spJumpRestAnim, new GUIContent("Jump Rest Animation"));
-                EditorGUILayout.PropertyField(spJumpFx, new GUIContent("Jump Effect Prefab"));
-                EditorGUILayout.PropertyField(spJumpRestFx, new GUIContent("Jump Rest Effect Prefab"));
-            }
-        }
-
         SpaceMinor();
 
+        // 如需保留 AutoJump 参数折叠，可保留以下块；若你希望地面也不显示可自行移除
         if (Fold(spMove.propertyPath + ".autojump", "Auto Jump 参数", false))
         {
             using (new EditorGUI.IndentLevelScope())
@@ -255,6 +416,77 @@ public class MonsterConfigEditor : Editor
                 EditorGUILayout.PropertyField(spMove.FindPropertyRelative("autogravityScale"));
                 EditorGUILayout.PropertyField(spMove.FindPropertyRelative("automoveDuration"));
                 EditorGUILayout.PropertyField(spMove.FindPropertyRelative("autorestDuration"));
+            }
+        }
+    }
+    private void DrawPatrolGlobalResources(SerializedProperty spMovements)
+    {
+        if (spMovements == null) return;
+
+        int n = spMovements.arraySize;
+        if (n <= 0)
+        {
+            EditorGUILayout.HelpBox("巡逻动作列表为空。添加至少一个元素后可编辑‘全局资源’（将应用到全部元素）。", MessageType.Info);
+            return;
+        }
+
+        var first = spMovements.GetArrayElementAtIndex(0);
+
+        // 直线资源
+        if (Fold("patrol.res.move", "资源（直线 Move/Rest）（批量应用全部元素）", false))
+        {
+            using (new EditorGUI.IndentLevelScope())
+            {
+                string moveAnim = first.FindPropertyRelative("moveAnimation").stringValue;
+                string restAnim = first.FindPropertyRelative("restAnimation").stringValue;
+                var moveFx = first.FindPropertyRelative("moveEffectPrefab").objectReferenceValue;
+                var restFx = first.FindPropertyRelative("restEffectPrefab").objectReferenceValue;
+
+                string newMoveAnim = EditorGUILayout.TextField("Move Animation", moveAnim);
+                string newRestAnim = EditorGUILayout.TextField("Rest Animation", restAnim);
+                var newMoveFx = EditorGUILayout.ObjectField("Move Effect Prefab", moveFx, typeof(GameObject), false);
+                var newRestFx = EditorGUILayout.ObjectField("Rest Effect Prefab", restFx, typeof(GameObject), false);
+
+                if (newMoveAnim != moveAnim || newRestAnim != restAnim || newMoveFx != moveFx || newRestFx != restFx)
+                {
+                    for (int i = 0; i < n; i++)
+                    {
+                        var e = spMovements.GetArrayElementAtIndex(i);
+                        e.FindPropertyRelative("moveAnimation").stringValue = newMoveAnim;
+                        e.FindPropertyRelative("restAnimation").stringValue = newRestAnim;
+                        e.FindPropertyRelative("moveEffectPrefab").objectReferenceValue = newMoveFx;
+                        e.FindPropertyRelative("restEffectPrefab").objectReferenceValue = newRestFx;
+                    }
+                }
+            }
+        }
+
+        // 跳跃资源
+        if (Fold("patrol.res.jump", "资源（跳跃 Jump/JumpRest）（批量应用全部元素）", false))
+        {
+            using (new EditorGUI.IndentLevelScope())
+            {
+                string jAnim = first.FindPropertyRelative("jumpAnimation").stringValue;
+                string jRestAnim = first.FindPropertyRelative("jumpRestAnimation").stringValue;
+                var jFx = first.FindPropertyRelative("jumpEffectPrefab").objectReferenceValue;
+                var jRestFx = first.FindPropertyRelative("jumpRestEffectPrefab").objectReferenceValue;
+
+                string newJAnim = EditorGUILayout.TextField("Jump Animation", jAnim);
+                string newJRestAnim = EditorGUILayout.TextField("Jump Rest Animation", jRestAnim);
+                var newJFx = EditorGUILayout.ObjectField("Jump Effect Prefab", jFx, typeof(GameObject), false);
+                var newJRestFx = EditorGUILayout.ObjectField("Jump Rest Effect Prefab", jRestFx, typeof(GameObject), false);
+
+                if (newJAnim != jAnim || newJRestAnim != jRestAnim || newJFx != jFx || newJRestFx != jRestFx)
+                {
+                    for (int i = 0; i < n; i++)
+                    {
+                        var e = spMovements.GetArrayElementAtIndex(i);
+                        e.FindPropertyRelative("jumpAnimation").stringValue = newJAnim;
+                        e.FindPropertyRelative("jumpRestAnimation").stringValue = newJRestAnim;
+                        e.FindPropertyRelative("jumpEffectPrefab").objectReferenceValue = newJFx;
+                        e.FindPropertyRelative("jumpRestEffectPrefab").objectReferenceValue = newJRestFx;
+                    }
+                }
             }
         }
     }
@@ -294,6 +526,7 @@ public class MonsterConfigEditor : Editor
 
             // 事件顺序（发现事件）
             EditorGUILayout.PropertyField(spRandom, new GUIContent("Events Random Order"));
+            DrawDiscoveryGlobalResources(spV2);
 
             SpaceMinor();
             if (Fold("discover.events", $"发现移动/跳跃列表 (Count={spEvents.arraySize})", true))
@@ -378,33 +611,13 @@ public class MonsterConfigEditor : Editor
         var spFind = spMoveSet.FindPropertyRelative("find");
         var spBack = spMoveSet.FindPropertyRelative("back");
 
-        var spFindAnim = spMoveSet.FindPropertyRelative("findmoveAnimation");
-        var spRestAnim = spMoveSet.FindPropertyRelative("findrestAnimation");
-        var spFindFx = spMoveSet.FindPropertyRelative("findmoveEffectPrefab");
-        var spRestFx = spMoveSet.FindPropertyRelative("findrestEffectPrefab");
-
-        var spBackAnim = spMoveSet.FindPropertyRelative("backmoveAnimation");
-
-        
         using (new EditorGUI.IndentLevelScope())
         {
             DrawMoveParamsFind(spFind);
         }
-
-       
         using (new EditorGUI.IndentLevelScope())
         {
             DrawMoveParamsBack(spBack);
-        }
-
-        
-        using (new EditorGUI.IndentLevelScope())
-        {
-            EditorGUILayout.PropertyField(spFindAnim, new GUIContent("Findmove Animation"));
-            EditorGUILayout.PropertyField(spRestAnim, new GUIContent("Findrest Animation"));
-            EditorGUILayout.PropertyField(spFindFx, new GUIContent("Findmove Effect Prefab"));
-            EditorGUILayout.PropertyField(spRestFx, new GUIContent("Findrest Effect Prefab"));
-            EditorGUILayout.PropertyField(spBackAnim, new GUIContent("Backmove Animation"));
         }
     }
 
@@ -414,13 +627,6 @@ public class MonsterConfigEditor : Editor
 
         var spFind = spJumpSet.FindPropertyRelative("find");
         var spBack = spJumpSet.FindPropertyRelative("back");
-
-        var spJumpAnim = spJumpSet.FindPropertyRelative("findjumpAnimation");
-        var spJumpRestAnim = spJumpSet.FindPropertyRelative("findjumpRestAnimation");
-        var spJumpFx = spJumpSet.FindPropertyRelative("findjumpEffectPrefab");
-        var spJumpRestFx = spJumpSet.FindPropertyRelative("findjumpRestEffectPrefab");
-
-        var spBackJumpAnim = spJumpSet.FindPropertyRelative("backjumpAnimation");
 
         Section("Follow（发现跳跃 参数）");
         using (new EditorGUI.IndentLevelScope())
@@ -433,15 +639,92 @@ public class MonsterConfigEditor : Editor
         {
             DrawJumpParamsBack(spBack);
         }
+    }
 
-        Section("动画/特效（find 与 retreat 共用；back 仅 jump 动画不同，特效复用 find）");
-        using (new EditorGUI.IndentLevelScope())
+    // 位置：新增发现阶段“全局资源UI（批量应用到全部 events）”工具方法
+    private void DrawDiscoveryGlobalResources(SerializedProperty spV2)
+    {
+        if (spV2 == null) return;
+        var spEvents = spV2.FindPropertyRelative("events");
+        int n = spEvents.arraySize;
+        if (n <= 0)
         {
-            EditorGUILayout.PropertyField(spJumpAnim, new GUIContent("Findjump Animation"));
-            EditorGUILayout.PropertyField(spJumpRestAnim, new GUIContent("Findjump Rest Animation"));
-            EditorGUILayout.PropertyField(spJumpFx, new GUIContent("Findjump Effect Prefab"));
-            EditorGUILayout.PropertyField(spJumpRestFx, new GUIContent("Findjump Rest Effect Prefab"));
-            EditorGUILayout.PropertyField(spBackJumpAnim, new GUIContent("Backjump Animation"));
+            EditorGUILayout.HelpBox("发现事件列表为空。添加至少一个事件后可编辑‘全局资源’（将应用到全部事件）。", MessageType.Info);
+            return;
+        }
+
+        // 取第一个存在 moveSet/jumpSet 的事件作为显示源
+        SerializedProperty pickMoveSet = null, pickJumpSet = null;
+        for (int i = 0; i < n; i++)
+        {
+            var ev = spEvents.GetArrayElementAtIndex(i);
+            if (pickMoveSet == null) pickMoveSet = ev.FindPropertyRelative("moveSet");
+            if (pickJumpSet == null) pickJumpSet = ev.FindPropertyRelative("jumpSet");
+            if (pickMoveSet != null && pickJumpSet != null) break;
+        }
+
+        // Move 资源（find/retreat 共用；back 仅 move 动画不同）
+        if (pickMoveSet != null && Fold("discover.res.move", "发现阶段 资源（Move：find/retreat 共用；back 仅 move 动画不同）", false))
+        {
+            using (new EditorGUI.IndentLevelScope())
+            {
+                var spFindAnim = pickMoveSet.FindPropertyRelative("findmoveAnimation");
+                var spRestAnim = pickMoveSet.FindPropertyRelative("findrestAnimation");
+                var spFindFx = pickMoveSet.FindPropertyRelative("findmoveEffectPrefab");
+                var spRestFx = pickMoveSet.FindPropertyRelative("findrestEffectPrefab");
+                var spBackAnim = pickMoveSet.FindPropertyRelative("backmoveAnimation");
+
+                string findAnim = EditorGUILayout.TextField("Find/Retreat Move Animation", spFindAnim.stringValue);
+                string restAnim = EditorGUILayout.TextField("Find/Retreat Rest Animation", spRestAnim.stringValue);
+                var findFx = EditorGUILayout.ObjectField("Find/Retreat Move FX", spFindFx.objectReferenceValue, typeof(GameObject), false);
+                var restFx = EditorGUILayout.ObjectField("Find/Retreat Rest FX", spRestFx.objectReferenceValue, typeof(GameObject), false);
+                string backAnim = EditorGUILayout.TextField("Back Move Animation", spBackAnim.stringValue);
+
+                // 批量写回所有事件
+                for (int i = 0; i < n; i++)
+                {
+                    var ev = spEvents.GetArrayElementAtIndex(i);
+                    var ms = ev.FindPropertyRelative("moveSet");
+                    if (ms == null) continue;
+                    ms.FindPropertyRelative("findmoveAnimation").stringValue = findAnim;
+                    ms.FindPropertyRelative("findrestAnimation").stringValue = restAnim;
+                    ms.FindPropertyRelative("findmoveEffectPrefab").objectReferenceValue = findFx;
+                    ms.FindPropertyRelative("findrestEffectPrefab").objectReferenceValue = restFx;
+                    ms.FindPropertyRelative("backmoveAnimation").stringValue = backAnim;
+                }
+            }
+        }
+
+        // Jump 资源（find/retreat 共用；back 仅 jump 动画不同，特效复用 find）
+        if (pickJumpSet != null && Fold("discover.res.jump", "发现阶段 资源（Jump：find/retreat 共用；back 仅 jump 动画不同）", false))
+        {
+            using (new EditorGUI.IndentLevelScope())
+            {
+                var spFindJAnim = pickJumpSet.FindPropertyRelative("findjumpAnimation");
+                var spFindJRest = pickJumpSet.FindPropertyRelative("findjumpRestAnimation");
+                var spFindJFx = pickJumpSet.FindPropertyRelative("findjumpEffectPrefab");
+                var spFindJRFx = pickJumpSet.FindPropertyRelative("findjumpRestEffectPrefab");
+                var spBackJAnim = pickJumpSet.FindPropertyRelative("backjumpAnimation");
+
+                string findJAnim = EditorGUILayout.TextField("Find/Retreat Jump Animation", spFindJAnim.stringValue);
+                string findJRest = EditorGUILayout.TextField("Find/Retreat Jump Rest Animation", spFindJRest.stringValue);
+                var findJFx = EditorGUILayout.ObjectField("Find/Retreat Jump FX", spFindJFx.objectReferenceValue, typeof(GameObject), false);
+                var findJRFx = EditorGUILayout.ObjectField("Find/Retreat JumpRest FX", spFindJRFx.objectReferenceValue, typeof(GameObject), false);
+                string backJAnim = EditorGUILayout.TextField("Back Jump Animation", spBackJAnim.stringValue);
+
+                // 批量写回所有事件
+                for (int i = 0; i < n; i++)
+                {
+                    var ev = spEvents.GetArrayElementAtIndex(i);
+                    var js = ev.FindPropertyRelative("jumpSet");
+                    if (js == null) continue;
+                    js.FindPropertyRelative("findjumpAnimation").stringValue = findJAnim;
+                    js.FindPropertyRelative("findjumpRestAnimation").stringValue = findJRest;
+                    js.FindPropertyRelative("findjumpEffectPrefab").objectReferenceValue = findJFx;
+                    js.FindPropertyRelative("findjumpRestEffectPrefab").objectReferenceValue = findJRFx;
+                    js.FindPropertyRelative("backjumpAnimation").stringValue = backJAnim;
+                }
+            }
         }
     }
 
@@ -764,11 +1047,38 @@ public class MonsterConfigEditor : Editor
         }
     }
 
+    // 仅用于空中巡逻元素：绘制 PatrolMovement 的核心线性字段（不显示 type/资源/autojump）
+    private void DrawAirPatrolMoveCore(SerializedProperty spMove)
+    {
+        if (spMove == null) return;
+
+        var spMoveSpeed = spMove.FindPropertyRelative("moveSpeed");
+        var spAcceleration = spMove.FindPropertyRelative("acceleration");
+        var spDeceleration = spMove.FindPropertyRelative("deceleration");
+        var spAccelerationTime = spMove.FindPropertyRelative("accelerationTime");
+        var spDecelerationTime = spMove.FindPropertyRelative("decelerationTime");
+        var spMoveDuration = spMove.FindPropertyRelative("moveDuration");
+        var spRestMin = spMove.FindPropertyRelative("restMin");
+        var spRestMax = spMove.FindPropertyRelative("restMax");
+
+        EditorGUILayout.PropertyField(spMoveSpeed);
+        EditorGUILayout.PropertyField(spAcceleration);
+        EditorGUILayout.PropertyField(spDeceleration);
+        EditorGUILayout.PropertyField(spAccelerationTime);
+        EditorGUILayout.PropertyField(spDecelerationTime);
+        EditorGUILayout.PropertyField(spMoveDuration);
+
+        EditorGUILayout.Space(2);
+        EditorGUILayout.BeginHorizontal();
+        EditorGUILayout.PropertyField(spRestMin, new GUIContent("restMin"));
+        EditorGUILayout.PropertyField(spRestMax, new GUIContent("restMax"));
+        EditorGUILayout.EndHorizontal();
+    }
+
     private void DrawIOButtons()
     {
         EditorGUILayout.Space();
         Header("配置导入/导出");
-
         var config = (MonsterConfig)target;
 
         EditorGUILayout.BeginHorizontal();
@@ -796,7 +1106,7 @@ public class MonsterConfigEditor : Editor
         EditorGUILayout.EndHorizontal();
     }
 
-    // ===== 通用UI工具 =====
+    
     private static void Header(string title)
     {
         EditorGUILayout.Space();

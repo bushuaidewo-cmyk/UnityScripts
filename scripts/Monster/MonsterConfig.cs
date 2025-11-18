@@ -26,12 +26,121 @@ public class MonsterConfig : ScriptableObject
     [Tooltip("路点与巡逻动作序列配置")]
     public PatrolConfig patrolConfig;
 
-    [Header("发现阶段配置(V2)")]
+    [Header("发现阶段配置")]
     [Tooltip("发现/靠近/后退/倒退与攻击（V2）整体配置")]
     public DiscoveryV2Config discoveryV2Config;
+
+    [Header("空中阶段配置")]
+    [Tooltip("空中阶段配置，只负责阶段起止判定，暂不含移动/发现参数")]
+    public AirPhaseConfig airPhaseConfig;
+
+    [Header("空中阶段配置")]
+    [Tooltip("空中‘巡逻/发现’配置占位，先占位置，后续再补参数")]
+    public AirStageConfig airStageConfig = new AirStageConfig();
 }
 
-#region Spawn / Patrol
+[System.Serializable]
+public class AirPhaseConfig
+{
+    [Tooltip("地面阶段ID: 0=锁定地面阶段；非0且与空中ID组成顺序(较小者起始，较大者目标)。例如 ground=1,air=2 -> 先地面后空中")]
+    public int groundPhaseID = 0;
+
+    [Tooltip("空中阶段ID: 0=锁定空中阶段；非0且与地面ID组成顺序(较小者起始，较大者目标)。例如 air=1,ground=2 -> 先空中后地面")]
+    public int airPhaseID = 0;
+}
+
+[System.Serializable]
+public class AirStageConfig
+{
+    [Header("空中-巡逻阶段配置(占位)")]
+    public AirPatrolConfig patrol = new AirPatrolConfig();
+
+    [Header("空中-发现阶段配置(占位)")]
+    public AirDiscoveryConfig discovery = new AirDiscoveryConfig();
+}
+
+[System.Serializable]
+public class AirPatrolConfig
+{
+    
+   
+    public AirPatrolPathType pathType = AirPatrolPathType.AreaRandom;
+
+    [Tooltip("按列表从上到下执行，或随机挑选下一条")]
+    public bool randomOrder = false;
+
+    [Tooltip("勾选：受区域影响；不勾选：不受到区域影响")]
+    public bool canPassThroughScene = false;
+
+    
+
+    public bool selfRotate = false;
+    public bool selfRotateX = false;
+    public bool selfRotateY = false;
+    public bool selfRotateZ = true;
+    [Tooltip("自转速度（度/秒），对勾选的轴生效")]
+    public float selfRotateSpeedDeg = 180f;
+
+    [Header("资源：动画/特效（空中巡逻）")]
+    public string skymoveAnimation;
+    public string skyrestAnimation;
+    public GameObject skymoveEffectPrefab;
+    public GameObject skyrestEffectPrefab;
+
+    [Header("空中巡逻动作列表")]
+    public List<AirPatrolElement> elements = new List<AirPatrolElement>();
+}
+
+public enum AirMoveMode
+{
+    AreaRandomLinear = 0,   // 在方形区域内，按随机方向线性移动（使用 PatrolMovement 的加减速/匀速参数）
+    AreaRandomSine = 1      // 在线性基础上叠加上下摆动（sin），参数在 element 上
+}
+public enum AirPatrolPathType
+{
+    AreaRandom = 0,
+    AreaRandomH = 3,
+    AreaHorizontal = 1,
+    AreaVertical = 2
+}
+
+[System.Serializable]
+public class AirPatrolElement
+{
+
+    [Header("模式")]
+    public AirMoveMode mode = AirMoveMode.AreaRandomLinear;
+
+    [Header("活动区域（世界坐标）")]
+    public Vector2 areaCenter;
+    public Vector2 areaSize = new Vector2(4f, 2f);
+
+    [Header("线性移动参数（复用地面 PatrolMovement 数值）")]
+    [Tooltip("直接复用地面巡逻字段，加速度/时间/匀速/减速等")]
+    public PatrolMovement move = new PatrolMovement
+    {
+        type = MovementType.Straight,
+        moveSpeed = 1.5f,
+        accelerationTime = 0.25f,
+        decelerationTime = 0.25f,
+        moveDuration = 1.0f,
+        restMin = 0.2f,
+        restMax = 0.5f
+    };
+
+    
+    public bool sinEnabled = false;
+    public float sinFrequency = 2.0f;   // 频率 Hz
+    public float sinAmplitude = 0.5f;   // 幅度 米
+}
+
+[System.Serializable]
+public class AirDiscoveryConfig
+{
+    [Tooltip("占位开关：仅用于在 Inspector 中占位显示，后续会替换为真实参数")]
+    public bool placeholder = false;
+}
+
 
 [System.Serializable]
 public class SpawnConfig
@@ -42,6 +151,8 @@ public class SpawnConfig
     [Tooltip("positionType=Points 时的出生点列表")]
     public List<Vector2> spawnPoints = new List<Vector2>();
 
+
+    [Header("随机点出生")]
     [Tooltip("positionType=Points 时，是否顺序使用点（否则每次随机）")]
     public bool sequentialSpawn = true;
 
@@ -92,6 +203,7 @@ public class PatrolConfig
     [Tooltip("巡逻动作列表（直线/跳跃等），按顺序轮询或随机")]
     public List<PatrolMovement> movements = new List<PatrolMovement>();
 
+    [Header("随机播放巡逻动作")]
     [Tooltip("是否随机播放巡逻动作序列")]
     public bool randomOrder = false;
 }
@@ -183,10 +295,6 @@ public class PatrolMovement
 
 public enum StraightPhase { None, Accel, Cruise, Decel, Rest }
 
-#endregion
-
-#region 发现阶段 V2
-
 public enum DiscoveryV2Mode { Move, Jump }
 
 public enum AttackType { Melee, Ranged }
@@ -214,17 +322,18 @@ public class DiscoveryV2Config
     public bool enableBackAutoJumpOnObstacle = false;
 
     
-    [Header("事件播放")]
-    [Tooltip("是否随机播放事件列表（否则顺序播放）")]
+    [Header("随机播放发现动作")]
+    [Tooltip("是否随机播放发现动作（否则顺序播放）")]
     public bool findRandomOrder = false;
 
     [Tooltip("发现事件列表(Move 或 Jump)。会在发现阶段循环播放。")]
     public List<DiscoveryEventV2> events = new List<DiscoveryEventV2>();
 
-    [Header("攻击（V2）- 无数据即不开启攻击")]
+    [Header("攻击- 无数据即不开启攻击")]
     [Tooltip("可选的攻击事件列表（近战/远程各一条或多条），空则不攻击")]
     public List<AttackEventV2> attacks = new List<AttackEventV2>();
 
+    [Header("随机播放攻击动作")]
     [Tooltip("攻击列表是否随机顺序（true：随机轮询；false：按 0,1,2… 顺序循环）")]
     public bool attacksRandomOrder = false;
 
@@ -253,8 +362,6 @@ public class DiscoveryEventV2
     [Tooltip("Jump 模式参数集合（跟随/后退/倒退三档）")]
     public JumpSetV2 jumpSet;
 }
-
-#region Move
 
 [System.Serializable]
 public class MoveSetV2
@@ -348,10 +455,6 @@ public class BackstepMoveParams
     public float backrestMax = 0f;
 }
 
-#endregion
-
-#region Jump
-
 [System.Serializable]
 public class JumpSetV2
 {
@@ -428,10 +531,6 @@ public class BackstepJumpParams
     [Tooltip("倒退档位：跳休时长上限")]
     public float backjumpRestMax = 0f;
 }
-
-#endregion
-
-#endregion
 
 // 互斥枚举（放在 AttackEventV2 定义上方的“攻击（V2）”区域）
 public enum AttackMotionMode
@@ -727,9 +826,8 @@ public enum Orientation { FacePlayer, FaceLeft, FaceRight }
 public enum MovementType { Straight, Jump }
 public enum SpawnPositionType { Points, Area }
 public enum SpawnAimMode { TowardsPlayer = 0, HorizontalToPlayer = 1 }
-// 新增一个枚举，放在现有枚举区域附近
 public enum BounceEnergyMode
 {
-    Constant = 0,    // 每次反弹强度不变
-    DecayToZero = 1  // 每次乘以衰减因子，低于阈值即销毁
+    Constant = 0,    
+    DecayToZero = 1  
 }
