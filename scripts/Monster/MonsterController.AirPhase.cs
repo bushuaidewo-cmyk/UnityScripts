@@ -1,10 +1,11 @@
-using UnityEngine;
-using System.Collections;
+ï»¿using System.Collections;
 using System.Collections.Generic;
+using UnityEngine;
+using static System.Net.WebRequestMethods;
 
 public partial class MonsterController : MonoBehaviour
 {
-    // ===== ¿ÕÖĞÑ²ÂßÔËĞĞÌ¬ =====
+    // ===== ç©ºä¸­å·¡é€»è¿è¡Œæ€ =====
     private float _airSavedGravity = 0f;
     private bool _airSetupDone = false;
 
@@ -12,21 +13,25 @@ public partial class MonsterController : MonoBehaviour
     private int _airOrderPos = 0;
     private int _airActiveIndex = 0;
 
-    // ÔËĞĞÓÃ£ºµ±Ç°ÏßĞÔËÙ¶È£¨ÊÀ½ç¿Õ¼ä£©
+    // è¿è¡Œç”¨ï¼šå½“å‰çº¿æ€§é€Ÿåº¦ï¼ˆä¸–ç•Œç©ºé—´ï¼‰â€”â€”â€œä¸»è¿åŠ¨é€Ÿåº¦â€
     private Vector2 _airVel = Vector2.zero;
 
-    private int _airPingPongSign = +1;
-    private int _airVerticalSign = +1; // ´¹Ö±µ±Ç°·ûºÅ£º+1=ÏòÉÏ£¬-1=ÏòÏÂ
+    // æœ€è¿‘ä¸€æ¬¡éé›¶çš„â€œçº¯æ–¹å‘â€ï¼ˆç”¨äºéšæœºæ¨¡å¼åœ¨é€Ÿåº¦=0é˜¶æ®µä¿æŒåŸæ–¹å‘ï¼‰
+    private Vector2 _airLastDir = Vector2.right;
 
-    // Sine ÀÛ¼ÆÊ±¼ä
+    private int _airPingPongSign = +1; // æ°´å¹³å½“å‰ç¬¦å·ï¼š+1=å‘å³ï¼Œ-1=å‘å·¦
+    private int _airVerticalSign = +1; // å‚ç›´å½“å‰ç¬¦å·ï¼š+1=å‘ä¸Šï¼Œ-1=å‘ä¸‹
+
+    // Sine ç´¯è®¡æ—¶é—´ï¼ˆç”¨äºæ­£å¼¦æ‘†åŠ¨ï¼‰
     private float _airTime = 0f;
 
     private bool _airMoveFxPlayedThisSegment = false;
-    
     private bool _airRestFxPlayedThisRest = false;
 
-    // ½øÈë¿ÕÖĞ½×¶Î£ºÈ¥ÖØÁ¦ + ³õÊ¼»¯Ë³Ğò
-    // ½öÌù³öĞŞ¸ÄÆ¬¶Î£ºEnterAirPhaseSetup ÄÚĞÂÔöµÄ¼¸ĞĞ
+    // ä»…ç”¨äºè°ƒè¯•ï¼šå½“å‰ anchor æ˜¯å¦åœ¨åŒºåŸŸè¾¹ç¼˜
+    private bool isAtEdge = false;
+
+    // è¿›å…¥ç©ºä¸­é˜¶æ®µï¼šå»é‡åŠ› + åˆå§‹åŒ–é¡ºåº
     private void EnterAirPhaseSetup()
     {
         if (_airSetupDone) return;
@@ -35,15 +40,15 @@ public partial class MonsterController : MonoBehaviour
         _airTime = 0f;
         _airVel = Vector2.zero;
 
-        // È¥ÖØÁ¦£¨±£´æÒÔ±ãÎ´À´»Ö¸´£©
+        // å»é‡åŠ›ï¼ˆä¿å­˜ä»¥ä¾¿æœªæ¥æ¢å¤ï¼‰
         _airSavedGravity = rb.gravityScale;
         rb.gravityScale = 0f;
 
-        // ¿ÕÖĞ½×¶Î²»ÊÜ AutoJumpZone Ó°Ïì£¬½øÈë¿ÕÖĞÊ±ÇåÀíÆä×´Ì¬
+        // ç©ºä¸­é˜¶æ®µä¸å— AutoJumpZone å½±å“ï¼Œè¿›å…¥ç©ºä¸­æ—¶æ¸…ç†å…¶çŠ¶æ€
         inAutoJumpPermitZone = false;
         autoJumpRearmAfterLanding = false;
 
-        // ³õÊ¼»¯¿ÕÖĞÑ²ÂßË³Ğò£¨Ô­ÓĞÂß¼­±£³Ö£©
+        // åˆå§‹åŒ–ç©ºä¸­å·¡é€»é¡ºåºï¼ˆåŸæœ‰é€»è¾‘ä¿æŒï¼‰
         var cfg = config?.airStageConfig?.patrol;
         _airOrder = new List<int>();
         int n = (cfg != null && cfg.elements != null) ? cfg.elements.Count : 0;
@@ -56,7 +61,6 @@ public partial class MonsterController : MonoBehaviour
         _airMoveFxPlayedThisSegment = false;
         _airRestFxPlayedThisRest = false;
     }
-
     private void AirPatrolUpdate()
     {
         var pCfg = config?.airStageConfig?.patrol;
@@ -77,93 +81,175 @@ public partial class MonsterController : MonoBehaviour
         var elem = pCfg.elements[_airActiveIndex];
         var mv = elem.move;
 
-        // ĞÂÓïÒå£ºtrue=ÊÜ area Ó°Ïì£»false=ºöÂÔ area
-        bool affectByArea = pCfg.canPassThroughScene;
+        // ç”¨å½“å‰é”šç‚¹ï¼ˆBoxCollider2Dä¸­å¿ƒï¼‰æ£€æµ‹æ˜¯å¦æ¥è¿‘åŒºåŸŸè¾¹ç¼˜ï¼Œä»…ä½œä¸º debug æ ‡è®°
+        Rect area = new Rect(elem.areaCenter - elem.areaSize * 0.5f, elem.areaSize);
+        Vector2 anchorPos;
+        if (col != null)
+            anchorPos = col.bounds.center;                 // åŒºåŸŸåå¼¹ç‚¹ï¼šBoxCollider2D ä¸­å¿ƒ
+        else if (monsterDistPoint)
+            anchorPos = monsterDistPoint.position;
+        else
+            anchorPos = rb.position;
 
-        // ¶ÎÆğµã£º³õÊ¼»¯Ò»´ÎĞÔFXÓëÔË¶¯·½Ïò/ËÙ¶È
+        bool atLeft = anchorPos.x <= area.xMin + 0.0001f;
+        bool atRight = anchorPos.x >= area.xMax - 0.0001f;
+        bool atTop = anchorPos.y >= area.yMax - 0.0001f;
+        bool atBottom = anchorPos.y <= area.yMin + 0.0001f;
+        bool boundaryDetected = atLeft || atRight || atTop || atBottom;
+        isAtEdge = boundaryDetected;    // çœŸæ­£çš„åå¼¹é€»è¾‘æ”¾åœ¨ AirPatrolPhysicsStepï¼Œè¿™é‡Œåªåšæ ‡è®°
+
+        // æ®µèµ·ç‚¹ï¼šåˆå§‹åŒ–ä¸€æ¬¡ FX é˜²æŠ– + é€Ÿåº¦ç›¸ä½
         if (mv.rtStraightPhase == StraightPhase.None)
         {
             _airMoveFxPlayedThisSegment = false;
             _airRestFxPlayedThisRest = false;
 
             Vector2 initDir;
+
             switch (pCfg.pathType)
             {
                 case AirPatrolPathType.AreaHorizontal:
-                    initDir = Vector2.right * Mathf.Sign(_airPingPongSign == 0 ? 1 : _airPingPongSign);
+                    // åªåœ¨ X è½´å·¦å³ç§»åŠ¨
+                    if (_airVel.sqrMagnitude > 0.0001f)
+                        initDir = new Vector2(Mathf.Sign(_airVel.x == 0f ? 1f : _airVel.x), 0f);
+                    else
+                        initDir = Vector2.right * Mathf.Sign(_airPingPongSign == 0 ? 1 : _airPingPongSign);
                     break;
+
                 case AirPatrolPathType.AreaVertical:
-                    initDir = Vector2.up * Mathf.Sign(_airVerticalSign == 0 ? 1 : _airVerticalSign);
+                    // åªåœ¨ Y è½´ä¸Šä¸‹ç§»åŠ¨
+                    if (_airVel.sqrMagnitude > 0.0001f)
+                        initDir = new Vector2(0f, Mathf.Sign(_airVel.y == 0f ? 1f : _airVel.y));
+                    else
+                        initDir = Vector2.up * Mathf.Sign(_airVerticalSign == 0 ? 1 : _airVerticalSign);
                     break;
+
                 case AirPatrolPathType.AreaRandom:
-                    initDir = Random.insideUnitCircle.normalized; // Ã¿¶ÎÖØĞÂËæ»ú
+                    // æ¯æ®µèµ·ç‚¹é‡æ–°éšæœºä¸€ä¸ª 2D æ–¹å‘
+                    initDir = Random.insideUnitCircle.normalized;
                     break;
+
                 case AirPatrolPathType.AreaRandomH:
-                    // ½öÊ×´ÎËæ»ú£»Ö®ºóÑØÀúÊ··½Ïò£¨ÓÉÅö×²/±ß½ç·´µ¯¸üĞÂ£©
-                    initDir = (_airVel.sqrMagnitude > 0.0001f) ? _airVel.normalized : Random.insideUnitCircle.normalized;
+                    // åˆå§‹è§’åº¦éšæœºä¸º 45Â° / -45Â° / 135Â° / -135Â°ï¼›å…¶ä½™æ—¶æ²¿å½“å‰æ–¹å‘
+                    if (_airVel.sqrMagnitude < 0.0001f)
+                    {
+                        float[] degs = { 45f, -45f, 135f, -135f };
+                        float ang = degs[Random.Range(0, degs.Length)] * Mathf.Deg2Rad;
+                        initDir = new Vector2(Mathf.Cos(ang), Mathf.Sin(ang));
+                    }
+                    else
+                    {
+                        initDir = _airVel.normalized;
+                    }
                     break;
+
                 default:
                     initDir = Random.insideUnitCircle.normalized;
                     break;
             }
-            if (initDir.sqrMagnitude < 0.01f) initDir = Vector2.right;
 
-            // Ö±Ïß¶ÎÔËĞĞÌ¬£¨¼Ó/ÔÈ/¼õ/ĞİÏ¢£©
+            if (initDir.sqrMagnitude < 0.01f)
+                initDir = Vector2.right;
+
+            // ä¸‰ç›¸é€Ÿåº¦è¿è¡Œæ€ï¼ˆä»…æŒ‰â€œæ—¶é—´â€å­—æ®µï¼‰
             mv.rtCurrentSpeed = 0f;
             mv.rtCruiseTimer = Mathf.Max(0f, mv.moveDuration);
             mv.rtAccelTimer = Mathf.Max(0f, mv.accelerationTime);
             mv.rtDecelTimer = Mathf.Max(0f, mv.decelerationTime);
-            bool instantAccel = (mv.accelerationTime <= 0f && mv.acceleration <= 0f);
-            bool instantDecel = (mv.decelerationTime <= 0f && mv.deceleration <= 0f);
+
+            bool instantAccel = (mv.accelerationTime <= 0f);
+            bool instantDecel = (mv.decelerationTime <= 0f);
+
             mv.rtStraightPhase = instantAccel
                 ? ((mv.rtCruiseTimer > 0f) ? StraightPhase.Cruise : (instantDecel ? StraightPhase.Rest : StraightPhase.Decel))
                 : StraightPhase.Accel;
-            if (instantAccel) mv.rtCurrentSpeed = Mathf.Max(0f, mv.moveSpeed);
+
+            if (instantAccel)
+                mv.rtCurrentSpeed = Mathf.Max(0f, mv.moveSpeed);
 
             float seedSpeed = (mv.rtCurrentSpeed > 0f ? mv.rtCurrentSpeed : Mathf.Max(0.01f, mv.moveSpeed * 0.1f));
-            _airVel = initDir.normalized * seedSpeed;
+            Vector2 initDirNorm = initDir.normalized;
+            if (initDirNorm.sqrMagnitude < 0.0001f) initDirNorm = Vector2.right;
+            _airVel = initDirNorm * seedSpeed;
+            _airLastDir = initDirNorm; // ä¿å­˜æ®µèµ·ç‚¹æ–¹å‘
         }
 
-        // ÈıÏàËÙ¶È±êÁ¿ÍÆ½ø
+        // é€Ÿåº¦æ ‡é‡æ¨è¿›ï¼ˆä»…æŒ‰æ—¶é—´å­—æ®µï¼‰
         float targetSpd = Mathf.Max(0f, mv.moveSpeed);
-        float accelRate = (mv.accelerationTime > 0f) ? (Mathf.Max(0.01f, targetSpd) / mv.accelerationTime) : Mathf.Max(0f, mv.acceleration);
-        float decelRate = (mv.decelerationTime > 0f) ? (Mathf.Max(0.01f, targetSpd) / mv.decelerationTime) : Mathf.Max(0f, mv.deceleration);
+        float accelRate = (mv.accelerationTime > 0f)
+            ? (Mathf.Max(0f, targetSpd) / Mathf.Max(0.0001f, mv.accelerationTime))
+            : float.PositiveInfinity;
+        float decelRate = (mv.decelerationTime > 0f)
+            ? (Mathf.Max(0f, targetSpd) / Mathf.Max(0.0001f, mv.decelerationTime))
+            : float.PositiveInfinity;
 
         switch (mv.rtStraightPhase)
         {
             case StraightPhase.Accel:
-                if (!string.IsNullOrEmpty(pCfg.skymoveAnimation)) PlayAnimIfNotCurrent(pCfg.skymoveAnimation);
-                if (accelRate <= 0f) { mv.rtCurrentSpeed = targetSpd; mv.rtStraightPhase = (mv.rtCruiseTimer > 0f) ? StraightPhase.Cruise : (decelRate > 0f ? StraightPhase.Decel : StraightPhase.Rest); }
+                if (!string.IsNullOrEmpty(pCfg.skymoveAnimation))
+                    PlayAnimIfNotCurrent(pCfg.skymoveAnimation);
+
+                if (float.IsPositiveInfinity(accelRate))
+                {
+                    mv.rtCurrentSpeed = targetSpd;
+                    mv.rtStraightPhase = (mv.rtCruiseTimer > 0f)
+                        ? StraightPhase.Cruise
+                        : (!float.IsPositiveInfinity(decelRate) ? StraightPhase.Decel : StraightPhase.Rest);
+                }
                 else
                 {
                     mv.rtCurrentSpeed = Mathf.MoveTowards(mv.rtCurrentSpeed, targetSpd, accelRate * Time.deltaTime);
-                    if (mv.accelerationTime > 0f) mv.rtAccelTimer = Mathf.Max(0f, mv.rtAccelTimer - Time.deltaTime);
+                    if (mv.accelerationTime > 0f)
+                        mv.rtAccelTimer = Mathf.Max(0f, mv.rtAccelTimer - Time.deltaTime);
                     if (Mathf.Approximately(mv.rtCurrentSpeed, targetSpd) || mv.rtAccelTimer <= 0f)
-                        mv.rtStraightPhase = (mv.rtCruiseTimer > 0f) ? StraightPhase.Cruise : (decelRate > 0f ? StraightPhase.Decel : StraightPhase.Rest);
+                        mv.rtStraightPhase = (mv.rtCruiseTimer > 0f)
+                            ? StraightPhase.Cruise
+                            : (!float.IsPositiveInfinity(decelRate) ? StraightPhase.Decel : StraightPhase.Rest);
                 }
                 break;
 
             case StraightPhase.Cruise:
-                if (!string.IsNullOrEmpty(pCfg.skymoveAnimation)) PlayAnimIfNotCurrent(pCfg.skymoveAnimation);
+                if (!string.IsNullOrEmpty(pCfg.skymoveAnimation))
+                    PlayAnimIfNotCurrent(pCfg.skymoveAnimation);
+
                 mv.rtCurrentSpeed = targetSpd;
                 mv.rtCruiseTimer = Mathf.Max(0f, mv.rtCruiseTimer - Time.deltaTime);
-                if (mv.rtCruiseTimer <= 0f) mv.rtStraightPhase = (decelRate > 0f) ? StraightPhase.Decel : StraightPhase.Rest;
+                if (mv.rtCruiseTimer <= 0f)
+                    mv.rtStraightPhase = (!float.IsPositiveInfinity(decelRate)) ? StraightPhase.Decel : StraightPhase.Rest;
                 break;
 
             case StraightPhase.Decel:
-                if (!string.IsNullOrEmpty(pCfg.skymoveAnimation)) PlayAnimIfNotCurrent(pCfg.skymoveAnimation);
-                if (decelRate <= 0f) { mv.rtCurrentSpeed = 0f; mv.rtStraightPhase = StraightPhase.Rest; }
+                if (!string.IsNullOrEmpty(pCfg.skymoveAnimation))
+                    PlayAnimIfNotCurrent(pCfg.skymoveAnimation);
+
+                if (float.IsPositiveInfinity(decelRate))
+                {
+                    mv.rtCurrentSpeed = 0f;
+                    mv.rtStraightPhase = StraightPhase.Rest;
+                }
                 else
                 {
                     mv.rtCurrentSpeed = Mathf.MoveTowards(mv.rtCurrentSpeed, 0f, decelRate * Time.deltaTime);
-                    if (mv.rtCurrentSpeed <= 0.0001f) { mv.rtCurrentSpeed = 0f; mv.rtStraightPhase = StraightPhase.Rest; }
+                    if (mv.rtCurrentSpeed <= 0.0001f)
+                    {
+                        mv.rtCurrentSpeed = 0f;
+                        mv.rtStraightPhase = StraightPhase.Rest;
+                    }
                 }
                 break;
 
             case StraightPhase.Rest:
             default:
-                if (!string.IsNullOrEmpty(pCfg.skyrestAnimation)) PlayAnimIfNotCurrent(pCfg.skyrestAnimation);
-                mv.rtRestTimer = (mv.rtRestTimer > 0f) ? mv.rtRestTimer - Time.deltaTime : PickStraightRestTime(mv) - Time.deltaTime;
+                if (!string.IsNullOrEmpty(pCfg.skyrestAnimation))
+                    PlayAnimIfNotCurrent(pCfg.skyrestAnimation);
+
+                // ä¼‘æ¯è®¡æ—¶ä¸åˆ‡ä¸‹ä¸€æ®µï¼ˆä¸åšä½ç§»ï¼‰
+                mv.rtRestTimer = (mv.rtRestTimer > 0f)
+                    ? mv.rtRestTimer - Time.deltaTime
+                    : PickStraightRestTime(mv) - Time.deltaTime;
+
+                rb.velocity = Vector2.zero;
+
                 if (mv.rtRestTimer <= 0f)
                 {
                     mv.rtStraightPhase = StraightPhase.None;
@@ -179,40 +265,123 @@ public partial class MonsterController : MonoBehaviour
                         _airActiveIndex = (_airActiveIndex + 1) % pCfg.elements.Count;
                     }
                 }
-                rb.velocity = Vector2.zero;
                 return;
         }
 
-        // Á½Ä£Ê½£ºÃ¿Ö¡Ç¿ÖÆÖ÷·½ÏòÊÇ´¿ X/´¿ Y£»Ëæ»ú±£Áô _airVel µÄ·½Ïò
+        // ä»…æ›´æ–°â€œä¸»é€Ÿåº¦â€çš„æ ‡é‡ï¼›æ–¹å‘åœ¨æ®µèµ·ç‚¹æˆ–æ’å‡»/å‡ºç•Œæ—¶ç”± _airVel è‡ªå·±ç»´æŠ¤
+        float spd = Mathf.Max(0f, mv.rtCurrentSpeed);
+
+        Vector2 dir;
+        switch (pCfg.pathType)
+        {
+            case AirPatrolPathType.AreaHorizontal:
+                {
+                    int sx = Mathf.Abs(_airVel.x) > 0.0001f
+                        ? (_airVel.x >= 0f ? +1 : -1)
+                        : (_airPingPongSign == 0 ? +1 : _airPingPongSign);
+                    dir = new Vector2(sx, 0f);
+                    break;
+                }
+            case AirPatrolPathType.AreaVertical:
+                {
+                    int sy = Mathf.Abs(_airVel.y) > 0.0001f
+                        ? (_airVel.y >= 0f ? +1 : -1)
+                        : (_airVerticalSign == 0 ? +1 : _airVerticalSign);
+                    dir = new Vector2(0f, sy);
+                    break;
+                }
+            case AirPatrolPathType.AreaRandom:
+            case AirPatrolPathType.AreaRandomH:
+                {
+                    if (_airVel.sqrMagnitude > 0.0001f)
+                        dir = _airVel.normalized;
+                    else
+                        dir = (_airLastDir.sqrMagnitude > 0.0001f) ? _airLastDir : Vector2.right;
+                    break;
+                }
+            default:
+                dir = (_airVel.sqrMagnitude > 0.0001f) ? _airVel.normalized : (_airLastDir.sqrMagnitude > 0.0001f ? _airLastDir : Vector2.right);
+                break;
+        }
+
+        _airVel = dir * spd;
+
+        // æ›´æ–°ä¿å­˜æ–¹å‘ï¼ˆä»…åœ¨æœ‰æœ‰æ•ˆæ–¹å‘æ—¶ï¼‰
+        if (dir.sqrMagnitude > 0.0001f)
+            _airLastDir = dir;
+
+        // è½´å‘ç¡¬çº¦æŸ
         if (pCfg.pathType == AirPatrolPathType.AreaHorizontal)
-            _airVel = new Vector2(Mathf.Sign((_airVel.x == 0f) ? _airPingPongSign : _airVel.x), 0f) * Mathf.Max(0f, mv.rtCurrentSpeed);
+            _airVel = new Vector2(_airVel.x, 0f);
         else if (pCfg.pathType == AirPatrolPathType.AreaVertical)
-            _airVel = new Vector2(0f, Mathf.Sign((_airVel.y == 0f) ? _airVerticalSign : _airVel.y)) * Mathf.Max(0f, mv.rtCurrentSpeed);
-        else
-            _airVel = (_airVel.sqrMagnitude > 0.0001f ? _airVel.normalized : Vector2.right) * Mathf.Max(0f, mv.rtCurrentSpeed);
+            _airVel = new Vector2(0f, _airVel.y);
 
-        Vector2 newVel = _airVel; // ±¾Ö¡¡°Âß¼­ËÙ¶È¡±£¨°üº¬·´µ¯ºóµÄ·½Ïò/´óĞ¡£©£¬Ä©Î²ÓÃËü»ØÌî _airVel
+        if (!string.IsNullOrEmpty(pCfg.skymoveAnimation))
+            PlayAnimIfNotCurrent(pCfg.skymoveAnimation);
+    }
+    private void AirPatrolPhysicsStep()
+    {
+        var pCfg = config?.airStageConfig?.patrol;
+        if (pCfg == null || pCfg.elements == null || pCfg.elements.Count == 0) return;
+        if (_airActiveIndex < 0 || _airActiveIndex >= pCfg.elements.Count) return;
 
-        // Sine£¨ËÙ¶ÈÊ½£©£ºË®Æ½¡úÉÏÏÂ°Ú£»ÊúÖ±¡ú×óÓÒ°Ú£»Ëæ»ú¡úÑØÖ÷·½Ïò·¨Ïß°Ú
-        _airTime += Time.deltaTime;
+        var elem = pCfg.elements[_airActiveIndex];
+        var mv = elem.move;
+
+        bool affectByArea =
+            (
+                pCfg.pathType == AirPatrolPathType.AreaHorizontal
+                || pCfg.pathType == AirPatrolPathType.AreaVertical
+                || pCfg.pathType == AirPatrolPathType.AreaRandom
+                || pCfg.pathType == AirPatrolPathType.AreaRandomH
+            )
+            ? true : pCfg.canPassThroughScene;
+
+        // newVel æ˜¯â€œæœ¬æ­¥ç»“æŸåçš„ä¸»é€Ÿåº¦â€ï¼Œæœ€åä¼šå†™å› _airVel
+        Vector2 newVel = _airVel;
+
+        // Sine åç§»ï¼šfixedDeltaTime æ¨è¿›ï¼ˆåªæ˜¯ä½ç§»åç§»ï¼Œä¸æ”¹ä¸»é€Ÿåº¦ï¼‰
+        _airTime += Time.fixedDeltaTime;
         Vector2 sineDelta = Vector2.zero;
         if (elem.sinEnabled && elem.sinAmplitude > 0f && elem.sinFrequency > 0f)
         {
             float s = Mathf.Sin(_airTime * Mathf.PI * 2f * elem.sinFrequency) * elem.sinAmplitude;
+
             Vector2 axis;
-            if (pCfg.pathType == AirPatrolPathType.AreaHorizontal) axis = Vector2.up;
-            else if (pCfg.pathType == AirPatrolPathType.AreaVertical) axis = Vector2.right;
-            else { Vector2 d = (_airVel.sqrMagnitude > 0.0001f ? _airVel.normalized : Vector2.right); axis = new Vector2(-d.y, d.x); }
-            sineDelta = axis.normalized * (s * Time.deltaTime);
+            if (pCfg.pathType == AirPatrolPathType.AreaHorizontal)
+            {
+                // æ°´å¹³ä¸»è¿åŠ¨ï¼šæ­£å¼¦æ²¿ç«–ç›´æ–¹å‘æ‘†åŠ¨ï¼ˆä¸Šä¸‹ï¼‰
+                axis = Vector2.up;
+            }
+            else if (pCfg.pathType == AirPatrolPathType.AreaVertical)
+            {
+                // å‚ç›´ä¸»è¿åŠ¨ï¼šæ­£å¼¦æ²¿æ°´å¹³æ–¹å‘æ‘†åŠ¨ï¼ˆå·¦å³ï¼‰
+                axis = Vector2.right;
+            }
+            else
+            {
+                // Random / RandomHï¼šæ­£å¼¦æ²¿å½“å‰è¿åŠ¨æ–¹å‘çš„æ³•çº¿ï¼ˆè›‡å½¢ï¼‰
+                Vector2 d = (_airVel.sqrMagnitude > 0.0001f ? _airVel.normalized : Vector2.right);
+                axis = new Vector2(-d.y, d.x); // è®¡ç®—æ³•çº¿
+            }
+
+            sineDelta = axis.normalized * (s * Time.fixedDeltaTime);
         }
 
-        // ========== ÇøÓò£¨ÓÃ monsterDistPoint ×÷ÎªÅĞ¶¨Ãªµã£»ÊÇ·ñÆôÓÃÓÉ affectByArea ¾ö¶¨£© ==========
-        Vector2 anchor = monsterDistPoint ? (Vector2)monsterDistPoint.position : rb.position;
+        // ä»¥ BoxCollider2D ä¸­å¿ƒä¸ºé”šç‚¹ï¼Œä¿æŒåŒºåŸŸ/ç¢°æ’ä¸€è‡´
+        Vector2 anchor;
+        if (col != null)
+            anchor = col.bounds.center;               // åŒºåŸŸåå¼¹ç‚¹ï¼šBoxCollider2D ä¸­å¿ƒ
+        else if (monsterDistPoint)
+            anchor = monsterDistPoint.position;
+        else
+            anchor = rb.position;
+
         Vector2 rootToAnchor = rb.position - anchor;
 
         Rect area = new Rect(elem.areaCenter - elem.areaSize * 0.5f, elem.areaSize);
 
-        // Ö»ÓĞ¡°ÊÜ area Ó°Ïì¡±Ê±£¬²Å°ÑÃªµãÀ­»ØÇøÓòÄÚ
+        // è‹¥å½“å‰ anchor å·²ç»è·‘å‡ºåŒºåŸŸï¼Œå…ˆå¤¹å›åŒºåŸŸå†…
         if (affectByArea && !area.Contains(anchor))
         {
             Vector2 snappedAnchor = new Vector2(
@@ -225,36 +394,34 @@ public partial class MonsterController : MonoBehaviour
             rootToAnchor = rb.position - anchor;
         }
 
-        // ========== ³¡¾°Åö×²£¨Ê¼ÖÕÉúĞ§£»Ê¹ÓÃ¸ù BoxCollider2D Cast£© ==========
+        // æœ¬ç‰©ç†æ­¥è®¡åˆ’ä½ç§»ï¼ˆæ ¹ä½ç½® = ä¸»é€Ÿåº¦ä½ç§» + æ­£å¼¦åç§»ï¼‰
         Vector2 posRB = rb.position;
-        Vector2 plannedDeltaRB = _airVel * Time.deltaTime + sineDelta;
-        Vector2 castDir = plannedDeltaRB.sqrMagnitude > 0.0000001f ? plannedDeltaRB.normalized : Vector2.zero;
-        float castDist = plannedDeltaRB.magnitude;
-
-        // Ä¬ÈÏ°´¼Æ»®Î»ÒÆ£¬ÈôÃüÖĞÅö×²ÔÙ¸²¸Ç
+        Vector2 plannedDeltaRB = _airVel * Time.fixedDeltaTime + sineDelta;
         Vector2 nextRB = posRB + plannedDeltaRB;
 
-        // ===== ³¡¾°Åö×²£¨¸ù BoxCollider2D ĞÎ×´ Cast£©£ºHorizontal/Vertical Ç¿ÖÆÖáÏò´¦Àí =====
+        // åœºæ™¯ç¢°æ’ï¼ˆCollider2D.Castï¼‰
         if (col != null)
         {
-            // Õë¶Ô²»Í¬Ä£Ê½£¬È·¶¨¡°ÓÃÓÚÅö×²¼ì²â¡±µÄÖáÏò Cast ·½ÏòÓë¾àÀë
             Vector2 castDirScene;
             float castDistScene;
 
             if (pCfg.pathType == AirPatrolPathType.AreaHorizontal)
             {
+                // åœºæ™¯ï¼šåªæ²¿ X è½´åšç¢°æ’æŠ•å°„
                 float sx = Mathf.Sign(_airVel.x == 0f ? 1f : _airVel.x);
                 castDirScene = new Vector2(sx, 0f);
-                castDistScene = Mathf.Abs(_airVel.x) * Time.deltaTime;
+                castDistScene = Mathf.Abs(_airVel.x) * Time.fixedDeltaTime;
             }
             else if (pCfg.pathType == AirPatrolPathType.AreaVertical)
             {
+                // åœºæ™¯ï¼šåªæ²¿ Y è½´åšç¢°æ’æŠ•å°„
                 float sy = Mathf.Sign(_airVel.y == 0f ? -1f : _airVel.y);
                 castDirScene = new Vector2(0f, sy);
-                castDistScene = Mathf.Abs(_airVel.y) * Time.deltaTime;
+                castDistScene = Mathf.Abs(_airVel.y) * Time.fixedDeltaTime;
             }
-            else // AreaRandom
+            else
             {
+                // Random / RandomHï¼šæŒ‰æ•´ä½“ä½ç§»æ–¹å‘æŠ•å°„
                 castDirScene = plannedDeltaRB.sqrMagnitude > 0.0000001f ? plannedDeltaRB.normalized : Vector2.zero;
                 castDistScene = plannedDeltaRB.magnitude;
             }
@@ -274,11 +441,15 @@ public partial class MonsterController : MonoBehaviour
                     var h = hits[i];
                     if (!h.collider) continue;
                     if (h.collider.isTrigger) continue;
-                    if (h.collider.CompareTag(autoJumpPermitTag)) continue; // Ğí¿ÉÇø²»ÊÇÕÏ°­
+                    if (h.collider.CompareTag(autoJumpPermitTag)) continue;
                     if (h.collider.CompareTag("Player")) continue;
                     if (player && h.collider.transform.root == player.root) continue;
 
-                    if (h.distance < bestD) { bestD = h.distance; best = h; }
+                    if (h.distance < bestD)
+                    {
+                        bestD = h.distance;
+                        best = h;
+                    }
                 }
 
                 if (best.collider)
@@ -288,92 +459,105 @@ public partial class MonsterController : MonoBehaviour
 
                     if (pCfg.pathType == AirPatrolPathType.AreaHorizontal)
                     {
+                        // åœºæ™¯ï¼šæ°´å¹³ç«‹å³åå‘ï¼ˆä¸åšæ–œå‘åå°„ï¼‰
                         float speed = Mathf.Max(0f, _airVel.magnitude);
-                        float newSign = -Mathf.Sign(_airVel.x == 0f ? 1f : _airVel.x);
+                        int newSign = -(_airVel.x >= 0f ? +1 : -1);
 
-                        // Î»ÖÃ£ºÍËµ½½Ó´¥µãÇ°£¬ÔÙÑØĞÂË®Æ½·½ÏòÇáÍÆ£¬±ÜÃâ¿¨±ß
                         nextRB = posRB + castDirScene * allow + new Vector2(newSign, 0f) * 0.01f;
+                        newVel = new Vector2(newSign, 0f) * speed;
 
-                        // ËÙ¶È£º´¿Ë®Æ½·´Ïò£¬Y=0£¨½ûÖ¹Ë³ÆÂ£©
-                        _airVel = new Vector2(newSign, 0f) * speed;
-                        _airPingPongSign = (_airVel.x >= 0f) ? +1 : -1;
+                        _airPingPongSign = newSign;
+                        ForceFaceSign(newSign);
+
+                        if (newVel.sqrMagnitude > 0.0001f) _airLastDir = newVel.normalized;
                     }
                     else if (pCfg.pathType == AirPatrolPathType.AreaVertical)
                     {
+                        // åœºæ™¯ï¼šç«–ç›´ç«‹å³åå‘ï¼ˆä¸åšæ–œå‘åå°„ï¼‰
                         float speed = Mathf.Max(0f, _airVel.magnitude);
+                        int newSignY = -(_airVel.y >= 0f ? +1 : -1);
 
-                        // Î»ÖÃ£ºÍËµ½½Ó´¥µãÇ°£¬ÔÙÇáÎ¢ÏòÏÂÍË³ö
                         nextRB = posRB + castDirScene * allow + Vector2.down * 0.01f;
-
-                        // ËÙ¶È£ºÇ¿ÖÆÊúÖ±ÏòÏÂ£¬X=0£¨½ûÖ¹Ë³ÆÂ£©
-                        _airVel = Vector2.down * speed;
-                        _airVerticalSign = -1;
+                        newVel = new Vector2(0f, newSignY) * speed;
+                        _airVerticalSign = newSignY;
+                        if (newVel.sqrMagnitude > 0.0001f) _airLastDir = newVel.normalized;
                     }
-                    else // AreaRandom
+                    else
                     {
+                        // åœºæ™¯ï¼šRandom / RandomH ä»æŒ‰æ³•çº¿åšå‘é‡åå°„
                         Vector2 n = best.normal.normalized;
-                        // ÈëÉä½Ç£¨ÊÀ½ç£©
                         float inAng = Mathf.Atan2(_airVel.y, _airVel.x);
-                        // ÇĞÏß½Ç¶È£¨ÓÃÇĞÏß×ö¾µÏñÖá£©£¬ÈëÉä½Ç=³öÉä½Ç
                         Vector2 t = new Vector2(-n.y, n.x);
                         float tAng = Mathf.Atan2(t.y, t.x);
                         float outAng = 2f * tAng - inAng;
                         Vector2 rDir = new Vector2(Mathf.Cos(outAng), Mathf.Sin(outAng));
-                        if (rDir.sqrMagnitude < 0.0001f) rDir = -_airVel.normalized;
+                        if (rDir.sqrMagnitude < 0.0001f)
+                            rDir = -(_airVel.sqrMagnitude > 0.0001f ? _airVel.normalized : Vector2.right);
 
                         float speed = Mathf.Max(_airVel.magnitude, mv.rtCurrentSpeed);
-                        newVel = rDir.normalized * speed; // ²»Ö±½Ó¸Ä _airVel£¬Ä©Î²Í³Ò»»ØÌî
+                        newVel = rDir.normalized * speed;
+                        if (newVel.sqrMagnitude > 0.0001f) _airLastDir = rDir.normalized;
 
-                        // Î»ÖÃ£ºÍËµ½½Ó´¥µãÇ°£¬ÔÙÑØĞÂ·½ÏòÇáÍÆ
                         nextRB = posRB + castDirScene * allow + rDir.normalized * 0.01f;
                     }
                 }
             }
         }
 
-        // ========== ÇøÓò±ß½ç£¨½öµ± affectByArea=true Ê±ÉúĞ§£»¹æÔòÓëÅö×²ÌåÒ»ÖÂ£© ==========
+        // åŒºåŸŸè¾¹ç•Œåå¼¹ï¼ˆç”¨ BoxCollider2D ä¸­å¿ƒ anchorï¼‰
         Vector2 nextAnchor = nextRB - rootToAnchor;
 
         if (affectByArea)
         {
             bool outside = !area.Contains(nextAnchor);
-            bool atLeft = nextAnchor.x <= area.xMin + 0.0001f;
-            bool atRight = nextAnchor.x >= area.xMax - 0.0001f;
-            bool atBottom = nextAnchor.y <= area.yMin + 0.0001f;
-            bool atTop = nextAnchor.y >= area.yMax - 0.0001f;
+            bool touchLeft = nextAnchor.x <= area.xMin + 0.0001f;
+            bool touchRight = nextAnchor.x >= area.xMax - 0.0001f;
+            bool touchBottom = nextAnchor.y <= area.yMin + 0.0001f;
+            bool touchTop = nextAnchor.y >= area.yMax - 0.0001f;
 
-            if (outside || atLeft || atRight || atBottom || atTop)
+            if (outside || touchLeft || touchRight || touchBottom || touchTop)
             {
+                bool hitH = (touchLeft || touchRight);
+                bool hitV = (touchTop || touchBottom);
+
                 if (pCfg.pathType == AirPatrolPathType.AreaHorizontal)
                 {
-                    _airVel.x = -_airVel.x; _airVel.y = 0f;
-                    _airPingPongSign = (_airVel.x >= 0f) ? +1 : -1;
+                    // åªåœ¨æ’åˆ°â€œå·¦å³è¾¹â€æ—¶æ‰åå‘ï¼›æ’åˆ°â€œé¡¶/åº•â€ä¸æ”¹æ°´å¹³é€Ÿåº¦ä¸æœå‘
+                    if (hitH)
+                    {
+                        float speed = Mathf.Max(0f, newVel.magnitude);
+                        int newSign = -((newVel.x >= 0f) ? +1 : -1);
+                        newVel = new Vector2(newSign, 0f) * speed;
+                        _airPingPongSign = newSign;
+                        ForceFaceSign(newSign);
+                    }
                 }
                 else if (pCfg.pathType == AirPatrolPathType.AreaVertical)
                 {
-                    _airVel.y = -_airVel.y; _airVel.x = 0f;
-                    _airVerticalSign = (_airVel.y >= 0f) ? +1 : -1;
+                    // åªåœ¨æ’åˆ°â€œé¡¶/åº•â€æ—¶æ‰åå‘ï¼›æ’åˆ°â€œå·¦/å³â€ä¸æ”¹ç«–ç›´é€Ÿåº¦
+                    if (hitV)
+                    {
+                        float speed = Mathf.Max(0f, newVel.magnitude);
+                        int newSignY = -((newVel.y >= 0f) ? +1 : -1);
+                        newVel = new Vector2(0f, newSignY) * speed;
+                        _airVerticalSign = newSignY;
+                    }
                 }
                 else
                 {
-                    // Ğ¡ÇòÊ½·´µ¯£ºÔÚ¾ØĞÎ±ß½çÉÏ°´¡°ÈëÉä½Ç = ³öÉä½Ç¡±¼ÆËã
-                    // 1) ÓÃ¡°Ãªµãµ½¾ØĞÎÄÚ²¿×î½üµã¡±µÄÏòÁ¿½üËÆ±ß½ç·¨Ïß£¬ÔÙ×öÇĞÏß¾µÏñ
+                    // AreaRandom / AreaRandomHï¼šæŒ‰è¾¹ç•Œæ³•çº¿åšå‘é‡åå°„ï¼ˆå…¥å°„è§’ = åå°„è§’ï¼‰
                     Vector2 cen = elem.areaCenter;
                     Vector2 half = elem.areaSize * 0.5f;
 
-                    // µ±Ç°Ãªµã£¨¿ÉÄÜÔ½½ç£©
                     Vector2 p = nextAnchor;
-
-                    // ×î½üµã q£¨¼Ğ»Øµ½¾ØĞÎÄÚ£©
                     Vector2 q = new Vector2(
                         Mathf.Clamp(p.x, cen.x - half.x, cen.x + half.x),
                         Mathf.Clamp(p.y, cen.y - half.y, cen.y + half.y)
                     );
 
-                    Vector2 nApprox = (p - q); // ½üËÆ·¨Ïß£¨Ö¸Ïò¾ØĞÎÍâ£©
+                    Vector2 nApprox = (p - q);
                     if (nApprox.sqrMagnitude < 0.000001f)
                     {
-                        // ¼«¶Ë£ºÕıºÃÔÚ±ß/½Çµ¼ÖÂÁãÏòÁ¿£¬»ØÍËµ½Ô­ÖáÏò½üËÆ
                         float dxAbs = Mathf.Abs(p.x - cen.x) - half.x;
                         float dyAbs = Mathf.Abs(p.y - cen.y) - half.y;
                         bool overX = dxAbs > 0f;
@@ -383,23 +567,17 @@ public partial class MonsterController : MonoBehaviour
                         {
                             float maxOut = Mathf.Max(Mathf.Abs(dxAbs), Mathf.Abs(dyAbs));
                             if (maxOut > 0f && Mathf.Abs(Mathf.Abs(dxAbs) - Mathf.Abs(dyAbs)) < 0.15f * maxOut)
-                            {
                                 nApprox = new Vector2(Mathf.Sign(p.x - cen.x), Mathf.Sign(p.y - cen.y)).normalized;
-                            }
                             else
-                            {
                                 nApprox = (Mathf.Abs(dxAbs) > Mathf.Abs(dyAbs))
                                     ? new Vector2(Mathf.Sign(p.x - cen.x), 0f)
                                     : new Vector2(0f, Mathf.Sign(p.y - cen.y));
-                            }
                         }
                         else
                         {
-                            nApprox = (Mathf.Abs(dxAbs) > Mathf.Abs(dyAbs))
-                                ? new Vector2(Mathf.Sign(p.x - cen.x), 0f)
-                                : new Vector2(0f, Mathf.Sign(p.y - cen.y));
-                            if (!overX && overY) nApprox = new Vector2(0f, Mathf.Sign(p.y - cen.y));
-                            if (overX && !overY) nApprox = new Vector2(Mathf.Sign(p.x - cen.x), 0f);
+                            if (overX) nApprox = new Vector2(Mathf.Sign(p.x - cen.x), 0f);
+                            else if (overY) nApprox = new Vector2(0f, Mathf.Sign(p.y - cen.y));
+                            else nApprox = Vector2.zero;
                         }
                     }
 
@@ -407,8 +585,7 @@ public partial class MonsterController : MonoBehaviour
                         nApprox = -(_airVel.sqrMagnitude > 0.0001f ? _airVel.normalized : Vector2.right);
                     nApprox = nApprox.normalized;
 
-                    // 2) ÇĞÏß¾µÏñ£ºoutAng = 2*tAng - inAng£¨ÈëÉä½Ç=³öÉä½Ç£©
-                    float inAng = Mathf.Atan2(_airVel.y, _airVel.x);
+                    float inAng = Mathf.Atan2(newVel.y, newVel.x);
                     Vector2 t = new Vector2(-nApprox.y, nApprox.x);
                     float tAng = Mathf.Atan2(t.y, t.x);
                     float outAng = 2f * tAng - inAng;
@@ -417,10 +594,10 @@ public partial class MonsterController : MonoBehaviour
                     if (rDir.sqrMagnitude < 0.0001f)
                         rDir = -(_airVel.sqrMagnitude > 0.0001f ? _airVel.normalized : Vector2.right);
 
-                    newVel = rDir.normalized * Mathf.Max(_airVel.magnitude, mv.rtCurrentSpeed); // Ä©Î²Í³Ò»»ØÌî
+                    newVel = rDir.normalized * Mathf.Max(newVel.magnitude, mv.rtCurrentSpeed);
                 }
 
-                // Ãªµã¼Ğ»ØÇøÓò£¬¸ÕÌåÎ»ÖÃËæÖ®µ÷Õû
+                // ä½ç½®å¤¹å›åŒºåŸŸå†…ï¼ˆæ— è®ºå‘½ä¸­å“ªæ¡è¾¹éƒ½è¦å¤¹å›ï¼‰
                 nextAnchor = new Vector2(
                     Mathf.Clamp(nextAnchor.x, area.xMin, area.xMax),
                     Mathf.Clamp(nextAnchor.y, area.yMin, area.yMax)
@@ -429,34 +606,43 @@ public partial class MonsterController : MonoBehaviour
             }
         }
 
-        // Ó¦ÓÃÎ»ÒÆ + ¸üĞÂÊµ¼ÊËÙ¶È
-        rb.MovePosition(nextRB);
-        _airVel = newVel; // ¹Ø¼ü£º±£³Ö±¾Ö¡¼ÆËã³öµÄ·´µ¯·½ÏòÓëËÙ¶È£¬²»±»¡°¼Ğ»ØÎ»ÒÆ¡±¸ÄĞ´
+            // åº”ç”¨ä½ç§» + å›å†™ä¸»é€Ÿåº¦
+            rb.MovePosition(nextRB);
+        _airVel = newVel;
 
-        // ³¯Ïò£ºHorizontal Óë Random °´Ë®Æ½ËÙ¶È·­Ãæ£»Vertical ²»·­Ãæ
+        // å†ç»Ÿä¸€ä¿è¯ä¸»é€Ÿåº¦è½´å‘çº¦æŸï¼ˆé˜²æ­¢æ•°å€¼è¯¯å·®å¸¦æ¥å¾®å°åæ–œï¼‰
+        if (pCfg.pathType == AirPatrolPathType.AreaHorizontal)
+            _airVel = new Vector2(_airVel.x, 0f);
+        else if (pCfg.pathType == AirPatrolPathType.AreaVertical)
+            _airVel = new Vector2(0f, _airVel.y);
+
+        // æœå‘ï¼šåªåœ¨æœ‰æ°´å¹³åˆ†é‡ä¸”éœ€è¦ç¿»é¢çš„æ¨¡å¼ä¸‹æ”¹å˜
         if ((pCfg.pathType == AirPatrolPathType.AreaHorizontal
              || pCfg.pathType == AirPatrolPathType.AreaRandom
              || pCfg.pathType == AirPatrolPathType.AreaRandomH)
             && Mathf.Abs(_airVel.x) > 0.0005f)
         {
+            // æœå‘åªçœ‹æ°´å¹³åˆ†é‡ï¼šx æ”¹å˜æ­£è´Ÿæ—¶æ‰å·¦å³ç¿»é¢ï¼›çº¯ç«–ç›´åå¼¹ä¸æ”¹å˜æœå‘
             ForceFaceSign(_airVel.x >= 0f ? +1 : -1);
         }
 
-        // ×Ô×ª£ºÈÆ¡°Åö×²ÌåÖĞĞÄ(ÓÅÏÈ) ¡ú monsterDistPoint ¡ú ¸ùÎ»ÖÃ¡±ÎªÖáĞÄ£»Ö§³ÖÕı/¸º½ÇËÙ¶È£»²»Ó°ÏìÎ»ÒÆ
-        if (pCfg.selfRotate)
-        {
-            // ±£Áô·ûºÅ£¨Ö§³Ö Inspector Ìî¸ºÊı£©
-            float deg = pCfg.selfRotateSpeedDeg * Time.deltaTime;
+        // åŒæ­¥æ°´å¹³/å‚ç›´ç¬¦å·åˆ°å½“å‰é€Ÿåº¦æ–¹å‘ï¼Œä¿è¯ä¸‹ä¸€æ®µ initDir æ²¿ç”¨æœ€æ–°æ–¹å‘
+        if (pCfg.pathType == AirPatrolPathType.AreaHorizontal && Mathf.Abs(_airVel.x) > 0.0005f)
+            _airPingPongSign = (_airVel.x >= 0f) ? +1 : -1;
+        else if (pCfg.pathType == AirPatrolPathType.AreaVertical && Mathf.Abs(_airVel.y) > 0.0005f)
+            _airVerticalSign = (_airVel.y >= 0f) ? +1 : -1;
 
-            // ÖáĞÄÓÅÏÈ¼¶£ºBoxCollider2D.bounds.center£¨ÊÀ½ç×ø±ê£©> monsterDistPoint > transform.position
+        // è‡ªè½¬ï¼ˆfixedDeltaTimeï¼‰
+        if (state == MonsterState.Air && pCfg.selfRotate)
+        {
+            float deg = pCfg.selfRotateSpeedDeg * Time.fixedDeltaTime;
+
             Vector3 pivotW = transform.position;
             if (col != null) pivotW = col.bounds.center;
             else if (monsterDistPoint) pivotW = monsterDistPoint.position;
 
-            // Ğı×ªÄ¿±ê£ºÓÅÏÈĞı×ª¿ÉÊÓ½Úµã£¨Animator ¸ù£©£¬±ÜÃâÓ°Ïì¸ÕÌå¸ùµÄ MovePosition
             Transform t = animator ? animator.transform : transform;
 
-            // Èç¹ûĞı×ª¸ù£¬ĞèÒªÔÚĞı×ªºó°Ñ¸ùÎ»ÖÃ»¹Ô­£¬±ÜÃâÍÏ×§Î»ÒÆ
             Vector3 keepRootPos = transform.position;
             bool rotatingRoot = (t == transform);
 
@@ -466,13 +652,9 @@ public partial class MonsterController : MonoBehaviour
 
             if (rotatingRoot) transform.position = keepRootPos;
         }
-
-        // ÒÆ¶¯¶¯»­
-        if (!string.IsNullOrEmpty(pCfg.skymoveAnimation))
-            PlayAnimIfNotCurrent(pCfg.skymoveAnimation);
     }
 
-    // ¿ÕÖĞÒÆ¶¯ÌØĞ§£¨ÓÉ¶¯»­ÊÂ¼ş´¥·¢£©
+    // ç©ºä¸­ç§»åŠ¨ç‰¹æ•ˆï¼ˆç”±åŠ¨ç”»äº‹ä»¶è§¦å‘ï¼‰
     public void OnFxSkyMove()
     {
         if (state != MonsterState.Air) return;
@@ -480,14 +662,14 @@ public partial class MonsterController : MonoBehaviour
         var pCfg = config?.airStageConfig?.patrol;
         if (pCfg == null) return;
         if (pCfg.skymoveEffectPrefab == null) return;
-        // È¥ÖØ£ºÍ¬Ò»¡°ÏßĞÔ¶Î¡±Ö»²¥Ò»´Î£¨¿ÉÑ¡£¬Èç¹ûÄãÏ£Íû¶¯»­¶à´ÎÊÂ¼ş¾Í¶à´Î²¥·Å£¬É¾³ıÕâĞĞÅĞ¶Ï¼´¿É£©
+        // å»é‡ï¼šåŒä¸€â€œçº¿æ€§æ®µâ€åªæ’­ä¸€æ¬¡
         if (_airMoveFxPlayedThisSegment) return;
 
         PlayEffect(pCfg.skymoveEffectPrefab, fxSkyMovePoint ? fxSkyMovePoint : transform);
         _airMoveFxPlayedThisSegment = true;
     }
 
-    // ¿ÕÖĞĞİÏ¢ÌØĞ§£¨ÓÉ¶¯»­ÊÂ¼ş´¥·¢£©
+    // ç©ºä¸­ä¼‘æ¯ç‰¹æ•ˆï¼ˆç”±åŠ¨ç”»äº‹ä»¶è§¦å‘ï¼‰
     public void OnFxSkyRest()
     {
         if (state != MonsterState.Air) return;
@@ -495,11 +677,10 @@ public partial class MonsterController : MonoBehaviour
         var pCfg = config?.airStageConfig?.patrol;
         if (pCfg == null) return;
         if (pCfg.skyrestEffectPrefab == null) return;
-        // È¥ÖØ£ºÍ¬Ò»ĞİÏ¢¶ÎÖ»²¥Ò»´Î
+        // å»é‡ï¼šåŒä¸€ä¼‘æ¯æ®µåªæ’­ä¸€æ¬¡
         if (_airRestFxPlayedThisRest) return;
 
         PlayEffect(pCfg.skyrestEffectPrefab, fxSkyRestPoint ? fxSkyRestPoint : transform);
         _airRestFxPlayedThisRest = true;
     }
-
 }

@@ -276,13 +276,12 @@ public partial class MonsterController : MonoBehaviour
     // 本次攻击的执行模式（近战/远程），由距离决定
     private AttackType attackExecType = AttackType.Melee;
 
-
-
     void Start()
     {
         player = GameObject.FindWithTag("Player")?.transform;
         animator = GetComponentInChildren<Animator>();
         if (animator) animator.applyRootMotion = false;
+
         col = GetComponent<Collider2D>();
         rb = GetComponent<Rigidbody2D>();
         if (rb == null)
@@ -311,14 +310,16 @@ public partial class MonsterController : MonoBehaviour
             config = ScriptableObject.Instantiate(config);
 
         var ap = config?.airPhaseConfig;
-        if (ap != null && ap.airPhaseID == 0)
+
+        if (ap != null)
         {
-            state = MonsterState.Air;
-            EnterAirPhaseSetup(); // 内部有 _airSetupDone 保护，可重复调用
-        }
-        else if (ap != null && ap.groundPhaseID == 0)
-        {
-            state = MonsterState.Patrol; // 锁地面时保持原行为：出生后落地
+            
+            bool wantAirFloatOnSpawn = (ap.airPhaseID == 0 || ap.airPhaseID == 1);
+            if (wantAirFloatOnSpawn)
+            {
+                _airSavedGravity = rb.gravityScale;
+                rb.gravityScale = 0f;
+            }
         }
 
         // 巡逻运行态
@@ -459,7 +460,7 @@ public partial class MonsterController : MonoBehaviour
             yield return new WaitForSeconds(idleTime);
         }
 
-        // 3) 出生后立刻按 ID 判定初始阶段
+        // 出生后立刻按 ID 判定初始阶段
         DecidePhaseAfterSpawn();
 
         // 保持已有的初始化（若未设置为 Air 则默认 Patrol）
@@ -491,7 +492,6 @@ public partial class MonsterController : MonoBehaviour
 
     public void DecidePhaseAfterSpawn()
     {
-        // 默认：若配置缺失，则按原来地面逻辑
         if (config == null || config.airPhaseConfig == null)
         {
             state = MonsterState.Patrol;
@@ -503,14 +503,13 @@ public partial class MonsterController : MonoBehaviour
 
         if (airID == 0 && groundID == 0)
         {
-            // 都为 0：按原地面行为
             state = MonsterState.Patrol;
             return;
         }
 
         if (airID == 0)
         {
-            // 锁定空中：不要再运行地面配置逻辑
+            // 锁定空中
             state = MonsterState.Air;
             return;
         }
@@ -530,9 +529,10 @@ public partial class MonsterController : MonoBehaviour
     {
         if (isJumping && activeJumpMove != null)
             JumpUpdate(activeJumpMove);
+        if (state == MonsterState.Air)
+            AirPatrolPhysicsStep();
     }
-
-    void IdleUpdate()
+        void IdleUpdate()
     {
         if (!string.IsNullOrEmpty(config.spawnConfig.idleAnimation))
         {
