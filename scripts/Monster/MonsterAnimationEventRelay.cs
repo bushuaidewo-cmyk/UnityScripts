@@ -129,4 +129,17 @@ public class MonsterAnimationEventRelay : MonoBehaviour
         if (debugEvents) Debug.Log("[Relay] skyrestEffectPrefab()");
         controller?.OnFxSkyRest();
     }
+
+    // 空中发现阶段事件
+    public void skyfindmoveEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] skyfindmoveEffectPrefab()");
+        controller?.OnFxSkyFindMove();
+    }
+
+    public void skyfindrestEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] skyfindrestEffectPrefab()");
+        controller?.OnFxSkyFindRest();
+    }
 }

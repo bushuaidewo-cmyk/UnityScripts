@@ -47,6 +47,11 @@ public class AirPhaseConfig
 
     [Tooltip("空中阶段ID: 0=锁定空中阶段；非0且与地面ID组成顺序(较小者起始，较大者目标)。例如 air=1,ground=2 -> 先空中后地面")]
     public int airPhaseID = 0;
+
+    [Tooltip("勾选后：绘制地面阶段发现(follow/reverse/backstep)与攻击(近战/远程)辅助线 Gizmos")]
+    public bool showGroundGizmosManual = false;
+    [Tooltip("勾选后：绘制空中阶段发现(follow/reverse/backstep)与攻击(近战/远程)辅助线 Gizmos")]
+    public bool showAirGizmosManual = false;
 }
 
 [System.Serializable]
@@ -73,15 +78,6 @@ public class AirPatrolConfig
     public bool canPassThroughScene = false;
 
     
-
-    public bool selfRotate = false;
-    public bool selfRotateX = false;
-    public bool selfRotateY = false;
-    public bool selfRotateZ = true;
-    [Tooltip("自转速度（度/秒），对勾选的轴生效")]
-    public float selfRotateSpeedDeg = 180f;
-
-    [Header("资源：动画/特效（空中巡逻）")]
     public string skymoveAnimation;
     public string skyrestAnimation;
     public GameObject skymoveEffectPrefab;
@@ -137,8 +133,86 @@ public class AirPatrolElement
 [System.Serializable]
 public class AirDiscoveryConfig
 {
-    [Tooltip("占位开关：仅用于在 Inspector 中占位显示，后续会替换为真实参数")]
-    public bool placeholder = false;
+    [Header("三档距离(Gizmos:绿=发现,白=后退,黑=倒退)")]
+    [Tooltip("发现距离（Gizmos:绿）：当玩家距离小于此值时，进入发现阶段（默认为跟随 Follow 状态）")]
+    public float findRange = 8f;
+
+    [Tooltip("后退距离（Gizmos:白）：当玩家距离小于此值时，进入后退（Retreat）状态")]
+    public float reverseRange = 4f;
+
+    [Tooltip("倒退距离（Gizmos:黑）：当玩家距离小于此值时，进入倒退（Backstep）状态")]
+    public float backRange = 2f;
+
+    [Tooltip("后退检测周期性屏蔽-最小随机时间（秒）。用于让怪物在后退和不后退之间切换，防止一直后退。")]
+    public float backDCTMin = 0f;
+
+    [Tooltip("后退检测周期性屏蔽-最大随机时间（秒）。设置为0则不启用屏蔽功能。")]
+    public float backDCTMax = 0f;
+
+    // ===== 全局 S 波（作用于 Follow / Retreat / Backstep） =====
+    public bool sinEnabled = false;
+    public float sinFrequency = 1.0f;
+    public float sinAmplitude = 0.4f;
+
+    // ====== 全局资源配置（原 Follow/Backstep 里的资源上移至此） ======
+    
+    public string followMoveAnimation;
+    public string followRestAnimation;
+    public GameObject followMoveEffectPrefab;
+    public GameObject followRestEffectPrefab;
+
+    
+    public string backMoveAnimation;
+    public string backRestAnimation;
+    public GameObject backMoveEffectPrefab;
+    public GameObject backRestEffectPrefab;
+
+    [Header("随机播放空中发现动作")]
+    public bool findRandomOrder = false;
+    public List<AirDiscoveryElement> elements = new List<AirDiscoveryElement>();
+}
+
+[System.Serializable]
+public class AirDiscoveryElement
+{
+    [Header("Follow (跟踪阶段参数)")]
+    public AirMoveParams follow;
+
+    [Header("Backstep/Retreat (后退/倒退阶段参数)")]
+    public AirMoveParams backstep;
+}
+
+[System.Serializable]
+public class AirMoveParams
+{
+    public float moveSpeed = 3f;
+    public float acceleration = 5f;
+    public float accelerationTime = 0f;
+    public float deceleration = 5f;
+    public float decelerationTime = 0f;
+    public float moveDuration = 3f;
+
+    public float restMin = 0f;
+    public float restMax = 0f;
+
+    [Header("Homing")]
+    public float homingFrequency = 2f;
+    [Range(0f, 1f)] public float homingStrength = 0.5f;
+}
+
+[System.Serializable]
+public class AirBackstepParams
+{
+    
+    public float moveSpeed = 3f;
+    public float acceleration = 5f;
+    public float accelerationTime = 0f;
+    public float deceleration = 5f;
+    public float decelerationTime = 0f;
+    public float moveDuration = 3f;
+
+    public float restMin = 0f;
+    public float restMax = 0f;
 }
 
 
@@ -553,13 +627,13 @@ public class AttackEventV2
     [Tooltip("本次攻击的时间窗口（秒）。在该时间内可循环播放攻击动画并触发效果。")]
     public float attackDuration = 0.8f;
 
+    [Tooltip("在 attackDuration 时间窗内，攻击动画循环播放的次数（动画播完一遍算一次）")]
+    public int repeatedHitsCount = 1;
+
     [Tooltip("攻击结束后进入攻击休息区间下限（秒）")]
     public float attackRestMin = 0.8f;
     [Tooltip("攻击结束后进入攻击休息区间上限（秒）")]
     public float attackRestMax = 1.0f;
-
-    [Tooltip("在 attackDuration 时间窗内，攻击动画循环播放的次数（动画播完一遍算一次）")]
-    public int repeatedHitsCount = 1;
 
     [Header("近战角色自身")]
     [Tooltip("近战可触发的有效距离（米）")]
@@ -781,7 +855,7 @@ public class ProjectileConfig
     [Range(0f, 1f)]
     public float homingStrength = 1f;   // 0=不跟踪，1=最强跟踪
 
-    // ProjectileConfig 中“半径旋转”相关字段（移除了 orbitTangentialSpeed）
+    // 半径旋转
     [Header("半径旋转（相对载体，PathTangent 空间）")]
     [Tooltip("启用半径旋转：相对载体按半径做圆周偏移")]
     public bool orbitEnabled = false;
@@ -822,6 +896,7 @@ public class ProjectileConfig
     public float boomerangBackDecelTime = 0f;
 
 }
+
 public enum Orientation { FacePlayer, FaceLeft, FaceRight }
 public enum MovementType { Straight, Jump }
 public enum SpawnPositionType { Points, Area }

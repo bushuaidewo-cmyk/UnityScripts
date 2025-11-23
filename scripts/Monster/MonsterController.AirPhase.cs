@@ -1,7 +1,6 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using static System.Net.WebRequestMethods;
 
 public partial class MonsterController : MonoBehaviour
 {
@@ -30,6 +29,670 @@ public partial class MonsterController : MonoBehaviour
 
     // 仅用于调试：当前 anchor 是否在区域边缘
     private bool isAtEdge = false;
+
+    // ===== 空中发现运行态 =====
+    private bool _airDiscSetupDone = false;
+    private List<int> _airDiscOrder = null;
+    private int _airDiscOrderPos = 0;
+    private int _airDiscActiveIndex = 0;
+
+    private Vector2 _airDiscVel = Vector2.zero;     // 当前发现阶段主速度
+    private Vector2 _airDiscLastDir = Vector2.right; // 上一帧的方向（用于Retreat反向基准）
+    private float _airDiscHomingTimer = 0f;
+
+    // 空中发现阶段：后退/倒退距离周期性屏蔽（独立于地面 suppressionPhaseTimer）
+    private bool _airBackSuppressed = false;
+    private float _airBackSuppTimer = 0f;
+
+    // 空中发现统一扩展：滞回 / 驻留 / 面向驻留 / 压制枚举
+    // 复用地面发现的 bandHysteresis 与 bandMinDwellTime（不再单独序列化空中版本）
+    private float _airBandDwellTimer = 0f;        // 空中档位当前驻留剩余时间
+    private float _airFaceFlipDwellTimer = 0f;    // 空中面向翻转驻留计时（复用 faceFlipMinDwellTime 的时长）
+
+    private enum AirBackSuppPhase { Normal, Suppressed }
+    private AirBackSuppPhase _airBackSuppPhase = AirBackSuppPhase.Normal;
+
+    // 空中发现：压制期原始距离缓存（方案U2显式归零后恢复）
+    private float _airReverseRangeOriginal = -1f;
+    private float _airBackRangeOriginal = -1f;
+
+    // 归位逻辑标记
+    private bool _airIsReturningToCenter = false;
+
+    // 状态机：空中发现
+    private enum AirDiscState { Follow, Retreat, Backstep }
+    private AirDiscState _airDiscState = AirDiscState.Follow;
+    private float _airDiscStateTimer = 0f; // 状态驻留计时或屏蔽计时复
+    
+    // 空中发现阶段：四相运行态（仿巡逻）
+    private enum AirDiscPhase { Accel, Cruise, Decel, Rest }
+    private AirDiscPhase _airDiscPhase = AirDiscPhase.Accel;
+    private float _airDiscCurrentSpeed = 0f;
+    private float _airDiscAccelTimer = 0f;
+    private float _airDiscCruiseTimer = 0f;
+    private float _airDiscDecelTimer = 0f;
+    private float _airDiscRestTimer = 0f;
+
+    // 辅助获取当前使用的参数组
+    private AirMoveParams GetCurrentAirMoveParams()
+    {
+        var cfg = config?.airStageConfig?.discovery;
+        if (cfg == null || cfg.elements == null || cfg.elements.Count == 0) return null;
+        var elem = cfg.elements[Mathf.Clamp(_airDiscActiveIndex, 0, cfg.elements.Count - 1)];
+        return (_airDiscState == AirDiscState.Follow) ? elem.follow : elem.backstep;
+    }
+    // MonsterController.AirPhase.cs 片段：完整的 AirDiscoveryUpdate 方法（已加入：进入阶段强制重置档位；离开阶段恢复范围；保留原逻辑其它部分不变）
+    private void AirDiscoveryUpdate()
+    {
+        // ========== 1. 初始化（仅第一次进入空中发现阶段） ==========
+        if (!_airDiscSetupDone)
+        {
+            _airDiscSetupDone = true;
+            _airDiscVel = Vector2.zero;
+            _airIsReturningToCenter = false;
+
+            // 构建元素顺序
+            var dcfgInit = config?.airStageConfig?.discovery;
+            _airDiscOrder = new List<int>();
+            int nInit = (dcfgInit != null && dcfgInit.elements != null) ? dcfgInit.elements.Count : 0;
+            for (int i = 0; i < nInit; i++) _airDiscOrder.Add(i);
+            if (dcfgInit != null && dcfgInit.findRandomOrder && nInit > 1) Shuffle(_airDiscOrder);
+            _airDiscActiveIndex = (nInit > 0) ? _airDiscOrder[0] : 0;
+            // 使用顺位的第一个元素初始化运行态
+            var pInit = GetCurrentAirMoveParams();
+            if (pInit != null)
+            {
+                _airDiscCurrentSpeed = 0f;
+                _airDiscAccelTimer = Mathf.Max(0f, pInit.accelerationTime);
+                _airDiscCruiseTimer = Mathf.Max(0f, pInit.moveDuration);
+                _airDiscDecelTimer = Mathf.Max(0f, pInit.decelerationTime);
+                _airDiscRestTimer = 0f;
+
+                bool instantA = (pInit.accelerationTime <= 0f && pInit.acceleration <= 0f);
+                bool instantD = (pInit.decelerationTime <= 0f && pInit.deceleration <= 0f);
+                _airDiscPhase = instantA
+                    ? (_airDiscCruiseTimer > 0f
+                        ? AirDiscPhase.Cruise
+                        : (instantD ? AirDiscPhase.Rest : AirDiscPhase.Decel))
+                    : AirDiscPhase.Accel;
+                if (instantA)
+                    _airDiscCurrentSpeed = Mathf.Max(0f, pInit.moveSpeed);
+
+                _airMoveFxPlayedThisSegment = false;
+                _airRestFxPlayedThisRest = false;
+            }
+
+            // 周期性后退屏蔽初始化
+            if (dcfgInit != null && dcfgInit.backDCTMax > 0f)
+            {
+                _airBackSuppressed = false;
+                _airBackSuppTimer = Random.Range(dcfgInit.backDCTMin, dcfgInit.backDCTMax);
+            }
+
+            // 进入空中发现强制档位与驻留归零，避免残留上一次离开时的 Backstep/Retreat
+            _airDiscState = AirDiscState.Follow;
+            _airBandDwellTimer = 0f;
+            _airFaceFlipDwellTimer = 0f;
+
+            // 首帧哨兵：立即按玩家左右翻面（_airDiscStateTimer 设为 -1 在旋转函数里消费）
+            Vector2 initMyPos = GetMonsterDistPos();
+            Vector2 initTargetPos = GetPlayerDistPos();
+            int faceInit = (initTargetPos.x - initMyPos.x >= 0f) ? +1 : -1;
+            ForceFaceSign(faceInit);
+            _airDiscStateTimer = -1f;
+        }
+
+        // ========== 2. 距离与退出判定 ==========
+        Vector2 myPos = GetMonsterDistPos();
+        Vector2 targetPos = GetPlayerDistPos();
+
+        float dist = discoveryUseHorizontalDistanceOnly
+            ? Mathf.Abs(targetPos.x - myPos.x)
+            : Vector2.Distance(myPos, targetPos);
+
+        var discCfg = config.airStageConfig.discovery;
+        if (discCfg == null)
+        {
+            // 配置缺失：回到空中巡逻
+            state = MonsterState.Air;
+            _airDiscSetupDone = false;
+            return;
+        }
+
+        // 超出发现范围：退出空中发现 → 回到空中巡逻
+        if (dist > discCfg.findRange)
+        {
+            state = MonsterState.Air;
+
+            // 离开发现：恢复可能被压制的范围（若之前缓存）
+            if (_airReverseRangeOriginal >= 0f)
+            {
+                discCfg.reverseRange = _airReverseRangeOriginal;
+                _airReverseRangeOriginal = -1f;
+            }
+            if (_airBackRangeOriginal >= 0f)
+            {
+                discCfg.backRange = _airBackRangeOriginal;
+                _airBackRangeOriginal = -1f;
+            }
+            _airBackSuppPhase = AirBackSuppPhase.Normal;
+            _airBackSuppressed = false;
+
+            // 归位准备（保持你原有逻辑）
+            _airIsReturningToCenter = true;
+            _airDiscSetupDone = false;
+
+            // Blend 回巡逻动画
+            var pCfgPatrol = config?.airStageConfig?.patrol;
+            if (pCfgPatrol != null && animator)
+            {
+                string targetAnim = null;
+                if (!string.IsNullOrEmpty(pCfgPatrol.skymoveAnimation))
+                    targetAnim = pCfgPatrol.skymoveAnimation;
+                else if (!string.IsNullOrEmpty(pCfgPatrol.skyrestAnimation))
+                    targetAnim = pCfgPatrol.skyrestAnimation;
+
+                if (!string.IsNullOrEmpty(targetAnim))
+                {
+                    var info = animator.GetCurrentAnimatorStateInfo(0);
+                    if (!info.IsName(targetAnim))
+                    {
+                        animator.CrossFadeInFixedTime(targetAnim, 0.12f, 0, 0f);
+                        animator.Update(0f);
+                    }
+                }
+            }
+
+            // 初始化巡逻归位的种子速度（保留原逻辑）
+            var pCfgRet = config?.airStageConfig?.patrol;
+            if (pCfgRet != null && pCfgRet.elements != null && pCfgRet.elements.Count > 0)
+            {
+                var mvRet = pCfgRet.elements[0].move;
+                mvRet.rtStraightPhase = StraightPhase.None;
+                mvRet.rtCurrentSpeed = 0f;
+                mvRet.rtAccelTimer = mvRet.rtCruiseTimer = mvRet.rtDecelTimer =
+                    mvRet.rtRestTimer = mvRet.rtMoveTimer = 0f;
+
+                float seedSpeed = (mvRet.accelerationTime <= 0f && mvRet.acceleration <= 0f)
+                    ? Mathf.Max(0f, mvRet.moveSpeed)
+                    : Mathf.Max(0.01f, mvRet.moveSpeed * 0.5f);
+                Vector2 dirToCenter = (pCfgRet.elements[0].areaCenter - rb.position).normalized;
+                if (dirToCenter.sqrMagnitude < 0.0001f) dirToCenter = Vector2.right;
+                _airVel = dirToCenter * seedSpeed;
+                _airLastDir = dirToCenter;
+            }
+            return;
+        }
+
+        // ========== 3. 计时器递减 ==========
+        if (_airBandDwellTimer > 0f) _airBandDwellTimer -= Time.deltaTime;
+        if (_airFaceFlipDwellTimer > 0f) _airFaceFlipDwellTimer -= Time.deltaTime;
+
+        // ========== 4. 周期性后退屏蔽状态机 ==========
+        if (discCfg.backDCTMax > 0f)
+        {
+            _airBackSuppTimer -= Time.deltaTime;
+            if (_airBackSuppTimer <= 0f)
+            {
+                _airBackSuppPhase = (_airBackSuppPhase == AirBackSuppPhase.Normal)
+                    ? AirBackSuppPhase.Suppressed
+                    : AirBackSuppPhase.Normal;
+
+                _airBackSuppressed = (_airBackSuppPhase == AirBackSuppPhase.Suppressed);
+
+                if (_airBackSuppPhase == AirBackSuppPhase.Suppressed)
+                {
+                    if (_airReverseRangeOriginal < 0f) _airReverseRangeOriginal = discCfg.reverseRange;
+                    if (_airBackRangeOriginal < 0f) _airBackRangeOriginal = discCfg.backRange;
+                    discCfg.reverseRange = 0f;
+                    discCfg.backRange = 0f;
+                }
+                else
+                {
+                    if (_airReverseRangeOriginal >= 0f)
+                        discCfg.reverseRange = _airReverseRangeOriginal;
+                    if (_airBackRangeOriginal >= 0f)
+                        discCfg.backRange = _airBackRangeOriginal;
+                    _airReverseRangeOriginal = -1f;
+                    _airBackRangeOriginal = -1f;
+                }
+                _airBackSuppTimer = Random.Range(discCfg.backDCTMin, discCfg.backDCTMax);
+            }
+        }
+
+        // ========== 5. 档位判定（原逻辑：基于当前状态 + 滞回） ==========
+        AirDiscState targetState = AirDiscState.Follow;
+
+        float backR = Mathf.Max(0f, discCfg.backRange);
+        float reverseR = Mathf.Max(0f, discCfg.reverseRange);
+        float backOut = backR + Mathf.Max(0f, bandHysteresis);
+        float reverseOut = reverseR + Mathf.Max(0f, bandHysteresis);
+
+        switch (_airDiscState)
+        {
+            case AirDiscState.Follow:
+                if (backR > 0f && dist <= backR) targetState = AirDiscState.Backstep;
+                else if (reverseR > 0f && dist <= reverseR) targetState = AirDiscState.Retreat;
+                else targetState = AirDiscState.Follow;
+                break;
+
+            case AirDiscState.Retreat:
+                if (backR > 0f && dist <= backR) targetState = AirDiscState.Backstep;
+                else if (dist >= reverseOut) targetState = AirDiscState.Follow;
+                else targetState = AirDiscState.Retreat;
+                break;
+
+            case AirDiscState.Backstep:
+                if (dist >= backOut)
+                {
+                    if (reverseR > 0f && dist <= reverseR) targetState = AirDiscState.Retreat;
+                    else targetState = AirDiscState.Follow;
+                }
+                else
+                {
+                    targetState = AirDiscState.Backstep;
+                }
+                break;
+
+            default:
+                targetState = AirDiscState.Follow;
+                break;
+        }
+
+        // 最小驻留期：禁止切档
+        if (_airBandDwellTimer > 0f)
+            targetState = _airDiscState;
+
+        // ========== 6. 档位切换处理 ==========
+        if (targetState != _airDiscState)
+        {
+            if (_airDiscState == AirDiscState.Follow)
+                _airDiscLastDir = (_airDiscVel.sqrMagnitude > 0.01f)
+                    ? _airDiscVel.normalized
+                    : (targetPos - myPos).normalized;
+
+            _airDiscState = targetState;
+            _airBandDwellTimer = Mathf.Max(0.05f, bandMinDwellTime);
+
+            _airMoveFxPlayedThisSegment = false;
+            _airRestFxPlayedThisRest = false;
+
+            var p = GetCurrentAirMoveParams();
+            if (p != null)
+            {
+                _airDiscCurrentSpeed = 0f;
+                _airDiscAccelTimer = Mathf.Max(0f, p.accelerationTime);
+                _airDiscCruiseTimer = Mathf.Max(0f, p.moveDuration);
+                _airDiscDecelTimer = Mathf.Max(0f, p.decelerationTime);
+                _airDiscRestTimer = 0f;
+
+                bool instantAccel = (p.accelerationTime <= 0f && p.acceleration <= 0f);
+                bool instantDecel = (p.decelerationTime <= 0f && p.deceleration <= 0f);
+                _airDiscPhase = instantAccel
+                    ? (_airDiscCruiseTimer > 0f
+                        ? AirDiscPhase.Cruise
+                        : (instantDecel ? AirDiscPhase.Rest : AirDiscPhase.Decel))
+                    : AirDiscPhase.Accel;
+                if (instantAccel)
+                    _airDiscCurrentSpeed = Mathf.Max(0f, p.moveSpeed);
+            }
+        }
+
+        // ========== 7. 物理与时间推进 ==========
+        _airDiscStateTimer += Time.deltaTime;
+    }
+    private void AirDiscoveryPhysicsStep(Vector2 myPos, Vector2 targetPos, AirDiscoveryConfig cfg)
+    {
+        // 固定时间步
+        float dt = Time.fixedDeltaTime;
+
+        // ===== 1. 基础局部变量（默认值） =====
+        float p_moveSpeed = 3f;
+        float p_accel = 5f;
+ 
+        // ===== 2. 读取当前元素参数 =====
+        if (cfg.elements != null && cfg.elements.Count > 0)
+        {
+            int idx = Mathf.Clamp(_airDiscActiveIndex, 0, cfg.elements.Count - 1);
+            var elem = cfg.elements[idx];
+
+            if (_airDiscState == AirDiscState.Follow)
+            {
+                var f = elem.follow;
+                p_moveSpeed = f.moveSpeed;
+                p_accel = f.acceleration;
+
+                bool doHoming = f.homingFrequency > 0f && f.homingStrength > 0f;
+                Vector2 toPlayer = (targetPos - myPos).normalized;
+
+                float seedSpd = (f.accelerationTime <= 0f && f.acceleration <= 0f)
+                    ? Mathf.Max(0f, p_moveSpeed)
+                    : (_airDiscCurrentSpeed > 0f
+                        ? _airDiscCurrentSpeed
+                        : Mathf.Max(0.01f, p_moveSpeed * 0.5f));
+
+                if (_airDiscVel.sqrMagnitude < 0.001f)
+                {
+                    if (doHoming)
+                    {
+                        _airDiscVel = toPlayer * seedSpd;
+                    }
+                    else
+                    {
+                        // 未启用 Homing：用玩家方向初始化速度，并立刻同步面向，避免背对玩家
+                        float dx = targetPos.x - myPos.x;
+                        int playerDir = (Mathf.Abs(dx) <= faceFlipDeadZone)
+                            ? FacingSign()
+                            : (dx >= 0f ? +1 : -1);
+                        if (playerDir == 0) playerDir = 1;
+                        ForceFaceSign(playerDir);
+                        _airDiscVel = new Vector2(playerDir, 0f) * seedSpd;
+                        _airDiscLastDir = _airDiscVel.normalized;
+                    }
+                }
+
+                if (doHoming)
+                {
+                    _airDiscHomingTimer -= dt;
+                    if (_airDiscHomingTimer <= 0f)
+                    {
+                        _airDiscHomingTimer = 1f / f.homingFrequency;
+                        Vector2 currentDir = _airDiscVel.normalized;
+                        if (currentDir.sqrMagnitude < 0.001f) currentDir = toPlayer;
+                        Vector2 newDir = Vector2.Lerp(currentDir, toPlayer, f.homingStrength);
+                        if (newDir.sqrMagnitude < 0.0001f) newDir = currentDir;
+                        float useMag = Mathf.Max(_airDiscCurrentSpeed, _airDiscVel.magnitude);
+                        _airDiscVel = newDir.normalized * useMag;
+                    }
+                }
+                else
+                {
+                    if (Mathf.Abs(_airDiscVel.x) < 0.0001f)
+                    {
+                        int face = FacingSign();
+                        if (face == 0) face = 1;
+                        _airDiscVel = new Vector2(face, 0f) * Mathf.Max(seedSpd, _airDiscVel.magnitude);
+                    }
+                    _airDiscVel = new Vector2(_airDiscVel.x, 0f);
+                }
+            }
+            else
+            {
+                var b = elem.backstep;
+                p_moveSpeed = b.moveSpeed;
+                p_accel = b.acceleration;
+            }
+        }
+
+        // ===== 3. 期望方向 =====
+        Vector2 wantDir = (_airDiscState == AirDiscState.Follow)
+            ? ((_airDiscVel.sqrMagnitude > 0.0001f) ? _airDiscVel.normalized : (targetPos - myPos).normalized)
+            : -_airDiscLastDir;
+
+        // ===== 4. 四相速度推进 =====
+        var mp = GetCurrentAirMoveParams();
+        float tgtSpeed = (mp != null) ? Mathf.Max(0f, mp.moveSpeed) : 0f;
+
+        float accelRate = 0f;
+        float decelRate = 0f;
+        if (mp != null)
+        {
+            accelRate = (mp.accelerationTime > 0f)
+                ? (tgtSpeed / Mathf.Max(0.0001f, mp.accelerationTime))
+                : Mathf.Max(0f, mp.acceleration);
+            decelRate = (mp.decelerationTime > 0f)
+                ? (tgtSpeed / Mathf.Max(0.0001f, mp.decelerationTime))
+                : Mathf.Max(0f, mp.deceleration);
+        }
+
+        switch (_airDiscPhase)
+        {
+            case AirDiscPhase.Accel:
+                if (accelRate <= 0f)
+                {
+                    _airDiscCurrentSpeed = tgtSpeed;
+                    _airDiscPhase = (_airDiscCruiseTimer > 0f) ? AirDiscPhase.Cruise
+                        : (decelRate > 0f ? AirDiscPhase.Decel : AirDiscPhase.Rest);
+                }
+                else
+                {
+                    _airDiscCurrentSpeed = Mathf.MoveTowards(_airDiscCurrentSpeed, tgtSpeed, accelRate * dt);
+                    if (mp != null && mp.accelerationTime > 0f)
+                        _airDiscAccelTimer = Mathf.Max(0f, _airDiscAccelTimer - dt);
+                    if (Mathf.Approximately(_airDiscCurrentSpeed, tgtSpeed) || _airDiscAccelTimer <= 0f)
+                        _airDiscPhase = (_airDiscCruiseTimer > 0f) ? AirDiscPhase.Cruise
+                            : (decelRate > 0f ? AirDiscPhase.Decel : AirDiscPhase.Rest);
+                }
+                break;
+
+            case AirDiscPhase.Cruise:
+                _airDiscCurrentSpeed = tgtSpeed;
+                _airDiscCruiseTimer = Mathf.Max(0f, _airDiscCruiseTimer - dt);
+                if (_airDiscCruiseTimer <= 0f)
+                    _airDiscPhase = (decelRate > 0f) ? AirDiscPhase.Decel : AirDiscPhase.Rest;
+                break;
+
+            case AirDiscPhase.Decel:
+                if (decelRate <= 0f)
+                {
+                    _airDiscCurrentSpeed = 0f;
+                    _airDiscPhase = AirDiscPhase.Rest;
+                }
+                else
+                {
+                    _airDiscCurrentSpeed = Mathf.MoveTowards(_airDiscCurrentSpeed, 0f, decelRate * dt);
+                    if (mp != null && mp.decelerationTime > 0f)
+                        _airDiscDecelTimer = Mathf.Max(0f, _airDiscDecelTimer - dt);
+                    if (_airDiscCurrentSpeed <= 0.0001f)
+                    {
+                        _airDiscCurrentSpeed = 0f;
+                        _airDiscPhase = AirDiscPhase.Rest;
+                    }
+                }
+                break;
+
+            case AirDiscPhase.Rest:
+            default:
+                if (mp != null)
+                {
+                    if (_airDiscRestTimer <= 0f)
+                    {
+                        float rMin = Mathf.Max(0f, mp.restMin);
+                        float rMax = Mathf.Max(rMin, mp.restMax);
+                        _airDiscRestTimer = (rMax > 0f) ? Random.Range(rMin, rMax) : 0f;
+                        if (_airDiscRestTimer <= 0f)
+                        {
+                            // 休息区间也是 0：直接进入下一元素
+                            if (_airDiscOrder.Count == 1)
+                            {
+                                _airDiscActiveIndex = _airDiscOrder[0];
+                                _airDiscOrderPos = 0;
+                            }
+                            else
+                            {
+                                bool wasZero = (_airDiscActiveIndex == _airDiscOrder[0]);
+                                _airDiscActiveIndex = wasZero ? _airDiscOrder[1] : _airDiscOrder[0];
+                                _airDiscOrderPos = wasZero ? 1 : 0;
+                            }
+                            mp = GetCurrentAirMoveParams();
+                            _airDiscPhase = AirDiscPhase.Accel;
+                            _airDiscCurrentSpeed = 0f;
+                            _airDiscAccelTimer = Mathf.Max(0f, mp?.accelerationTime ?? 0f);
+                            _airDiscCruiseTimer = Mathf.Max(0f, mp?.moveDuration ?? 0f);
+                            _airDiscDecelTimer = Mathf.Max(0f, mp?.decelerationTime ?? 0f);
+                            _airMoveFxPlayedThisSegment = false;
+                            _airRestFxPlayedThisRest = false;
+                            break;
+                        }
+                    }
+                    _airDiscRestTimer = Mathf.Max(0f, _airDiscRestTimer - dt);
+                    _airDiscCurrentSpeed = 0f;
+                    if (_airDiscRestTimer <= 0f)
+                    {
+                        if (_airDiscOrder.Count == 1)
+                        {
+                            _airDiscActiveIndex = _airDiscOrder[0];
+                            _airDiscOrderPos = 0;
+                        }
+                        else
+                        {
+                            bool wasZero = (_airDiscActiveIndex == _airDiscOrder[0]);
+                            _airDiscActiveIndex = wasZero ? _airDiscOrder[1] : _airDiscOrder[0];
+                            _airDiscOrderPos = wasZero ? 1 : 0;
+                        }
+                        mp = GetCurrentAirMoveParams();
+                        _airDiscPhase = AirDiscPhase.Accel;
+                        _airDiscCurrentSpeed = 0f;
+                        _airDiscAccelTimer = Mathf.Max(0f, mp?.accelerationTime ?? 0f);
+                        _airDiscCruiseTimer = Mathf.Max(0f, mp?.moveDuration ?? 0f);
+                        _airDiscDecelTimer = Mathf.Max(0f, mp?.decelerationTime ?? 0f);
+                        _airMoveFxPlayedThisSegment = false;
+                        _airRestFxPlayedThisRest = false;
+                    }
+                }
+                break;
+        }
+
+        // 动画决定（延后）
+        if (mp != null)
+        {
+            if (_airDiscState == AirDiscState.Follow || _airDiscState == AirDiscState.Retreat)
+            {
+                if (_airDiscPhase == AirDiscPhase.Rest)
+                {
+                    if (!string.IsNullOrEmpty(cfg.followRestAnimation))
+                        PlayAnimIfNotCurrent(cfg.followRestAnimation);
+                    _airMoveFxPlayedThisSegment = true;
+                }
+                else
+                {
+                    if (!string.IsNullOrEmpty(cfg.followMoveAnimation))
+                        PlayAnimIfNotCurrent(cfg.followMoveAnimation);
+                }
+            }
+            else
+            {
+                if (_airDiscPhase == AirDiscPhase.Rest)
+                {
+                    if (!string.IsNullOrEmpty(cfg.backRestAnimation))
+                        PlayAnimIfNotCurrent(cfg.backRestAnimation);
+                    _airMoveFxPlayedThisSegment = true;
+                }
+                else
+                {
+                    if (!string.IsNullOrEmpty(cfg.backMoveAnimation))
+                        PlayAnimIfNotCurrent(cfg.backMoveAnimation);
+                }
+            }
+        }
+
+        if (_airDiscPhase == AirDiscPhase.Rest && _airDiscCurrentSpeed <= 0.0001f)
+            _airRestFxPlayedThisRest = false;
+
+        // ===== 5. 更新速度矢量 =====
+        _airDiscVel = wantDir.normalized * _airDiscCurrentSpeed;
+        _airTime += dt;
+        Vector2 sineOffset = Vector2.zero;
+        if (cfg.sinEnabled && cfg.sinFrequency > 0f && cfg.sinAmplitude > 0f)
+        {
+            float s = Mathf.Sin(_airTime * Mathf.PI * 2f * cfg.sinFrequency) * cfg.sinAmplitude;
+            Vector2 normal = new Vector2(-wantDir.y, wantDir.x);
+            sineOffset = normal * (s * dt);
+        }
+
+        // ===== 7. 步进 & 最小分离（已在 Follow 条件下处理分离） =====
+        Vector2 step = _airDiscVel * dt + sineOffset;
+
+        // ===== 8. 碰撞检测（固定步） =====
+        if (col != null && step.sqrMagnitude > 0f)
+        {
+            var filter = new ContactFilter2D { useTriggers = false };
+            filter.SetLayerMask(groundLayer);
+            RaycastHit2D[] hits = new RaycastHit2D[1];
+            if (col.Cast(step.normalized, filter, hits, step.magnitude) > 0)
+            {
+                var hit = hits[0];
+                if (!hit.collider.isTrigger && !hit.collider.CompareTag("Player"))
+                {
+                    if (_airDiscState == AirDiscState.Follow || _airDiscState == AirDiscState.Backstep)
+                    {
+                        Vector2 vDir = (_airDiscVel.sqrMagnitude > 0.0001f) ? _airDiscVel.normalized : wantDir;
+                        Vector2 r = Vector2.Reflect(vDir, hit.normal);
+                        if (r.sqrMagnitude < 0.0001f) r = -vDir;
+                        _airDiscVel = r * _airDiscCurrentSpeed;
+                        step = _airDiscVel * dt;
+                        if (_airDiscState == AirDiscState.Follow)
+                            _airDiscLastDir = vDir;
+                    }
+                    else if (_airDiscState == AirDiscState.Retreat)
+                    {
+                        _airDiscVel = Vector2.Reflect(_airDiscVel, hit.normal);
+                        _airDiscLastDir = -(_airDiscVel.sqrMagnitude > 0.0001f ? _airDiscVel.normalized : _airDiscLastDir);
+                        step = _airDiscVel * dt;
+                    }
+                }
+            }
+        }
+
+        // ===== 9. 应用位移（固定步） =====
+        rb.MovePosition(rb.position + step);
+
+        // ===== 10. 朝向与自转 =====
+        HandleAirDiscoveryRotation(myPos, targetPos, cfg);
+    }
+
+    // 空中发现阶段物理步进（固定时间步）
+    private void AirDiscoveryFixedStep()
+    {
+        if (state != MonsterState.Discovery) return;
+        var discCfg = config?.airStageConfig?.discovery;
+        if (discCfg == null) return;
+
+        Vector2 myPos = GetMonsterDistPos();
+        Vector2 targetPos = GetPlayerDistPos();
+        AirDiscoveryPhysicsStep(myPos, targetPos, discCfg);
+    }
+
+    private void HandleAirDiscoveryRotation(Vector2 myPos, Vector2 targetPos, AirDiscoveryConfig cfg)
+    {
+        // 首帧强制面向哨兵：进入发现当帧已设置 _airDiscStateTimer 为负，执行一次性强制翻面并清零
+        if (_airDiscStateTimer < 0f)
+        {
+            float dx0 = targetPos.x - myPos.x;
+            int face0 = (dx0 >= 0f) ? +1 : -1;
+            ForceFaceSign(face0);
+            _airDiscStateTimer = 0f; // 清除哨兵
+        }
+
+        // 朝向逻辑
+        int faceDir = 1;
+
+        int dx = (int)Mathf.Sign(targetPos.x - myPos.x);
+        float dxToPlayer = targetPos.x - myPos.x;
+
+        // 面向驻留：期间保持当前面向，不随玩家细微位置变化
+        if (_airFaceFlipDwellTimer > 0f)
+        {
+            dx = FacingSign();
+            dxToPlayer = (FacingSign() >= 0) ? Mathf.Abs(dxToPlayer) : -Mathf.Abs(dxToPlayer); // 保持符号形式，后续逻辑仍可使用
+        }
+
+        if (dx == 0) dx = 1;
+
+        // 跟随/倒退面向玩家；Retreat 背对玩家
+        faceDir = (_airDiscState == AirDiscState.Retreat) ? -dx : dx;
+
+        // 水平死区：靠得很近时保持当前朝向（不翻）
+        if (Mathf.Abs(dxToPlayer) <= faceFlipDeadZone)
+        {
+            faceDir = FacingSign();
+        }
+        else
+        {
+            faceDir = StabilizeFaceSign(faceDir, dxToPlayer);
+        }
+        ForceFaceSign(faceDir);
+    }
 
     // 进入空中阶段：去重力 + 初始化顺序
     private void EnterAirPhaseSetup()
@@ -63,6 +726,86 @@ public partial class MonsterController : MonoBehaviour
     }
     private void AirPatrolUpdate()
     {
+        // 如果配置了空中发现，且玩家存在，检测距离
+        if (config?.airStageConfig?.discovery != null && player)
+        {
+            // 使用与地面发现相同的“仅水平距离”选项（discoveryUseHorizontalDistanceOnly），确保高低差不阻碍进入发现
+            Vector2 mPos = GetMonsterDistPos();
+            Vector2 pPos = GetPlayerDistPos();
+            float d = discoveryUseHorizontalDistanceOnly
+                ? Mathf.Abs(pPos.x - mPos.x)
+                : Vector2.Distance(mPos, pPos);
+
+            // 进入空中发现：立即切换状态并清除归位标记
+            if (d <= config.airStageConfig.discovery.findRange)
+            {
+                state = MonsterState.Discovery;
+
+                _airFaceFlipDwellTimer = faceFlipMinDwellTime; // 复用地面面向驻留时长
+
+                return; // 下一帧由空中发现接管
+            }
+        }
+
+        // 插入归位逻辑：如果处于归位状态 (变量名已修改以避免冲突)
+        if (_airIsReturningToCenter)
+        {
+            var retPatrolCfg = config?.airStageConfig?.patrol;
+            if (retPatrolCfg == null || retPatrolCfg.elements.Count == 0)
+            {
+                _airIsReturningToCenter = false;
+                return;
+            }
+
+            var retElem = retPatrolCfg.elements[0];
+            var retMv = retElem.move;
+
+            Vector2 center = retElem.areaCenter;
+            Vector2 current = rb.position;
+            float distLeft = Vector2.Distance(current, center);
+
+            // 到达中心：结束归位（真实移动在 FixedUpdate 的 AirPatrolPhysicsStep 中执行）
+            if (distLeft <= 0.15f)
+            {
+                _airIsReturningToCenter = false;
+                retMv.rtStraightPhase = StraightPhase.None;
+                retMv.rtCurrentSpeed = 0f;
+                retMv.rtAccelTimer = retMv.rtCruiseTimer = retMv.rtDecelTimer =
+                    retMv.rtRestTimer = retMv.rtMoveTimer = 0f;
+                _airVel = Vector2.zero;
+                return;
+            }
+
+            // 仅负责初始化四相，不直接位移
+            if (retMv.rtStraightPhase == StraightPhase.None)
+            {
+                _airMoveFxPlayedThisSegment = false;
+                _airRestFxPlayedThisRest = false;
+
+                retMv.rtCurrentSpeed = 0f;
+                retMv.rtCruiseTimer = Mathf.Max(0f, retMv.moveDuration);
+                retMv.rtAccelTimer = Mathf.Max(0f, retMv.accelerationTime);
+                retMv.rtDecelTimer = Mathf.Max(0f, retMv.decelerationTime);
+
+                bool instantAccel = (retMv.accelerationTime <= 0f);
+                bool instantDecel = (retMv.decelerationTime <= 0f);
+
+                retMv.rtStraightPhase = instantAccel
+                    ? ((retMv.rtCruiseTimer > 0f) ? StraightPhase.Cruise : (instantDecel ? StraightPhase.Rest : StraightPhase.Decel))
+                    : StraightPhase.Accel;
+
+                if (instantAccel)
+                    retMv.rtCurrentSpeed = Mathf.Max(0f, retMv.moveSpeed);
+
+                // 初始方向仅存档，不移动（移动在 FixedUpdate 做）
+                Vector2 initDir = (center - current).normalized;
+                if (initDir.sqrMagnitude < 0.0001f) initDir = Vector2.right;
+                _airLastDir = initDir;
+                _airVel = Vector2.zero;
+            }
+            return;
+        }
+
         var pCfg = config?.airStageConfig?.patrol;
         if (pCfg == null || pCfg.elements == null || pCfg.elements.Count == 0)
         {
@@ -322,20 +1065,151 @@ public partial class MonsterController : MonoBehaviour
     private void AirPatrolPhysicsStep()
     {
         var pCfg = config?.airStageConfig?.patrol;
+
         if (pCfg == null || pCfg.elements == null || pCfg.elements.Count == 0) return;
         if (_airActiveIndex < 0 || _airActiveIndex >= pCfg.elements.Count) return;
+
+        // 归位阶段：使用固定步物理推进，保证速度与巡逻一致
+        if (_airIsReturningToCenter)
+        {
+            var retElem = pCfg.elements[0];
+            var retMv = retElem.move;
+
+            Vector2 center = retElem.areaCenter;
+            Vector2 current = rb.position;
+            Vector2 toCenter = center - current;
+            float distLeft = toCenter.magnitude;
+
+            // 到达中心：结束归位并复位巡逻运行态
+            if (distLeft <= 0.15f)
+            {
+                _airIsReturningToCenter = false;
+                retMv.rtStraightPhase = StraightPhase.None;
+                retMv.rtCurrentSpeed = 0f;
+                retMv.rtAccelTimer = retMv.rtCruiseTimer = retMv.rtDecelTimer =
+                    retMv.rtRestTimer = retMv.rtMoveTimer = 0f;
+                _airVel = Vector2.zero;
+                return;
+            }
+
+            // 段起点：初始化四相
+            if (retMv.rtStraightPhase == StraightPhase.None)
+            {
+                _airMoveFxPlayedThisSegment = false;
+                _airRestFxPlayedThisRest = false;
+
+                retMv.rtCurrentSpeed = 0f;
+                retMv.rtCruiseTimer = Mathf.Max(0f, retMv.moveDuration);
+                retMv.rtAccelTimer = Mathf.Max(0f, retMv.accelerationTime);
+                retMv.rtDecelTimer = Mathf.Max(0f, retMv.decelerationTime);
+
+                bool instantAccel = (retMv.accelerationTime <= 0f);
+                bool instantDecel = (retMv.decelerationTime <= 0f);
+
+                retMv.rtStraightPhase = instantAccel
+                    ? ((retMv.rtCruiseTimer > 0f) ? StraightPhase.Cruise : (instantDecel ? StraightPhase.Rest : StraightPhase.Decel))
+                    : StraightPhase.Accel;
+
+                if (instantAccel)
+                    retMv.rtCurrentSpeed = Mathf.Max(0f, retMv.moveSpeed);
+
+                Vector2 initDir = toCenter.normalized;
+                if (initDir.sqrMagnitude < 0.0001f) initDir = Vector2.right;
+
+                float seedSpeed = (retMv.rtCurrentSpeed > 0f ? retMv.rtCurrentSpeed : Mathf.Max(0.01f, retMv.moveSpeed * 0.5f));
+                _airVel = initDir * seedSpeed;
+                _airLastDir = initDir;
+            }
+
+            // 推进速度标量（用 fixedDeltaTime）
+            float targetSpd = Mathf.Max(0f, retMv.moveSpeed);
+            float accelRate = (retMv.accelerationTime > 0f)
+                ? (targetSpd / Mathf.Max(0.0001f, retMv.accelerationTime))
+                : float.PositiveInfinity;
+            float decelRate = (retMv.decelerationTime > 0f)
+                ? (targetSpd / Mathf.Max(0.0001f, retMv.decelerationTime))
+                : float.PositiveInfinity;
+
+            switch (retMv.rtStraightPhase)
+            {
+                case StraightPhase.Accel:
+                    if (float.IsPositiveInfinity(accelRate))
+                    {
+                        retMv.rtCurrentSpeed = targetSpd;
+                        retMv.rtStraightPhase = (retMv.rtCruiseTimer > 0f)
+                            ? StraightPhase.Cruise
+                            : (!float.IsPositiveInfinity(decelRate) ? StraightPhase.Decel : StraightPhase.Rest);
+                    }
+                    else
+                    {
+                        retMv.rtCurrentSpeed = Mathf.MoveTowards(retMv.rtCurrentSpeed, targetSpd, accelRate * Time.fixedDeltaTime);
+                        if (retMv.accelerationTime > 0f)
+                            retMv.rtAccelTimer = Mathf.Max(0f, retMv.rtAccelTimer - Time.fixedDeltaTime);
+                        if (Mathf.Approximately(retMv.rtCurrentSpeed, targetSpd) || retMv.rtAccelTimer <= 0f)
+                            retMv.rtStraightPhase = (retMv.rtCruiseTimer > 0f)
+                                ? StraightPhase.Cruise
+                                : (!float.IsPositiveInfinity(decelRate) ? StraightPhase.Decel : StraightPhase.Rest);
+                    }
+                    break;
+
+                case StraightPhase.Cruise:
+                    retMv.rtCurrentSpeed = targetSpd;
+                    retMv.rtCruiseTimer = Mathf.Max(0f, retMv.rtCruiseTimer - Time.fixedDeltaTime);
+                    if (retMv.rtCruiseTimer <= 0f)
+                        retMv.rtStraightPhase = (!float.IsPositiveInfinity(decelRate)) ? StraightPhase.Decel : StraightPhase.Rest;
+                    break;
+
+                case StraightPhase.Decel:
+                    if (float.IsPositiveInfinity(decelRate))
+                    {
+                        retMv.rtCurrentSpeed = 0f;
+                        retMv.rtStraightPhase = StraightPhase.Rest;
+                    }
+                    else
+                    {
+                        retMv.rtCurrentSpeed = Mathf.MoveTowards(retMv.rtCurrentSpeed, 0f, decelRate * Time.fixedDeltaTime);
+                        if (retMv.rtCurrentSpeed <= 0.0001f)
+                        {
+                            retMv.rtCurrentSpeed = 0f;
+                            retMv.rtStraightPhase = StraightPhase.Rest;
+                        }
+                    }
+                    break;
+
+                case StraightPhase.Rest:
+                default:
+                    retMv.rtRestTimer = (retMv.rtRestTimer > 0f)
+                        ? retMv.rtRestTimer - Time.fixedDeltaTime
+                        : PickStraightRestTime(retMv) - Time.fixedDeltaTime;
+
+                    if (retMv.rtRestTimer <= 0f)
+                    {
+                        retMv.rtStraightPhase = StraightPhase.None;
+                        retMv.rtMoveTimer = retMv.rtRestTimer = retMv.rtAccelTimer = retMv.rtCruiseTimer = retMv.rtDecelTimer = 0f;
+                    }
+                    // 休息期不位移
+                    return;
+            }
+
+            // 方向始终指向中心
+            Vector2 dir = (center - rb.position).normalized;
+            if (dir.sqrMagnitude < 0.0001f) dir = _airLastDir;
+
+            float spd = Mathf.Max(0f, retMv.rtCurrentSpeed);
+            _airVel = dir * spd;
+            if (dir.sqrMagnitude > 0.0001f) _airLastDir = dir;
+
+            rb.MovePosition(rb.position + _airVel * Time.fixedDeltaTime);
+
+            if (Mathf.Abs(_airVel.x) > 0.0005f)
+                ForceFaceSign(_airVel.x >= 0f ? +1 : -1);
+            return;
+        }
 
         var elem = pCfg.elements[_airActiveIndex];
         var mv = elem.move;
 
-        bool affectByArea =
-            (
-                pCfg.pathType == AirPatrolPathType.AreaHorizontal
-                || pCfg.pathType == AirPatrolPathType.AreaVertical
-                || pCfg.pathType == AirPatrolPathType.AreaRandom
-                || pCfg.pathType == AirPatrolPathType.AreaRandomH
-            )
-            ? true : pCfg.canPassThroughScene;
+        bool affectByArea = pCfg.canPassThroughScene;
 
         // newVel 是“本步结束后的主速度”，最后会写回 _airVel
         Vector2 newVel = _airVel;
@@ -631,27 +1505,6 @@ public partial class MonsterController : MonoBehaviour
             _airPingPongSign = (_airVel.x >= 0f) ? +1 : -1;
         else if (pCfg.pathType == AirPatrolPathType.AreaVertical && Mathf.Abs(_airVel.y) > 0.0005f)
             _airVerticalSign = (_airVel.y >= 0f) ? +1 : -1;
-
-        // 自转（fixedDeltaTime）
-        if (state == MonsterState.Air && pCfg.selfRotate)
-        {
-            float deg = pCfg.selfRotateSpeedDeg * Time.fixedDeltaTime;
-
-            Vector3 pivotW = transform.position;
-            if (col != null) pivotW = col.bounds.center;
-            else if (monsterDistPoint) pivotW = monsterDistPoint.position;
-
-            Transform t = animator ? animator.transform : transform;
-
-            Vector3 keepRootPos = transform.position;
-            bool rotatingRoot = (t == transform);
-
-            if (pCfg.selfRotateX) t.RotateAround(pivotW, t.right, deg);
-            if (pCfg.selfRotateY) t.RotateAround(pivotW, t.up, deg);
-            if (pCfg.selfRotateZ) t.RotateAround(pivotW, t.forward, deg);
-
-            if (rotatingRoot) transform.position = keepRootPos;
-        }
     }
 
     // 空中移动特效（由动画事件触发）
@@ -683,4 +1536,49 @@ public partial class MonsterController : MonoBehaviour
         PlayEffect(pCfg.skyrestEffectPrefab, fxSkyRestPoint ? fxSkyRestPoint : transform);
         _airRestFxPlayedThisRest = true;
     }
+
+    // 空中发现阶段特效
+    public void OnFxSkyFindMove()
+    {
+        if (state != MonsterState.Discovery) return;
+
+        var dcfg = config?.airStageConfig?.discovery;
+        if (dcfg == null) return;
+
+        // 仅在非 Rest 相位下播放移动 FX；防抖：同一段只播一次
+        if (_airDiscPhase == AirDiscPhase.Rest) return;
+        if (_airMoveFxPlayedThisSegment) return;
+
+        GameObject prefab = (_airDiscState == AirDiscState.Backstep)
+                            ? dcfg.backMoveEffectPrefab
+                            : dcfg.followMoveEffectPrefab;
+
+        if (!prefab) return;
+
+        var anchor = fxSkyfindMovePoint ? fxSkyfindMovePoint : transform;
+        PlayEffect(prefab, anchor);
+        _airMoveFxPlayedThisSegment = true;
+    }
+
+    public void OnFxSkyFindRest()
+    {
+        if (state != MonsterState.Discovery) return;
+
+        var dcfg = config?.airStageConfig?.discovery;
+        if (dcfg == null) return;
+
+        if (_airDiscPhase != AirDiscPhase.Rest) return;
+        if (_airRestFxPlayedThisRest) return;
+
+        GameObject prefab = (_airDiscState == AirDiscState.Backstep)
+                            ? dcfg.backRestEffectPrefab
+                            : dcfg.followRestEffectPrefab;
+
+        if (!prefab) return;
+
+        var anchor = fxSkyfindRestPoint ? fxSkyfindRestPoint : transform;
+        PlayEffect(prefab, anchor);
+        _airRestFxPlayedThisRest = true;
+    }
+
 }

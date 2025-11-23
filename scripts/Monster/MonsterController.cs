@@ -49,8 +49,6 @@ public partial class MonsterController : MonoBehaviour
     private bool isAutoJumping = false;
     private enum MonsterState { Idle, Patrol, Discovery, Air, Dead }
 
-
-
     private MonsterState state = MonsterState.Idle;
 
     // 四通道各自独立的“当前段”引用
@@ -102,6 +100,8 @@ public partial class MonsterController : MonoBehaviour
     [Header("空中特效锚点")]
     [SerializeField] private Transform fxSkyMovePoint;
     [SerializeField] private Transform fxSkyRestPoint;
+    [SerializeField] private Transform fxSkyfindMovePoint;
+    [SerializeField] private Transform fxSkyfindRestPoint;
 
     // 1) 地形检测参数后，新增一组“前方低矮障碍自动跳（双射线）”配置
     [Header("前方低矮障碍自动跳（双射线）")]
@@ -157,7 +157,6 @@ public partial class MonsterController : MonoBehaviour
         autoJumpFxCooldownLeft = Mathf.Max(1, autoJumpIgnoreCliffFrames);
         return true;
     }
-
     private enum FxSlot
     {
         Spawn, Idle, Move, Rest, Jump, JumpRest,
@@ -240,7 +239,7 @@ public partial class MonsterController : MonoBehaviour
     [Header("发现阶段：自动跳后抑制一次常规跳")]
     [SerializeField, Tooltip("开启后：自动跳落地后抑制下一次发现阶段的常规跳跃")]
     private bool suppressOneDiscoveryJumpAfterAuto = true;
-    
+
     private List<int> attackOrder = null;
     private int attackOrderPos = 0;
 
@@ -527,12 +526,19 @@ public partial class MonsterController : MonoBehaviour
 
     void FixedUpdate()
     {
+        if (state == MonsterState.Air)
+        {
+            AirPatrolPhysicsStep();
+        }
+        else if (state == MonsterState.Discovery)
+        {
+            AirDiscoveryFixedStep(); 
+        }
+
         if (isJumping && activeJumpMove != null)
             JumpUpdate(activeJumpMove);
-        if (state == MonsterState.Air)
-            AirPatrolPhysicsStep();
     }
-        void IdleUpdate()
+    void IdleUpdate()
     {
         if (!string.IsNullOrEmpty(config.spawnConfig.idleAnimation))
         {
@@ -653,6 +659,26 @@ public partial class MonsterController : MonoBehaviour
     // DiscoveryUpdate() 顶部 wantBand 计算处：在算出 wantBand 之后，若计时器>0，强制Follow
     void DiscoveryUpdate()
     {
+        bool isAirDiscovery = (config?.airPhaseConfig?.airPhaseID != 0) &&
+                              (state == MonsterState.Discovery) &&
+                              (config?.airPhaseConfig?.groundPhaseID == 0 || !isGroundedMC);
+
+        bool useAirDiscovery =
+        state == MonsterState.Discovery &&
+        config?.airStageConfig?.discovery != null &&
+        (
+            (config?.airPhaseConfig?.airPhaseID == 0) ||
+            (config?.airPhaseConfig?.airPhaseID > 0 && config?.airPhaseConfig?.groundPhaseID == 0) ||
+            (!isGroundedMC && (config?.airPhaseConfig?.airPhaseID != 0))
+        );
+
+        if (useAirDiscovery)
+        {
+            if (inAttack) EndAttack(); // 终止可能残留的地面攻击
+            AirDiscoveryUpdate();
+            return;
+        }
+
         discoveryRestJustFinished = false;
 
         // 玩家引用丢失回巡逻
@@ -866,7 +892,7 @@ public partial class MonsterController : MonoBehaviour
             }
         }
 
-        // ================= 2) & 3) 计算期望档位并处理切换 =================
+        
         DiscoveryBand wantBand = ComputeWantBandWithHysteresis(d, dcfg);
         // 最终的切档逻辑 (此部分保持不变)
         bool bandChangeAllowedNow =
@@ -2742,41 +2768,36 @@ public partial class MonsterController : MonoBehaviour
         inAutoJumpPermitZone = false;
     }
 
-
-    // 爆炸范围改为由每个飞行物自身在飞行过程中绘制（见 ProjectileBehaviour.OnDrawGizmos）
-    void OnDrawGizmosSelected()
+    private void OnDrawGizmosSelected()
     {
-        var dcfg2 = config?.discoveryV2Config;
-        if (dcfg2 == null) return;
+        // 基准位置：优先 collider 中心，其次距离点，最后 transform
+        Vector3 pos;
+        if (col != null)
+            pos = col.bounds.center;
+        else if (monsterDistPoint)
+            pos = monsterDistPoint.position;
+        else
+            pos = transform.position;
 
-        Vector3 pos = monsterDistPoint ? monsterDistPoint.position : transform.position;
-
-#if UNITY_EDITOR
-        UnityEditor.Handles.color = Color.yellow;
-        UnityEditor.Handles.DrawLine(pos + Vector3.left * 0.1f, pos + Vector3.right * 0.1f);
-        UnityEditor.Handles.DrawLine(pos + Vector3.down * 0.1f, pos + Vector3.up * 0.1f);
-        UnityEditor.Handles.Label(pos + Vector3.up * 0.15f, monsterDistPoint ? "monsterDistPoint" : "transform");
-#endif
-
-        bool showGroundDebug = true;
+        // 访问阶段与发现配置（复用已有 config / discoveryV2Config / airStageConfig）
         var phaseCfg = config?.airPhaseConfig;
-        if (phaseCfg != null)
-        {
-            // 隐藏条件：进入空中锁定 (airPhaseID == 0) 或 groundPhaseID == 2
-            if (phaseCfg.airPhaseID == 0 || phaseCfg.groundPhaseID == 2)
-                showGroundDebug = false;
-        }
+        var groundDisc = config?.discoveryV2Config;              // 地面发现配置
+        var airDisc = config?.airStageConfig?.discovery;      // 空中发现配置
 
-        // 仅在允许显示时绘制发现与攻击参考圈
-        if (showGroundDebug)
-        {
-            // 发现三圈
-            Gizmos.color = Color.red; DrawCircleXY(pos, dcfg2.findRange);
-            Gizmos.color = Color.white; DrawCircleXY(pos, dcfg2.reverseRange);
-            Gizmos.color = Color.black; DrawCircleXY(pos, dcfg2.backRange);
+        // 仅由 airPhaseConfig 中的两个勾选决定显隐，不再依据 phaseID 数值
+        bool showGroundDebug = (phaseCfg != null && phaseCfg.showGroundGizmosManual);
+        bool showAirDebug = (phaseCfg != null && phaseCfg.showAirGizmosManual);
 
-            // 近战/远程参考圈
-            var atkCfg = dcfg2.attacks;
+        // 地面阶段：发现圈 + 攻击圈
+        if (showGroundDebug && groundDisc != null)
+        {
+            // 发现辅助圈：follow / reverse / backstep
+            Gizmos.color = Color.red; DrawCircleXY(pos, groundDisc.findRange);
+            Gizmos.color = Color.white; DrawCircleXY(pos, groundDisc.reverseRange);
+            Gizmos.color = Color.black; DrawCircleXY(pos, groundDisc.backRange);
+
+            // 攻击圈（近战 / 远程最大范围）复用 attacks 集合
+            var atkCfg = groundDisc.attacks;
             if (atkCfg != null && atkCfg.Count > 0)
             {
                 float meleeMax = 0f, rangedMax = 0f;
@@ -2786,8 +2807,28 @@ public partial class MonsterController : MonoBehaviour
                     meleeMax = Mathf.Max(meleeMax, Mathf.Max(0f, a.meleeRange));
                     rangedMax = Mathf.Max(rangedMax, Mathf.Max(0f, a.rangedRange));
                 }
-                if (meleeMax > 0f) { Gizmos.color = Color.yellow; DrawCircleXY(pos, meleeMax); }
-                if (rangedMax > 0f) { Gizmos.color = new Color(0.5f, 0f, 0.5f); DrawCircleXY(pos, rangedMax); }
+                if (meleeMax > 0f)
+                {
+                    Gizmos.color = Color.yellow;
+                    DrawCircleXY(pos, meleeMax);
+                }
+                if (rangedMax > 0f)
+                {
+                    Gizmos.color = new Color(0.5f, 0f, 0.5f);
+                    DrawCircleXY(pos, rangedMax);
+                }
+            }
+        }
+
+        // 空中阶段：发现圈 + 攻击圈（攻击仍复用同一 attacks 集合）
+        if (showAirDebug)
+        {
+            if (airDisc != null)
+            {
+                // 空中目前仅显示发现三档辅助线；暂不显示攻击圈
+                Gizmos.color = new Color(1f, 0.3f, 0.3f); DrawCircleXY(pos, airDisc.findRange);      // follow
+                Gizmos.color = new Color(0.9f, 0.9f, 0.9f); DrawCircleXY(pos, airDisc.reverseRange);   // retreat
+                Gizmos.color = new Color(0.2f, 0.2f, 0.2f); DrawCircleXY(pos, airDisc.backRange);      // backstep
             }
         }
     }
@@ -3073,17 +3114,6 @@ public partial class MonsterController : MonoBehaviour
         if (hit) hit.enabled = false;
     }
 
-    private Collider2D ResolveHitboxCollider(string childPath)
-    {
-        if (meleeHitboxCached) return meleeHitboxCached;
-        if (string.IsNullOrEmpty(childPath)) return null;
-        var t = transform.Find(childPath);
-        if (!t) return null;
-        meleeHitboxCached = t.GetComponent<Collider2D>();
-        if (meleeHitboxCached) meleeHitboxCached.isTrigger = true;
-        return meleeHitboxCached;
-    }
-
     // 远程 FX
     public void OnFxAttackFar()
     {
@@ -3123,6 +3153,17 @@ public partial class MonsterController : MonoBehaviour
             return;
         }
         StartCoroutine(SpawnBurstProjectiles(spawn, projCfg));
+    }
+
+    private Collider2D ResolveHitboxCollider(string childPath)
+    {
+        if (meleeHitboxCached) return meleeHitboxCached;
+        if (string.IsNullOrEmpty(childPath)) return null;
+        var t = transform.Find(childPath);
+        if (!t) return null;
+        meleeHitboxCached = t.GetComponent<Collider2D>();
+        if (meleeHitboxCached) meleeHitboxCached.isTrigger = true;
+        return meleeHitboxCached;
     }
 
 
