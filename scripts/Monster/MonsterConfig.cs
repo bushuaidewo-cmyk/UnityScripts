@@ -42,11 +42,11 @@ public class MonsterConfig : ScriptableObject
 [System.Serializable]
 public class AirPhaseConfig
 {
-    [Tooltip("地面阶段ID: 0=锁定地面阶段；非0且与空中ID组成顺序(较小者起始，较大者目标)。例如 ground=1,air=2 -> 先地面后空中")]
-    public int groundPhaseID = 0;
+    [Tooltip("勾选：永远运行地面阶段（出生即按地面循环，使用重力）；不勾选：不运行地面阶段逻辑")]
+    public bool groundPhase = true;
 
-    [Tooltip("空中阶段ID: 0=锁定空中阶段；非0且与地面ID组成顺序(较小者起始，较大者目标)。例如 air=1,ground=2 -> 先空中后地面")]
-    public int airPhaseID = 0;
+    [Tooltip("勾选：永远运行空中阶段（出生即无重力漂浮，使用空中循环）；不勾选：不运行空中阶段逻辑")]
+    public bool airPhase = false;
 
     [Tooltip("勾选后：绘制地面阶段发现(follow/reverse/backstep)与攻击(近战/远程)辅助线 Gizmos")]
     public bool showGroundGizmosManual = false;
@@ -640,8 +640,12 @@ public class AttackEventV2
     public float meleeRange = 1.0f;
     [Tooltip("近战攻击的动画状态名")]
     public string attackAnimation;
+
     [Tooltip("近战攻击播放的特效")]
     public GameObject attackEffectPrefab;
+    [Tooltip("近战特效释放点子物体路径（从怪物根开始的相对路径），为空则回退怪物根")]
+    public string attackSpawnChildPath;
+
     [Tooltip("近战命中体 子物体路径（从怪物根开始的相对路径），对应子物体上应挂 Collider2D(isTrigger)")]
     public string meleeHitboxChildPath;
 
@@ -654,6 +658,9 @@ public class AttackEventV2
     public GameObject attackFarEffectPrefab;
     [Tooltip("投射物配置（速度/寿命/分布等）")]
     public ProjectileConfig projectile;
+
+    [Tooltip("远程飞行物发射点子物体路径（从怪物根开始的相对路径），为空则回退 fxAttackFarPoint，再空则用怪物根")]
+    public string attackFarSpawnChildPath;
 
     [Header("攻击叠加运动模式")]
     [Tooltip("None=不叠加移动/跳跃；Move=攻击期间叠加水平位移；Jump=攻击开始时起跳一次")]
@@ -765,7 +772,7 @@ public class ProjectileConfig
     public GameObject FlygunEffectPrefab;
 
     // 自身旋转
-    [Header("自身旋转（可选）")]
+    [Header("自身旋转")]
     public bool selfRotate = false;
     public bool selfRotateX = false;
     public bool selfRotateY = false;
@@ -774,7 +781,6 @@ public class ProjectileConfig
     public float selfRotateSpeedDeg = 360f;
 
     // 统一的“沿移动方向自动朝向”
-    
     [Tooltip("勾选后：根对象沿移动方向自动朝向；若“自身旋转”启用，本项失效")]
     public bool faceAlongPath = true;
     
@@ -794,7 +800,7 @@ public class ProjectileConfig
     public GameObject FlygunBoomEffectPrefab;
 
     // ========== 直线（基线推进） ==========
-    [Header("直线（基线）")]
+    [Header("直线移动")]
     [Tooltip("启用直线基线推进（speed/accel等）。关闭后不使用直线推进（回旋镖返程不受影响）。")]
     public bool linearEnabled = true;
 
@@ -852,6 +858,7 @@ public class ProjectileConfig
     [Tooltip("跟踪频率（Hz）：每秒更新朝向的次数。0 表示不更新（关闭）。")]
     public float homingFrequency = 0f;
 
+    [Tooltip("跟踪强度：1完全跟踪，0不跟踪")]
     [Range(0f, 1f)]
     public float homingStrength = 1f;   // 0=不跟踪，1=最强跟踪
 
@@ -882,16 +889,19 @@ public class ProjectileConfig
 
     [Tooltip("回程匀速目标速度（米/秒）。>0 时作为回程速度目标")]
     public float boomerangBackUniformSpeed = 0f;
+
     [Tooltip("回程由当前速度匀速过渡到目标速度所需时间（秒）；=0 则瞬时切换")]
     public float boomerangBackUniformTime = 0f;
 
     [Tooltip("回程加速度（米/秒²），当 backAccelTime<=0 时使用该值")]
     public float boomerangBackAccel = 0f;
+
     [Tooltip("回程加速时间（秒），>0 时按时间插值到匀速目标")]
     public float boomerangBackAccelTime = 0f;
 
     [Tooltip("回程减速度（米/秒²），当 backDecelTime<=0 时使用该值（用于接近终点减速，可选）")]
     public float boomerangBackDecel = 0f;
+
     [Tooltip("回程减速时间（秒），>0 时按时间插值至 0（用于接近终点减速，可选）")]
     public float boomerangBackDecelTime = 0f;
 

@@ -986,6 +986,10 @@ public partial class MonsterController : MonoBehaviour
                 if (!string.IsNullOrEmpty(pCfg.skyrestAnimation))
                     PlayAnimIfNotCurrent(pCfg.skyrestAnimation);
 
+                // 休息阶段：强制主速度为0，防止上一段残留导致漂移
+                _airVel = Vector2.zero;
+                rb.velocity = Vector2.zero;
+
                 // 休息计时与切下一段（不做位移）
                 mv.rtRestTimer = (mv.rtRestTimer > 0f)
                     ? mv.rtRestTimer - Time.deltaTime
@@ -1209,6 +1213,13 @@ public partial class MonsterController : MonoBehaviour
         var elem = pCfg.elements[_airActiveIndex];
         var mv = elem.move;
 
+        // 休息阶段固定：完全静止（禁止主速度与正弦偏移）
+        bool airInRest = (mv.rtStraightPhase == StraightPhase.Rest);
+        if (airInRest)
+        {
+            _airVel = Vector2.zero;
+        }
+
         bool affectByArea = pCfg.canPassThroughScene;
 
         // newVel 是“本步结束后的主速度”，最后会写回 _airVel
@@ -1217,26 +1228,20 @@ public partial class MonsterController : MonoBehaviour
         // Sine 偏移：fixedDeltaTime 推进（只是位移偏移，不改主速度）
         _airTime += Time.fixedDeltaTime;
         Vector2 sineDelta = Vector2.zero;
-        if (elem.sinEnabled && elem.sinAmplitude > 0f && elem.sinFrequency > 0f)
+        // 休息中禁止正弦位移
+        if (!airInRest && elem.sinEnabled && elem.sinAmplitude > 0f && elem.sinFrequency > 0f)
         {
             float s = Mathf.Sin(_airTime * Mathf.PI * 2f * elem.sinFrequency) * elem.sinAmplitude;
 
             Vector2 axis;
             if (pCfg.pathType == AirPatrolPathType.AreaHorizontal)
-            {
-                // 水平主运动：正弦沿竖直方向摆动（上下）
                 axis = Vector2.up;
-            }
             else if (pCfg.pathType == AirPatrolPathType.AreaVertical)
-            {
-                // 垂直主运动：正弦沿水平方向摆动（左右）
                 axis = Vector2.right;
-            }
             else
             {
-                // Random / RandomH：正弦沿当前运动方向的法线（蛇形）
                 Vector2 d = (_airVel.sqrMagnitude > 0.0001f ? _airVel.normalized : Vector2.right);
-                axis = new Vector2(-d.y, d.x); // 计算法线
+                axis = new Vector2(-d.y, d.x);
             }
 
             sineDelta = axis.normalized * (s * Time.fixedDeltaTime);
@@ -1270,7 +1275,9 @@ public partial class MonsterController : MonoBehaviour
 
         // 本物理步计划位移（根位置 = 主速度位移 + 正弦偏移）
         Vector2 posRB = rb.position;
-        Vector2 plannedDeltaRB = _airVel * Time.fixedDeltaTime + sineDelta;
+        Vector2 plannedDeltaRB = airInRest
+            ? Vector2.zero                // 休息阶段彻底静止
+            : _airVel * Time.fixedDeltaTime + sineDelta;
         Vector2 nextRB = posRB + plannedDeltaRB;
 
         // 场景碰撞（Collider2D.Cast）
@@ -1542,7 +1549,15 @@ public partial class MonsterController : MonoBehaviour
     {
         if (state != MonsterState.Discovery) return;
 
+        // 仅在“空中独占”模式下播放：airPhase 勾选且 groundPhase 未勾选
+        if (!(config?.airStageConfig?.discovery != null &&
+              config?.airPhaseConfig != null &&
+              config.airPhaseConfig.airPhase &&
+              !config.airPhaseConfig.groundPhase))
+            return;
+
         var dcfg = config?.airStageConfig?.discovery;
+
         if (dcfg == null) return;
 
         // 仅在非 Rest 相位下播放移动 FX；防抖：同一段只播一次
@@ -1564,7 +1579,15 @@ public partial class MonsterController : MonoBehaviour
     {
         if (state != MonsterState.Discovery) return;
 
+        // 仅在“空中独占”模式下播放：airPhase 勾选且 groundPhase 未勾选
+        if (!(config?.airStageConfig?.discovery != null &&
+              config?.airPhaseConfig != null &&
+              config.airPhaseConfig.airPhase &&
+              !config.airPhaseConfig.groundPhase))
+            return;
+
         var dcfg = config?.airStageConfig?.discovery;
+
         if (dcfg == null) return;
 
         if (_airDiscPhase != AirDiscPhase.Rest) return;
@@ -1580,5 +1603,4 @@ public partial class MonsterController : MonoBehaviour
         PlayEffect(prefab, anchor);
         _airRestFxPlayedThisRest = true;
     }
-
 }

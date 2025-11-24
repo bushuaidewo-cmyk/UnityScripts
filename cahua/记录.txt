@@ -250,9 +250,6 @@ jumpRestEffectPrefab
 
 
 
-巡逻阶段都可以了
-现在开始发现阶段
-
 首先发现阶段的模式 移动发现 和跳跃发现 ，相当于巡逻阶段类型移动和跳跃，只不过没有路点 
 
 所以代码应该怎么设计，比如 巡逻类型 移动类型 和  跳跃类型里面的参数 配置 逻辑 资源 动画 特效 规则 转向 自动跳跃 这些都好了 ，后面就不会再动了，巡逻阶段也不会再动了，后面新增加的比如发现阶段也是引用，巡逻阶段的底层，参数是新的一套、动画特效新的一套，底层没区别 
@@ -586,7 +583,7 @@ mode=Jump 时仅响应 findjumpEffectPrefab / findjumpRestEffectPrefab
 空中巡逻阶段：
 设置选项：怪物是否可以穿透场景 或者 不能穿透（如果不能穿透需要撞墙后朝法线方向反弹）
 增加选项：怪物是否一直朝向移动的方向 ，是朝向，否不朝向
-增加选项：是否自转，XYZ轴，转动速度
+
 
 增加新的空中巡逻移动列表+， element0、 element1等，从上到下依次执行 或 随机（可以配置不同空中巡逻移动）
 基础空中移动：
@@ -659,118 +656,222 @@ fxSkyRestPoint
 
 
 
-空中发现阶段：玩家进入怪物发现距离后，怪物就脱离巡逻阶段，巡逻区域失效，如果玩家脱离怪物发现阶段，怪物会回到巡逻区域，继续再巡逻区域巡逻
-增加选项：空中发现阶段怪物是否一直朝向移动的方向 ，是朝向，否不朝向，水平左右
-增加选项：空中发现阶段是否自转，XYZ轴，转动速度
+空中空中发现阶段：玩家进入怪物发现距离后，怪物就脱离巡逻阶段，脱离AREA巡逻区域失效，如果玩家脱离怪物发现阶段，怪物会回到巡逻区域，播放巡逻阶段的动画、特效、速度参数，继续再巡逻区域巡逻
+当玩家进入怪物的发现阶段，怪物会跟踪玩家
 
-空中发现基础移动距离与空中发现后退或倒退移动距离切换延迟（类似地面delayFollowToBackstepMin、delayFollowToBackstepMax，delayBackstepToFollowMin、delayBackstepToFollowMax）
-参数：
-空中发现基础移动距离 切换 到 空中发现后退或倒退移动距离的 min、max 时间
-空中发现后退或倒退移动距离 切换 到 空中发现基础移动距离的 min、max 时间
+空中发现阶段参数与功能（类似地面巡逻阶段的发现）：
+三档水平距离(Gizmos:绿=发现,白=后退,黑=倒退，类似地面阶段发现的辅助显示)
+SkyfindRange：小于等于该距离进入跟踪状态，跟踪到玩家附近，不会与玩家重叠，跟踪的参考点以怪物根物体Monster_test_Root下monsterDistPoint点，与玩家的PlayerRoot下的PlayerDistPoint点作为检测（这个再怪物Monster_test_Root下的inspector下的monsterDistPoint和playerDistPoint已经有功能）期间撞到建筑物不转向
 
-增加空中发现移动列表+， element0、 element1等，从上到下依次执行 或 随机（可以配置不同空中发现移动）
-空中发现基础移动
-进入发现阶段 发现距离 后，怪物空中水平移动
-参数：
-空中水平移动加速度
-空中水平移动加速度时间
-空中水平移动减速度
-空中水平移动减速度时间
-空中水平移动匀速（区间值 min\ max）
-空中水平移动匀速时间（区间值 min\ max）
-空中水平移动休息时间不动（区间值 min\ max）
+SkyreverseRange：小于等于该距离进入后退状态，玩家转向背对玩家后退移动，后退的方向是跟踪状态最后转换成后退/倒退状态的相反角度，例如：跟踪最后的角度是30度，这时候进入倒退/后退后的角度方向30度+180度，期间撞到建筑物转向
 
-空中发现特殊移动
-空中发现跟踪移动：参数跟踪频率和跟踪强度，跟踪强度1完全跟踪，0的时候回到空中水平移动
-空中发现抛物线移动：增加向上最高点 和 向下最低点，结合空中水平移动，产生向下凹陷抛物线（弧线）移动 或 向上突出的抛物线（弧线）移动
-空中发现S型路径移动 同 空中巡逻阶段特殊移动 ，一套底层， 但参数全新
-空中发现半径圆形路径移动 同 空中巡逻阶段特殊移动， 一套底层 ，但参数全新
+SkybackRange：小于等于该距离进入到退状态，玩家面朝玩家倒退移动，倒退的方向是跟踪状态转最后换成后退/倒退状态的相反角度，例如：跟踪最后的角度是30度，这时候进入倒退/后退后的角度方向30度+180度，期间撞到建筑物不转向
 
-空中发现基础移动可以和空中发现特殊移动叠加
-空中发现后退和空中发现倒退不能和特殊移动叠加
+空中发现阶段后退检测周期性屏蔽，当SkyreverseRange和SkybackRange屏蔽的时候进入SkyfindRange阶段，暂时将SkyreverseRange和SkybackRange的距离设置成0，等SkybackDCTMin和SkybackDCTMax时间过后恢复成设置的SkyreverseRange和SkybackRange参数
+SkybackDCTMin：将SkyreverseRange和SkybackRange的距离设置成0的最短时间
+SkybackDCTMax：将SkyreverseRange和SkybackRange的距离设置成0的最长时间
+参考下地面阶段发现的backDCTMin和backDCTMax的底层设计
 
-资源 ：
-空中发现移动相关的动画、特效、播放特效动画关键帧事件、特效的锚点
-空中发现静止相关的动画、特效、播放特效动画关键帧事件、特效的锚点
-
-
-空中发现阶段分空中近战攻击 和空中 远程攻击
-增加空中发现阶段攻击列表+， element0、 element1等，从上到下依次执行 或 随机（可以配置不同发现阶段攻击）
-
-空中通用参数：
-攻击时间：再这段时间内攻击次数，并且触发攻击动画和特效，类似地面攻击attackDuration
-攻击动画循环的次数：在攻击时间内播放攻击次数，类似地面攻击repeatedHitsCount
-攻击休息时间 min、max 区间
-
-近战攻击：进入空中近战攻击距离后就近战攻击 ，如果勾选了：空中发现阶段怪物一直朝向移动的方向（非水平方向）或空中发现阶段是自转，进入攻击的时候强制水平朝向玩家攻击
-参数和资源
-空中近战攻击检测距离
-动画、特效、播放特效动画关键帧事件、特效的子物体路径、命中体子物体路径
-
-远程攻击：进入空中远程攻击距离后就释放飞行物攻击，如果勾选了：空中发现阶段怪物一直朝向移动的方向（非水平方向）或空中发现阶段是自转，进入攻击的时候强制水平朝向玩家攻击
-参数和资源
-空中远程攻击检测距离
-动画、特效、播放特效动画关键帧事件、发射特效的子物体路径
-
-远程飞行物：同地面飞行物基本一致
-一次动画触发发射的数量
-同一出发内连发的间隔
-
-飞行物生存时间
-扇形分布：扇形分布角度、是否均匀
-表现资源：飞行物动画、飞行物特效prefab
-飞行物是否自身旋转：xyz ,旋转速度
-朝向：飞行物朝向移动方向，如果否先自身旋转，飞行物朝向移动方向失效
-
-发射朝向：水平或朝向玩家
-
-飞行物撞到墙壁或生存事件结束或撞到玩家就会爆炸
-爆炸半径、爆炸伤害间隔、爆炸时间、爆炸动画、爆炸特效
-
-飞行物分几种飞行类型：同地面飞行物类型
-直线
-S型
-抛物线
-跟踪
-半径旋转
-回旋镖
-
-空中发现攻击叠加运动模式：这里只有跟踪，远程和近战公用一台移动中攻击参数
-跟踪参数：跟踪频率、跟踪强度、跟踪时长
-
-当怪物攻击结束以后（包括攻击后的休息时间），怪物要远离玩家，远离后如果再空中巡逻区域就空中巡逻、再空中发现区域就空中发现、再空中发现近战攻击或空中发现远程攻击距离内就空中发现近战攻击或空中发现远程攻击
-
-空中攻击后的后退或倒退移动
-进入空中攻击后 后退距离 ，转身远离玩家（远离就是判定与玩家的距离，朝着后退的方向随机，朝向要有利于远离的距离，不能朝玩家方向，这样就距离就越来越近）
-如果已经勾选自转或一直朝向移动的方向，朝向失效，只保留后退移动
-
-进入空中攻击后 倒退距离 ， 面朝玩家远离（远离就是判定玩家的距离，朝着后退的方向随机，朝向要有利于远离的距离，不能朝玩家方向，这样就距离就越来越近）
-如果已经勾选自转或一直朝向移动的方向，朝向失效，只保留倒退移动
-
-参数：后退参数公用倒退参数
-倒退加速度
-倒退加速度时间
-倒退减速度
-倒退减速度时间
-倒退匀速（区间值 min\ max）
-倒退匀速时间（区间值 min\ max）
-倒退休息时间不动（区间值 min\ max）
+朝向：两个选项（一直朝向玩家移动的方向、一直朝向玩家水平移动的方向）这个以Monster_test_Root的子物体monsterDistPoint作为自转的点
+朝向已SkyreverseRange和SkybackRange生效，这两个状态会一直朝向玩家，只不过这里设置是任意角度还是水平角度，SkyreverseRange失效，因为怪物会背对玩家
 
 
 
-3
-增加：地面设置，并且可以三角折叠
-增加：地面设置ID，可以填ID号 0、1、2，ID填0=一直再地面阶段，如果地面阶段ID填1，先从地面阶段开始，只需要ID可填参数
-包括 
-巡逻阶段配置（地面）
-发现阶段配置（地面）
+空中发现阶段 资源（Move：Skyfind/Skyretreat 共用；Skyback 仅 move 动画不同）
 
-4
-空中配置（已经有）
-增加：空中设置ID，可以填ID号 0、1、2，ID填0=一直再空中阶段，如果空中阶段ID填1，先从空中阶段开始，只需要ID可填参数
-增加：一直再空中阶段选项
+动画
+SkyFind/SkyRetreat Move Animation：发现时候移动动画
+SkyFind/SkyRetreat Rest Animation：发现时候休息动画
 
-5
+特效
+SkyFind/SkyRetreat Move FX：发现时候移动播放特效
+SkyFind/SkyRetreat Rest FX：发现时候休息播放特效
+
+动画里播放特效事件关键帧
+SkyfindmoveEffectPrefab：发现时候移动动画上的事件关键帧特效
+SkyfindrestEffectPrefab：发现时候休息动画上的事件关键帧特效
+
+空中特效锚点（根物体下Inspector，fxSkyRestPoint的下方生成）
+fxSkyfindMovePoint：发现时候移动播放特效的位置点
+fxSkyfindRestPoint：发现时候休息播放特效的位置点
+
+空中发现阶段随机播放发现动作
+SkyfindRandomOrder：发现阶段的列表是否随机，否顺序播放
+
+空中发现阶段移动列表，list
+空中follow阶段参数
+SkyhomingFrequency：跟新角度的频率（参考地面发现阶段攻击飞行物跟踪）
+SkyhomingStrength：跟踪强度（参考地面发现阶段攻击飞行物跟踪）
+SkyfindmoveSpeed：匀速速度
+Skyfindacceleration：加速度
+SkyfindaccelerationTime：加速度时间
+Skyfinddeceleration：减速度
+SkyfinddecelerationTime：减速度时间
+SkyfindmoveDuration：匀速速度时间
+SkyfindrestMin：休息最小时间
+SkyfindrestMax：休息最大时间
+
+SkysinEnabled 启用上下摆动（S型），参考空中巡逻阶段的底层，沿着移动的方向
+上下摆动频率
+下辖摆动幅度
+
+空中backstep阶段参数
+SkybackmoveSpeed：匀速速度
+Skybackacceleration：加速度
+SkybackaccelerationTime：加速度时间
+Skybackdeceleration：减速度
+SkybackdecelerationTime：减速度时间
+SkybackmoveDuration：匀速速度时间
+SkybackrestMin：休息最小时间
+SkybackrestMax：休息最大时间
+
+
+
+
+空中发现攻击（可以直接引用地面阶段的发现攻击底层，只是参数和资源不同）
+
+再空中发现动作列表（count=1）下面增加发现攻击（可以直接引用地面阶段的发现攻击底层，只是参数和资源不同）
+
+SkyattacksRandomOrder空中随机播放攻击动作
+
+空中攻击列表-空中攻击0
+
+空中通用时序
+SkyattackDuration：本次攻击的时间窗口（秒）。在该时间内可循环播放攻击动画并触发效果
+SkyrepeatedHitsCount：在 attackDuration 时间窗内，攻击动画循环播放的次数（动画播完一遍算一次
+SkyattackRestMin：攻击结束后进入攻击休息区间下限（秒）
+SkyattackRestMax： 攻击结束后进入攻击休息区间上限（秒）
+
+空中近战
+空中近战触发距离：在这个距离内触发近战攻击 ，辅助线框的颜色绿色
+空中近战动画：SkyattackAnimation
+空中近战特效：SkyattackEffectPrefab；空中近战特效再动画内事件播放关键帧：SkyattackEffectPrefab；空中近战攻击的关键帧：SkyattackAnimationstart、SkyattackAnimationend
+
+空中近战攻击释放特效点的路径SkyattackSpawnChildPath（参考地面近战攻击的路径逻辑）
+空中命中子物体路径：meleeHitboxChildPath
+
+空中远程
+空中远程触发距离：在这个距离内触发远程攻击，辅助线框的颜色蓝色
+空中远程动画：SkyattackFarAnimation
+空中远程特效：SkyattackFarEffectPrefab；空中远程特效再动画内事件播放关键帧：SkyattackFarEffectPrefab；空中远程飞行物再动画内事件播放关键帧：SkyattackFarFire
+
+Skyprojectile配置（飞行物配置）
+飞行物发射队列
+SkycountPerBurst：一次动画触发发射的数量
+SkyintraBurstInterval：同一触发内连发的间隔（秒）
+SkylifeTime：投射物存活时间（秒）
+
+飞行物扇形分布
+SkyspreadAngle：多发时的扇形角度（度），0 表示同向
+SkyspreadUniform：多发时在扇形内是否均匀分布（false 则随机分布）
+
+飞行物表现资源
+SkyFlygunAnimation：飞行中的动画名（飞行物自己的动画）
+SkyFlygunEffectPrefab：飞行中的特效Prefab（飞行物的特效）
+SkyattackFarSpawnChildPath：空中发射飞行物的点路径（参考地面远程攻击飞行物的路径逻辑）
+
+飞行物自身旋转
+SkyselfRotate：是否飞行物自身旋转，勾上自身旋转
+xyz：再不同轴向自转
+SkyselfRotateSpeedDeg：旋转速度（度/秒），对勾选的轴生效
+
+SkyfaceAlongPath勾选后：根对象沿移动方向自动朝向；若“自身旋转”启用，本项失效
+
+飞行物发射朝向
+SkyspawnAim下 ：Skytowards player / Skyhorizontal to player
+Skytowards player=朝向玩家飞；Skyhorizontal to player=按水平朝向玩家飞（忽略Y）
+
+飞行物爆炸表现
+Skyradius：爆炸半径（米）
+Skyduration：爆炸表现持续时间（秒）
+Skyinterval：爆炸伤害/子效果的tick间隔（秒）
+SkyFlygunBoomAnimation：爆炸动画名（飞行物转到玩家、场景，或生命周期结束，爆炸的时候释放爆炸动画）
+SkyFlygunBoomEffectPrefab：爆炸特效Prefab（飞行物转到玩家、场景，或生命周期结束，爆炸的时候释放爆炸特效）
+
+飞行物直线移动
+SkylinearEnabled：启用直线基线推进（speed/accel等），启用后显示下面的参数，关闭后不使用直线推进（回旋镖返程不受影响）
+Skyspeed：初始速度（米/秒）
+Skyaccel：加速度（米/秒²），当 accelTime<=0 时使用该值
+SkyaccelTime：加速时间（秒），>0 时按时间插值至目标速度
+Skydecel：减速度（米/秒²），当 decelTime<=0 时使用该值
+SkydecelTime：减速时间（秒），>0 时按时间插值至 0
+SkymoveDuration：匀速阶段持续时间（秒），0 表示无匀速直接进入减速/结束
+
+飞行物S型直线（侧向正弦）
+SkysinEnabled：启用 S 型侧向偏移，启用后显示下面的参数
+SkysinAmplitude：正弦摆动幅度
+SkysinFrequency：正弦摆动频率（Hz）
+
+飞行物抛物线（重力）
+SkyparabolaEnabled：启用抛物线重力效果，启用后显示下面的参数
+SkygravityScale：抛物线运动重力缩放
+SkybounceCoefficient：落地反弹系数（0=不反弹，>1 可越弹越高，不夹 [0,1]）
+SkybounceEnergyMode：constant/decay to zero  反弹能量模式：Constant=每次相同；DecayToZero=每次按衰减因子衰减，低于阈值即销毁
+SkybounceDecayFactor：每次反弹额外衰减因子（<1 逐渐变小；=1 不变；>1 逐渐变大）
+SkyparabolaApexHeight：最高点高度（米，>0 时用来计算初始竖直速度 vy0 = sqrt(2*g*h)）
+SkybounceEndVyThreshold：竖直反弹速度低于该阈值则销毁（仅 DecayToZero 生效）
+
+飞行物跟踪导弹
+SkyhomingEnabled：启用跟踪，按频率刷新朝向目标（频率低更棱角，频率高更顺滑），启用后显示下面的参数
+SkyhomingFrequency：跟踪频率（Hz），每秒更新朝向的次数。0 表示不更新（关闭）
+SkyhomingStrength：跟踪强度，1完全跟踪，0不跟踪
+
+飞行物半径旋转（相对载体，pathtangent空间）
+SkyorbitEnabled：启用半径旋转，相对载体按半径做圆周偏移，启用后显示下面的参数
+SkyorbitRadius：半径（米）
+SkyorbitAngular：每次要旋转的角度（度）。例如 90/180/360。达到该角度后从0重新开始下一次 sweep。
+SkyorbitSweepSpeedDeg：沿半径转动的角速度（度/秒）。符号决定方向：>0 逆时针，<0 顺时针。
+
+飞行物回旋镖
+SkyboomerangEnabled：启用回旋镖，飞到最远距离 -> 停顿 -> 返回起点/发射者，启用后显示下面的参数
+SkyboomerangOutMaxDistance：飞出最远距离（米）：到达后进入‘最远距离停顿’阶段"
+SkyboomerangApexStopTime：最远距离停顿时间（秒）
+SkyboomerangBackUniformSpeed：回程匀速目标速度（米/秒）。>0 时作为回程速度目标
+SkyboomerangBackUniformTime：回程由当前速度匀速过渡到目标速度所需时间（秒）；=0 则瞬时切换
+SkyboomerangBackAccel：回程加速度（米/秒²），当 backAccelTime<=0 时使用该值
+SkyboomerangBackAccelTime：回程加速时间（秒），>0 时按时间插值到匀速目标
+SkyboomerangBackDecel：回程减速度（米/秒²），当 backDecelTime<=0 时使用该值（用于接近终点减速，可选）
+SkyboomerangBackDecelTime：回程减速时间（秒），>0 时按时间插值至 0（用于接近终点减速，可选）
+
+攻击叠加运动模式
+SkyattackMotionMode 下： none\Skyfollowmove
+None=不叠加空中追踪移动；Skyfollowmove=攻击期间叠加追踪移动
+
+选择none不使用攻击移动
+
+选择Skyfollowmove
+
+增加攻击中跟踪（功能类似空中发现中跟踪，SkyhomingFrequency与SkyhomingStrength）
+
+移动中攻击近战
+SkyattackmoveSpeedMelee：近战时的攻击位移速度
+SkyattackaccelerationMelee：近战时的攻击位移加速度
+SkyattackaccelerationTimeMelee：近战时的加速时间
+SkyattackdecelerationMelee：近战时的减速度
+SkyattackdecelerationTimeMelee：近战时的减速时间
+SkyattackmoveDurationMelee：近战时的总位移时长（含加/匀/减）
+
+移动中攻击远程
+SkyattackmoveSpeedRanged：远程时的攻击位移速度
+SkyattackaccelerationRanged：远程时的攻击位移加速度
+SkyattackaccelerationTimeRanged：远程时的加速时间
+SkyattackdecelerationRanged：远程时的减速度
+SkyattackdecelerationTimeRanged：远程时的减速时间
+SkyattackmoveDurationRanged：远程时的总位移时长（含加/匀/减）
+
+
+
+
+
+airPhaseConfig.groundPhaseID去掉，再airPhaseConfig.groundPhaseID位置添加groundPhase勾选，勾上就是永远运行地面阶段，那么怪物出生那一刻开始就要有重力，落到地面，地面阶段自己循环，
+不勾选就不执行地面阶段逻辑
+
+airPhaseConfig.airPhaseID去掉，再airPhaseConfig.airPhaseID位置添加airPhase勾选，勾上就是永远运行空中阶段，那么怪物出生那一刻开始就要没有重力，空中漂浮，空中阶段自己循环，
+不勾选就不执行空中阶段逻辑
+
+
+
+
 地面与空中 相互转换配置
 如果地面填ID1 ,空中ID2，那就从地面ID1-空中ID2-地面ID1循环
 如果空中填ID1 ,地面ID2，那就从空中ID1-地面ID2-空中ID1循环
@@ -797,9 +898,14 @@ S型
 空中到地面转换增加一个选项，是否更换碰撞体，如果勾选，就可以从新指定碰撞体
 
 
+辅助线显示
+地面辅助线显示选项：勾选的时候显示地面阶段发现 follow、backstep、攻击近战、攻击远程辅助线（不管airPhaseConfig.groundPhaseID是多少，显示或不显示辅助线无关）
+空中辅助线显示选项：勾选的时候显示空中阶段发现 follow、backstep、攻击近战、攻击远程辅助线（不需airPhaseConfig.airPhaseIDD是多少，显示或不显示辅助线无关）
 
 
 铁律/不变规则
+不要影响已有地面阶段的逻辑
+不要影响已有空中阶段的逻辑
 不改变已有资源/Prefab 的标签与层，补丁仅在代码
 不改已有“好用”的变量名。
 不新增和现有语义重复的变量名。
@@ -810,10 +916,6 @@ S型
 代码要全部一字不差的看完
 
 
-
-
-
-
-
+明天制作空中攻击
 
 

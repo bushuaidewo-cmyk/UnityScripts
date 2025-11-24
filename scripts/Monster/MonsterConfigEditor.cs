@@ -344,14 +344,14 @@ public class MonsterConfigEditor : Editor
     private void DrawAirPhaseConfig(SerializedProperty spAir)
     {
         if (spAir == null) return;
-        if (!Fold("air", "地面配置与空中配置ID", true)) return;
+        if (!Fold("air", "地面/空中阶段勾选", true)) return;
 
         using (new EditorGUI.IndentLevelScope())
         {
-            var spGroundID = spAir.FindPropertyRelative("groundPhaseID");
-            var spAirID = spAir.FindPropertyRelative("airPhaseID");
-            EditorGUILayout.PropertyField(spGroundID, new GUIContent("groundPhaseID"));
-            EditorGUILayout.PropertyField(spAirID, new GUIContent("airPhaseID"));
+            var spGround = spAir.FindPropertyRelative("groundPhase");
+            var spAirFlag = spAir.FindPropertyRelative("airPhase");
+            EditorGUILayout.PropertyField(spGround, new GUIContent("groundPhase"));
+            EditorGUILayout.PropertyField(spAirFlag, new GUIContent("airPhase"));
 
             var spShowGround = spAir.FindPropertyRelative("showGroundGizmosManual");
             var spShowAir = spAir.FindPropertyRelative("showAirGizmosManual");
@@ -909,6 +909,7 @@ public class MonsterConfigEditor : Editor
                     EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("meleeRange"), new GUIContent("触发距离（米）"));
                     EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackAnimation"), new GUIContent("动画"));
                     EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackEffectPrefab"), new GUIContent("特效Prefab"));
+                    EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackSpawnChildPath"), new GUIContent("特效释放点子物体路径"));
                     EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("meleeHitboxChildPath"), new GUIContent("命中体子物体路径"));
                 }
             }
@@ -935,13 +936,14 @@ public class MonsterConfigEditor : Editor
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("spreadUniform"));
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("FlygunAnimation"));
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("FlygunEffectPrefab"));
+                                EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackFarSpawnChildPath"), new GUIContent("发射点子物体路径"));
 
                                 var spSpinEnable = spProj.FindPropertyRelative("selfRotate");
                                 var spSpinX = spProj.FindPropertyRelative("selfRotateX");
                                 var spSpinY = spProj.FindPropertyRelative("selfRotateY");
                                 var spSpinZ = spProj.FindPropertyRelative("selfRotateZ");
                                 var spSpinSpeed = spProj.FindPropertyRelative("selfRotateSpeedDeg");
-                                EditorGUILayout.PropertyField(spSpinEnable, new GUIContent("自身旋转(启用)"));
+                                EditorGUILayout.PropertyField(spSpinEnable, new GUIContent("飞行物自身旋转"));
                                 if (spSpinEnable.boolValue)
                                 {
                                     EditorGUILayout.BeginHorizontal();
@@ -1050,7 +1052,7 @@ public class MonsterConfigEditor : Editor
 
                 if (mode == AttackMotionMode.Move)
                 {
-                    if (Fold($"discover.attacks.{index}.attackMoveMelee", "移动中攻击（Melee）", false))
+                    if (Fold($"discover.attacks.{index}.attackMoveMelee", "移动中近战攻击（Melee）", false))
                     {
                         using (new EditorGUI.IndentLevelScope())
                         {
@@ -1062,7 +1064,7 @@ public class MonsterConfigEditor : Editor
                             EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackmoveDurationMelee"));
                         }
                     }
-                    if (Fold($"discover.attacks.{index}.attackMoveRanged", "移动中攻击（Ranged）", false))
+                    if (Fold($"discover.attacks.{index}.attackMoveRanged", "移动中远程攻击（Ranged）", false))
                     {
                         using (new EditorGUI.IndentLevelScope())
                         {

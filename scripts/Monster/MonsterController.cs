@@ -94,9 +94,6 @@ public partial class MonsterController : MonoBehaviour
     [SerializeField] private Transform fxJumpPoint;
     [SerializeField] private Transform fxJumpRestPoint;
 
-    [SerializeField] private Transform fxAttackPoint;
-    [SerializeField] private Transform fxAttackFarPoint;
-
     [Header("空中特效锚点")]
     [SerializeField] private Transform fxSkyMovePoint;
     [SerializeField] private Transform fxSkyRestPoint;
@@ -309,16 +306,14 @@ public partial class MonsterController : MonoBehaviour
             config = ScriptableObject.Instantiate(config);
 
         var ap = config?.airPhaseConfig;
-
-        if (ap != null)
         {
-            
-            bool wantAirFloatOnSpawn = (ap.airPhaseID == 0 || ap.airPhaseID == 1);
-            if (wantAirFloatOnSpawn)
+            // 空中独占：airPhase 勾选且 groundPhase 未勾选 → 去重力
+            if (ap.airPhase && !ap.groundPhase)
             {
                 _airSavedGravity = rb.gravityScale;
                 rb.gravityScale = 0f;
             }
+            // 其它情况保持原重力（包括仅地面 / 双勾选 / 全不勾）
         }
 
         // 巡逻运行态
@@ -377,8 +372,9 @@ public partial class MonsterController : MonoBehaviour
         else
         {
             var dcfg = config?.discoveryV2Config;
-            // 只有在功能开启时才运行状态机 (判断条件改为Max > 0)
-            if (dcfg != null && dcfg.backDCTMax > 0f)
+
+            // 功能开启且不是“空中独占”才运行（空中独占指 airPhase=true 且 groundPhase=false）
+            if (dcfg != null && dcfg.backDCTMax > 0f && !(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false))
             {
                 if (suppressionPhaseTimer > 0f)
                 {
@@ -497,31 +493,17 @@ public partial class MonsterController : MonoBehaviour
             return;
         }
 
-        int groundID = Mathf.Max(0, config.airPhaseConfig.groundPhaseID);
-        int airID = Mathf.Max(0, config.airPhaseConfig.airPhaseID);
+        bool wantGround = config.airPhaseConfig.groundPhase;
+        bool wantAir = config.airPhaseConfig.airPhase;
 
-        if (airID == 0 && groundID == 0)
+        if (wantAir && !wantGround)
         {
-            state = MonsterState.Patrol;
-            return;
-        }
-
-        if (airID == 0)
-        {
-            // 锁定空中
             state = MonsterState.Air;
             return;
         }
-
-        if (groundID == 0)
-        {
-            // 锁定地面
-            state = MonsterState.Patrol;
-            return;
-        }
-
-        // 双阶段：较小 ID 为起始
-        state = (airID < groundID) ? MonsterState.Air : MonsterState.Patrol;
+        // 其余情况（仅地面 / 双勾选 / 全不勾）统一进入地面巡逻
+        state = MonsterState.Patrol;
+        return;
     }
 
     void FixedUpdate()
@@ -530,9 +512,13 @@ public partial class MonsterController : MonoBehaviour
         {
             AirPatrolPhysicsStep();
         }
-        else if (state == MonsterState.Discovery)
+        else if (state == MonsterState.Discovery &&
+                 config?.airStageConfig?.discovery != null &&
+                 config?.airPhaseConfig != null &&
+                 config.airPhaseConfig.airPhase &&
+                 !config.airPhaseConfig.groundPhase)
         {
-            AirDiscoveryFixedStep(); 
+            AirDiscoveryFixedStep();
         }
 
         if (isJumping && activeJumpMove != null)
@@ -659,18 +645,13 @@ public partial class MonsterController : MonoBehaviour
     // DiscoveryUpdate() 顶部 wantBand 计算处：在算出 wantBand 之后，若计时器>0，强制Follow
     void DiscoveryUpdate()
     {
-        bool isAirDiscovery = (config?.airPhaseConfig?.airPhaseID != 0) &&
-                              (state == MonsterState.Discovery) &&
-                              (config?.airPhaseConfig?.groundPhaseID == 0 || !isGroundedMC);
-
+        // 空中发现启用条件：仅当 airPhase 勾选且 groundPhase 未勾选时，把当前发现阶段视为空中发现
         bool useAirDiscovery =
-        state == MonsterState.Discovery &&
-        config?.airStageConfig?.discovery != null &&
-        (
-            (config?.airPhaseConfig?.airPhaseID == 0) ||
-            (config?.airPhaseConfig?.airPhaseID > 0 && config?.airPhaseConfig?.groundPhaseID == 0) ||
-            (!isGroundedMC && (config?.airPhaseConfig?.airPhaseID != 0))
-        );
+            state == MonsterState.Discovery &&
+            config?.airStageConfig?.discovery != null &&
+            config?.airPhaseConfig != null &&
+            config.airPhaseConfig.airPhase &&
+            !config.airPhaseConfig.groundPhase;
 
         if (useAirDiscovery)
         {
@@ -2705,8 +2686,7 @@ public partial class MonsterController : MonoBehaviour
             case FxSlot.FindJump: return fxJumpPoint;
             case FxSlot.FindJumpRest: return fxJumpRestPoint;
 
-            case FxSlot.Attack: return fxAttackPoint != null ? fxAttackPoint : fxMovePoint;
-            case FxSlot.AttackFar: return fxAttackFarPoint != null ? fxAttackFarPoint : fxMovePoint;
+            
 
             default: return null;
         }
@@ -3090,11 +3070,25 @@ public partial class MonsterController : MonoBehaviour
     public void OnFxAttack()
     {
         if (!inAttack || activeAttack == null) return;
-        if (attackExecType != AttackType.Melee) return; // 修改处
+        if (attackExecType != AttackType.Melee) return;
         if (string.IsNullOrEmpty(activeAttack.attackAnimation)) return;
         if (activeAttack.attackEffectPrefab == null) return;
-        var anchor = ResolveFxAnchor(FxSlot.Attack);
-        if (!anchor) return;
+
+        // 近战特效释放点：优先 attackSpawnChildPath；支持带根名/前导斜杠；失败回退怪物根
+        Transform anchor = null;
+        if (!string.IsNullOrEmpty(activeAttack.attackSpawnChildPath))
+        {
+            string rawPath = activeAttack.attackSpawnChildPath.Trim();
+            string rootName = transform.name;
+            if (rawPath.StartsWith(rootName + "/"))
+                rawPath = rawPath.Substring(rootName.Length + 1);
+            if (rawPath.StartsWith("/"))
+                rawPath = rawPath.Substring(1);
+            var t = transform.Find(rawPath);
+            if (t != null) anchor = t;
+        }
+        if (anchor == null) anchor = transform;
+
         PlayEffect(activeAttack.attackEffectPrefab, anchor);
     }
 
@@ -3118,11 +3112,26 @@ public partial class MonsterController : MonoBehaviour
     public void OnFxAttackFar()
     {
         if (!inAttack || activeAttack == null) return;
-        if (attackExecType != AttackType.Ranged) return; // 修改处
+        if (attackExecType != AttackType.Ranged) return;
         if (string.IsNullOrEmpty(activeAttack.attackFarAnimation)) return;
         if (activeAttack.attackFarEffectPrefab == null) return;
-        var anchor = ResolveFxAnchor(FxSlot.AttackFar);
-        if (!anchor) return;
+
+        // 优先使用 attackFarSpawnChildPath 指定的子物体；支持带根名/前导斜杠写法
+        Transform anchor = null;
+        if (!string.IsNullOrEmpty(activeAttack.attackFarSpawnChildPath))
+        {
+            string rawPath = activeAttack.attackFarSpawnChildPath.Trim();
+            string rootName = transform.name;
+            if (rawPath.StartsWith(rootName + "/"))
+                rawPath = rawPath.Substring(rootName.Length + 1);
+            if (rawPath.StartsWith("/"))
+                rawPath = rawPath.Substring(1);
+            var t = transform.Find(rawPath);
+            if (t != null) anchor = t;
+        }
+        // 若路径为空或找不到子物体 → 回退怪物根（不再使用已删除的 fxAttackFarPoint 锚）
+        if (anchor == null) anchor = transform;
+
         PlayEffect(activeAttack.attackFarEffectPrefab, anchor);
     }
 
@@ -3143,8 +3152,26 @@ public partial class MonsterController : MonoBehaviour
             rangedFiredThisAttack = true;
         }
 
-        // 统一从 fxAttackFarPoint 发射；若未设置则回退到怪物根
-        Transform spawn = ResolveFxAnchor(FxSlot.AttackFar) ?? transform;
+        // 远程发射点解析：仅使用 attackFarSpawnChildPath；失败则回退怪物根（锚点已从场景中删除）
+        Transform spawn = null;
+        if (!string.IsNullOrEmpty(activeAttack.attackFarSpawnChildPath))
+        {
+            string rawPath = activeAttack.attackFarSpawnChildPath.Trim();
+            string rootName = transform.name;
+            if (rawPath.StartsWith(rootName + "/"))
+                rawPath = rawPath.Substring(rootName.Length + 1);
+            if (rawPath.StartsWith("/"))
+                rawPath = rawPath.Substring(1);
+            var t = transform.Find(rawPath);
+            if (t != null) spawn = t;
+        }
+
+        if (spawn == null)
+            spawn = transform;
+
+        if (spawn == null)
+            spawn = ResolveFxAnchor(FxSlot.AttackFar);
+        
 
         var projCfg = activeAttack.projectile;
         if (projCfg == null)
