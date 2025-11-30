@@ -1316,6 +1316,92 @@ public partial class MonsterController : MonoBehaviour
         return cc;
     }
 
+    // ===== 映射：SkyProjectileConfig -> 运行时 ProjectileConfig =====
+    private ProjectileConfig MapSkyProjectileToRuntime(SkyProjectileConfig sky)
+    {
+        var p = new ProjectileConfig();
+
+        // 发射队列
+        p.countPerBurst = Mathf.Max(1, sky.SkycountPerBurst);
+        p.intraBurstInterval = Mathf.Max(0f, sky.SkyintraBurstInterval);
+        p.lifeTime = Mathf.Max(0.01f, sky.SkylifeTime);
+
+        // 扇形
+        p.spreadAngle = Mathf.Max(0f, sky.SkyspreadAngle);
+        p.spreadUniform = sky.SkyspreadUniform;
+
+        // 资源
+        p.FlygunAnimation = sky.SkyFlygunAnimation;
+        p.FlygunEffectPrefab = sky.SkyFlygunEffectPrefab;
+
+        // 自旋
+        p.selfRotate = sky.SkyselfRotate;
+        p.selfRotateX = sky.SkyselfRotateX;
+        p.selfRotateY = sky.SkyselfRotateY;
+        p.selfRotateZ = sky.SkyselfRotateZ;
+        p.selfRotateSpeedDeg = sky.SkyselfRotateSpeedDeg;
+
+        // 朝向自动
+        p.faceAlongPath = sky.SkyfaceAlongPath;
+
+        // 发射朝向
+        p.spawnAim = sky.SkyspawnAim;
+
+        // 爆炸
+        p.radius = Mathf.Max(0f, sky.Skyradius);
+        p.duration = Mathf.Max(0f, sky.Skyduration);
+        p.interval = Mathf.Max(0f, sky.Skyinterval);
+        p.FlygunBoomAnimation = sky.SkyFlygunBoomAnimation;
+        p.FlygunBoomEffectPrefab = sky.SkyFlygunBoomEffectPrefab;
+
+        // 直线
+        p.linearEnabled = sky.SkylinearEnabled;
+        p.speed = sky.Skyspeed;
+        p.accel = sky.Skyaccel;
+        p.accelTime = sky.SkyaccelTime;
+        p.decel = sky.Skydecel;
+        p.decelTime = sky.SkydecelTime;
+        p.moveDuration = sky.SkymoveDuration;
+
+        // S 型
+        p.sinEnabled = sky.SkysinEnabled;
+        p.sinAmplitude = sky.SkysinAmplitude;
+        p.sinFrequency = sky.SkysinFrequency;
+
+        // 抛物线
+        p.parabolaEnabled = sky.SkyparabolaEnabled;
+        p.gravityScale = sky.SkygravityScale;
+        p.bounceCoefficient = sky.SkybounceCoefficient;
+        p.bounceEnergyMode = sky.SkybounceEnergyMode;
+        p.bounceDecayFactor = sky.SkybounceDecayFactor;
+        p.parabolaApexHeight = sky.SkyparabolaApexHeight;
+        p.bounceEndVyThreshold = sky.SkybounceEndVyThreshold;
+
+        // 跟踪
+        p.homingEnabled = sky.SkyhomingEnabled;
+        p.homingFrequency = sky.SkyhomingFrequency;
+        p.homingStrength = sky.SkyhomingStrength;
+
+        // 半径旋转
+        p.orbitEnabled = sky.SkyorbitEnabled;
+        p.orbitRadius = sky.SkyorbitRadius;
+        p.orbitAngular = sky.SkyorbitAngular;
+        p.orbitSweepSpeedDeg = sky.SkyorbitSweepSpeedDeg;
+
+        // 回旋镖
+        p.boomerangEnabled = sky.SkyboomerangEnabled;
+        p.boomerangOutMaxDistance = sky.SkyboomerangOutMaxDistance;
+        p.boomerangApexStopTime = sky.SkyboomerangApexStopTime;
+        p.boomerangBackUniformSpeed = sky.SkyboomerangBackUniformSpeed;
+        p.boomerangBackUniformTime = sky.SkyboomerangBackUniformTime;
+        p.boomerangBackAccel = sky.SkyboomerangBackAccel;
+        p.boomerangBackAccelTime = sky.SkyboomerangBackAccelTime;
+        p.boomerangBackDecel = sky.SkyboomerangBackDecel;
+        p.boomerangBackDecelTime = sky.SkyboomerangBackDecelTime;
+
+        return p;
+    }
+
 
     // 递归设层小工具
     private void SetLayerRecursively(GameObject go, int layer)
@@ -2805,10 +2891,36 @@ public partial class MonsterController : MonoBehaviour
         {
             if (airDisc != null)
             {
-                // 空中目前仅显示发现三档辅助线；暂不显示攻击圈
+                // 空中发现三档圈
                 Gizmos.color = new Color(1f, 0.3f, 0.3f); DrawCircleXY(pos, airDisc.findRange);      // follow
                 Gizmos.color = new Color(0.9f, 0.9f, 0.9f); DrawCircleXY(pos, airDisc.reverseRange);   // retreat
                 Gizmos.color = new Color(0.2f, 0.2f, 0.2f); DrawCircleXY(pos, airDisc.backRange);      // backstep
+
+                // 追加：空中攻击触发范围（仅在空中独占时显示）
+                if (config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)
+                {
+                    float meleeMax = 0f, rangedMax = 0f;
+                    var sky = airDisc.skyAttacks;
+                    if (sky != null && sky.Count > 0)
+                    {
+                        foreach (var a in sky)
+                        {
+                            if (a == null) continue;
+                            meleeMax = Mathf.Max(meleeMax, Mathf.Max(0f, a.SkyattackMeleeRange));
+                            rangedMax = Mathf.Max(rangedMax, Mathf.Max(0f, a.SkyattackRangedRange));
+                        }
+                    }
+                    if (meleeMax > 0f)
+                    {
+                        Gizmos.color = Color.green;
+                        DrawCircleXY(pos, meleeMax);
+                    }
+                    if (rangedMax > 0f)
+                    {
+                        Gizmos.color = Color.blue;
+                        DrawCircleXY(pos, rangedMax);
+                    }
+                }
             }
         }
     }
@@ -3090,6 +3202,107 @@ public partial class MonsterController : MonoBehaviour
         if (anchor == null) anchor = transform;
 
         PlayEffect(activeAttack.attackEffectPrefab, anchor);
+    }
+
+    // ===== 空中发现攻击事件入口（Sky Attack） =====
+    public void OnFxSkyAttack()
+    {
+        // 仅在空中独占 + 空中发现攻击期间生效
+        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (_activeSkyAttack == null) return;
+
+        var prefab = _activeSkyAttack.SkyattackEffectPrefab;
+        if (!prefab) return;
+
+        // 释放点路径：SkyattackSpawnChildPath（参考地面逻辑）
+        Transform anchor = null;
+        if (!string.IsNullOrEmpty(_activeSkyAttack.SkyattackSpawnChildPath))
+        {
+            string rawPath = _activeSkyAttack.SkyattackSpawnChildPath.Trim();
+            string rootName = transform.name;
+            if (rawPath.StartsWith(rootName + "/"))
+                rawPath = rawPath.Substring(rootName.Length + 1);
+            if (rawPath.StartsWith("/"))
+                rawPath = rawPath.Substring(1);
+            var t = transform.Find(rawPath);
+            if (t != null) anchor = t;
+        }
+        if (anchor == null) anchor = transform;
+
+        PlayEffect(prefab, anchor);
+    }
+
+    public void OnSkyAttackAnimationStart()
+    {
+        // 空中近战命中体启用
+        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (_activeSkyAttack == null) return;
+
+        var hit = ResolveHitboxCollider(_activeSkyAttack.meleeHitboxChildPath);
+        if (hit) hit.enabled = true;
+    }
+
+    public void OnSkyAttackAnimationEnd()
+    {
+        // 空中近战命中体关闭
+        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (_activeSkyAttack == null) return;
+
+        var hit = ResolveHitboxCollider(_activeSkyAttack.meleeHitboxChildPath);
+        if (hit) hit.enabled = false;
+    }
+
+    public void OnFxSkyAttackFar()
+    {
+        // 空中远程攻击 FX（动画事件）
+        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (_activeSkyAttack == null) return;
+
+        var prefab = _activeSkyAttack.SkyattackFarEffectPrefab;
+        if (!prefab) return;
+
+        Transform anchor = null;
+        if (!string.IsNullOrEmpty(_activeSkyAttack.SkyattackFarSpawnChildPath))
+        {
+            string rawPath = _activeSkyAttack.SkyattackFarSpawnChildPath.Trim();
+            string rootName = transform.name;
+            if (rawPath.StartsWith(rootName + "/"))
+                rawPath = rawPath.Substring(rootName.Length + 1);
+            if (rawPath.StartsWith("/"))
+                rawPath = rawPath.Substring(1);
+            var t = transform.Find(rawPath);
+            if (t != null) anchor = t;
+        }
+        if (anchor == null) anchor = transform;
+
+        PlayEffect(prefab, anchor);
+    }
+
+    public void OnSkyAttackFarFire()
+    {
+        // 空中远程攻击发射飞行物（动画事件）
+        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (_activeSkyAttack == null) return;
+
+        Transform spawn = null;
+        if (!string.IsNullOrEmpty(_activeSkyAttack.SkyattackFarSpawnChildPath))
+        {
+            string rawPath = _activeSkyAttack.SkyattackFarSpawnChildPath.Trim();
+            string rootName = transform.name;
+            if (rawPath.StartsWith(rootName + "/"))
+                rawPath = rawPath.Substring(rootName.Length + 1);
+            if (rawPath.StartsWith("/"))
+                rawPath = rawPath.Substring(1);
+            var t = transform.Find(rawPath);
+            if (t != null) spawn = t;
+        }
+        if (spawn == null) spawn = transform;
+
+        var skyProj = _activeSkyAttack.Skyprojectile;
+        if (skyProj == null) return;
+
+        var projCfg = MapSkyProjectileToRuntime(skyProj);
+        StartCoroutine(SpawnBurstProjectiles(spawn, projCfg));
     }
 
     public void OnAttackAnimationStart()

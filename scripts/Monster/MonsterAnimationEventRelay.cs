@@ -142,4 +142,35 @@ public class MonsterAnimationEventRelay : MonoBehaviour
         if (debugEvents) Debug.Log("[Relay] skyfindrestEffectPrefab()");
         controller?.OnFxSkyFindRest();
     }
+
+    // ===== 空中发现攻击事件（新增） =====
+    public void skyattackEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] skyattackEffectPrefab()");
+        controller?.OnFxSkyAttack();
+    }
+
+    public void skyattackAnimationstart()
+    {
+        if (debugEvents) Debug.Log("[Relay] skyattackAnimationstart()");
+        controller?.OnSkyAttackAnimationStart();
+    }
+
+    public void skyattackAnimationend()
+    {
+        if (debugEvents) Debug.Log("[Relay] skyattackAnimationend()");
+        controller?.OnSkyAttackAnimationEnd();
+    }
+
+    public void skyattackFarEffectPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] skyattackFarEffectPrefab()");
+        controller?.OnFxSkyAttackFar();
+    }
+
+    public void skyattackFarFire()
+    {
+        if (debugEvents) Debug.Log("[Relay] skyattackFarFire()");
+        controller?.OnSkyAttackFarFire();
+    }
 }

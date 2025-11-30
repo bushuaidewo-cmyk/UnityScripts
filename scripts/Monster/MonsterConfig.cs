@@ -143,9 +143,14 @@ public class AirDiscoveryConfig
     [Tooltip("倒退距离（Gizmos:黑）：当玩家距离小于此值时，进入倒退（Backstep）状态")]
     public float backRange = 2f;
 
+    // 空中发现：撞到场景时是否反弹（true=按法线反射继续运动；false=贴边停止，避免抖动）
+    public bool sceneBounceOnHit = true;
+
+    [Header("后退屏蔽最小时间")]
     [Tooltip("后退检测周期性屏蔽-最小随机时间（秒）。用于让怪物在后退和不后退之间切换，防止一直后退。")]
     public float backDCTMin = 0f;
 
+    [Header("后退屏蔽最大时间")]
     [Tooltip("后退检测周期性屏蔽-最大随机时间（秒）。设置为0则不启用屏蔽功能。")]
     public float backDCTMax = 0f;
 
@@ -170,6 +175,13 @@ public class AirDiscoveryConfig
     [Header("随机播放空中发现动作")]
     public bool findRandomOrder = false;
     public List<AirDiscoveryElement> elements = new List<AirDiscoveryElement>();
+
+    // ================== 空中发现攻击 (Sky) ==================
+    [Tooltip("勾选：空中发现攻击按随机顺序轮询；不勾选：按列表顺序循环")]
+    public bool skyattacksRandomOrder = false;
+
+    [Tooltip("空中发现攻击条目列表 (仅空中独占时生效)")]
+    public List<AirAttackEvent> skyAttacks = new List<AirAttackEvent>(); 
 }
 
 [System.Serializable]
@@ -177,9 +189,153 @@ public class AirDiscoveryElement
 {
     [Header("Follow (跟踪阶段参数)")]
     public AirMoveParams follow;
-
     [Header("Backstep/Retreat (后退/倒退阶段参数)")]
     public AirMoveParams backstep;
+}
+
+// ================== 空中发现攻击条目 & 飞行物配置 ==================
+[System.Serializable]
+public class SkyProjectileConfig
+{
+    // 发射队列
+    [Header("发射队列")]
+    public int SkycountPerBurst = 1;
+    public float SkyintraBurstInterval = 0f;
+    public float SkylifeTime = 5f;
+
+    // 扇形分布
+    [Header("扇形分布")]
+    public float SkyspreadAngle = 0f;
+    public bool SkyspreadUniform = true;
+
+    // 表现资源
+    [Header("表现资源")]
+    public string SkyFlygunAnimation;
+    public GameObject SkyFlygunEffectPrefab;
+
+    // 自身旋转
+    
+    public bool SkyselfRotate = false;
+    public bool SkyselfRotateX = false;
+    public bool SkyselfRotateY = false;
+    public bool SkyselfRotateZ = true;
+    public float SkyselfRotateSpeedDeg = 360f;
+
+    // 沿路径自动朝向（若自身旋转启用则失效）
+    public bool SkyfaceAlongPath = true;
+
+    // 发射朝向
+    public SpawnAimMode SkyspawnAim = SpawnAimMode.TowardsPlayer;
+
+    // 爆炸表现
+    [Header("爆炸表现")]
+    public float Skyradius = 1f;
+    public float Skyduration = 0.8f;
+    public float Skyinterval = 0.2f;
+    public string SkyFlygunBoomAnimation;
+    public GameObject SkyFlygunBoomEffectPrefab;
+
+    // 直线移动
+    
+    public bool SkylinearEnabled = true;
+    public float Skyspeed = 6f;
+    public float Skyaccel = 0f;
+    public float SkyaccelTime = 0f;
+    public float Skydecel = 0f;
+    public float SkydecelTime = 0f;
+    public float SkymoveDuration = 0f;
+
+    // S 型侧向
+    
+    public bool SkysinEnabled = false;
+    public float SkysinAmplitude = 0.5f;
+    public float SkysinFrequency = 3f;
+
+    // 抛物线
+   
+    public bool SkyparabolaEnabled = false;
+    public float SkygravityScale = 1f;
+    public float SkybounceCoefficient = 0f;
+    public BounceEnergyMode SkybounceEnergyMode = BounceEnergyMode.Constant;
+    public float SkybounceDecayFactor = 1f;
+    public float SkyparabolaApexHeight = 0f;
+    public float SkybounceEndVyThreshold = 0.05f;
+
+    // 跟踪导弹
+    
+    public bool SkyhomingEnabled = false;
+    public float SkyhomingFrequency = 0f;
+    [Range(0f, 1f)] public float SkyhomingStrength = 1f;
+
+    // 半径旋转
+    
+    public bool SkyorbitEnabled = false;
+    public float SkyorbitRadius = 0f;
+    public float SkyorbitAngular = 360f;
+    public float SkyorbitSweepSpeedDeg = 360f;
+
+    // 回旋镖
+   
+    public bool SkyboomerangEnabled = false;
+    public float SkyboomerangOutMaxDistance = 0f;
+    public float SkyboomerangApexStopTime = 0f;
+    public float SkyboomerangBackUniformSpeed = 0f;
+    public float SkyboomerangBackUniformTime = 0f;
+    public float SkyboomerangBackAccel = 0f;
+    public float SkyboomerangBackAccelTime = 0f;
+    public float SkyboomerangBackDecel = 0f;
+    public float SkyboomerangBackDecelTime = 0f;
+}
+
+public enum SkyAttackMotionMode { None = 0, SkyfollowmoveXY = 1 }
+
+[System.Serializable]
+public class AirAttackEvent
+{
+    // 通用时序
+    public float SkyattackDuration = 0.8f;
+    public int SkyrepeatedHitsCount = 1;
+    public float SkyattackRestMin = 0.8f;
+    public float SkyattackRestMax = 1.0f;
+
+    // 近战
+    public float SkyattackMeleeRange = 1.0f;
+    public string SkyattackAnimation;
+    public GameObject SkyattackEffectPrefab;
+    public string SkyattackSpawnChildPath;
+    public string meleeHitboxChildPath; // 复用命中体路径
+    // 关键帧事件名：SkyattackAnimationstart / SkyattackAnimationend（仅命名规范，逻辑层不存储）
+
+    // 远程
+    public float SkyattackRangedRange = 6.0f;
+    public string SkyattackFarAnimation;
+    public GameObject SkyattackFarEffectPrefab;
+    public string SkyattackFarSpawnChildPath;
+    public SkyProjectileConfig Skyprojectile;
+
+    // 攻击叠加运动模式
+    [Header("攻击叠加运动模式")]
+    public SkyAttackMotionMode SkyattackMotionMode = SkyAttackMotionMode.None;
+
+    // 叠加移动（近战）
+    public float SkyattackmoveSpeedMelee = 0f;
+    public float SkyattackaccelerationMelee = 0f;
+    public float SkyattackaccelerationTimeMelee = 0f;
+    public float SkyattackdecelerationMelee = 0f;
+    public float SkyattackdecelerationTimeMelee = 0f;
+    public float SkyattackmoveDurationMelee = 0f;
+
+    // 叠加移动（远程）
+    public float SkyattackmoveSpeedRanged = 0f;
+    public float SkyattackaccelerationRanged = 0f;
+    public float SkyattackaccelerationTimeRanged = 0f;
+    public float SkyattackdecelerationRanged = 0f;
+    public float SkyattackdecelerationTimeRanged = 0f;
+    public float SkyattackmoveDurationRanged = 0f;
+
+    // 攻击期间方向追踪（可选扩展）
+    public float SkyattackHomingFrequency = 0f;
+    [Range(0f, 1f)] public float SkyattackHomingStrength = 0f;
 }
 
 [System.Serializable]
@@ -385,13 +541,15 @@ public class DiscoveryV2Config
     [Tooltip("倒退距离（<=该距离进入“倒退/回拉”带）")]
     public float backRange = 1.5f;
 
-    
+    [Header("后退屏蔽最小时间")]
     [Tooltip("周期内单个状态（正常/屏蔽）的随机持续时间下限（秒）。和上限均为0则关闭此功能。")]
     public float backDCTMin = 0f;
+
+    [Header("后退屏蔽最大时间")]
     [Tooltip("周期内单个状态（正常/屏蔽）的随机持续时间上限（秒）。")]
     public float backDCTMax = 0f;
 
-    [Header("Back 档额外选项")]
+    [Header("撞墙时候自动前跳")]
     [Tooltip("勾选后：处于 Retreat/Backstep 且靠近墙或悬崖时，自动向玩家方向跳跃（使用事件的 JumpSet）。")]
     public bool enableBackAutoJumpOnObstacle = false;
 
@@ -623,7 +781,7 @@ public class AttackEventV2
     [Tooltip("攻击类型：近战 或 远程（可保留；运行时会根据距离决定执行模式）")]
     public AttackType attackType = AttackType.Melee;
 
-    [Header("通用时序")]
+    
     [Tooltip("本次攻击的时间窗口（秒）。在该时间内可循环播放攻击动画并触发效果。")]
     public float attackDuration = 0.8f;
 
@@ -800,7 +958,7 @@ public class ProjectileConfig
     public GameObject FlygunBoomEffectPrefab;
 
     // ========== 直线（基线推进） ==========
-    [Header("直线移动")]
+    
     [Tooltip("启用直线基线推进（speed/accel等）。关闭后不使用直线推进（回旋镖返程不受影响）。")]
     public bool linearEnabled = true;
 
@@ -818,7 +976,7 @@ public class ProjectileConfig
     public float moveDuration = 0f;
 
     // ========== S 型直线（侧向正弦） ==========
-    [Header("S 型直线（侧向正弦）")]
+    
     [Tooltip("启用 S 型侧向偏移")]
     public bool sinEnabled = false;
 
@@ -828,7 +986,7 @@ public class ProjectileConfig
     public float sinFrequency = 3f;
 
     // ProjectileConfig 内“抛物线（重力）”区块追加字段
-    [Header("抛物线（重力）")]
+    
     [Tooltip("启用抛物线重力效果")]
     public bool parabolaEnabled = false;
 
@@ -851,7 +1009,7 @@ public class ProjectileConfig
     public float parabolaApexHeight = 0f;
 
     // ========== 跟踪导弹 ==========
-    [Header("跟踪导弹")]
+    
     [Tooltip("启用跟踪：按频率刷新朝向目标（频率低更棱角，频率高更顺滑）")]
     public bool homingEnabled = false;
 
@@ -863,7 +1021,7 @@ public class ProjectileConfig
     public float homingStrength = 1f;   // 0=不跟踪，1=最强跟踪
 
     // 半径旋转
-    [Header("半径旋转（相对载体，PathTangent 空间）")]
+    
     [Tooltip("启用半径旋转：相对载体按半径做圆周偏移")]
     public bool orbitEnabled = false;
 
@@ -877,7 +1035,7 @@ public class ProjectileConfig
     public float orbitSweepSpeedDeg = 360f;
 
     // ========== 回旋镖 ==========
-    [Header("回旋镖")]
+    
     [Tooltip("启用回旋镖：飞到最远距离 -> 停顿 -> 返回起点/发射者")]
     public bool boomerangEnabled = false;
 

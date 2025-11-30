@@ -73,6 +73,33 @@ public partial class MonsterController : MonoBehaviour
     private float _airDiscDecelTimer = 0f;
     private float _airDiscRestTimer = 0f;
 
+    // ===== 空中发现攻击运行态字段（新增，不影响地面） =====
+    private List<int> _skyAttackOrder = null;
+    private int _skyAttackOrderPos = 0;
+    private bool _skyInAttack = false;
+    private AirAttackEvent _activeSkyAttack = null;
+    private float _skyAttackTimer = 0f;
+    private float _skyAttackRestCooldown = 0f;
+    private AttackType _skyAttackExecType = AttackType.Melee;
+    private int _skyAttackCyclesDone = 0;
+    private int _skyAttackCyclesPlanned = 1;
+    private bool _skyRangedFiredThisAttack = false;
+    private bool _skyRangedFiredInCycle = false;
+    private PatrolMovement _skyAttackMoveRuntime = null;
+   
+    // 到达玩家近距离后，本次攻击期间停止跟踪移动的标记
+    private bool _skyAttackReachedPlayer = false;
+
+    // 攻击跟踪频率计时器（Hz -> 秒）
+    private float _skyAttackHomingTimer = 0f;
+
+    // 空中攻击范围原始缓存（休息期置零后恢复）
+    private float _skyMeleeRangeOriginal = -1f;
+    private float _skyRangedRangeOriginal = -1f;
+
+    // 空中攻击近距离面向锁定符号：进入攻击确定，扩展死区内保持以避免左右闪抖
+    private int _skyAttackFaceLockSign = 0;
+
     // 辅助获取当前使用的参数组
     private AirMoveParams GetCurrentAirMoveParams()
     {
@@ -162,6 +189,14 @@ public partial class MonsterController : MonoBehaviour
         // 超出发现范围：退出空中发现 → 回到空中巡逻
         if (dist > discCfg.findRange)
         {
+            // 攻击中断（如果正在空中攻击）
+            if (_skyInAttack)
+            {
+                _skyInAttack = false;
+                _skyAttackMoveRuntime = null;
+                _activeSkyAttack = null;
+            }
+
             state = MonsterState.Air;
 
             // 离开发现：恢复可能被压制的范围（若之前缓存）
@@ -336,6 +371,15 @@ public partial class MonsterController : MonoBehaviour
                 if (instantAccel)
                     _airDiscCurrentSpeed = Mathf.Max(0f, p.moveSpeed);
             }
+        }
+
+        // ========== 空中发现攻击判定与更新 ==========
+        HandleSkyAttack(dist, myPos, targetPos, discCfg);
+
+        if (_skyInAttack)
+        {
+            UpdateSkyAttack(myPos, targetPos);
+            return; // 攻击期间不执行后续“空中发现移动”推进
         }
 
         // ========== 7. 物理与时间推进 ==========
@@ -607,31 +651,58 @@ public partial class MonsterController : MonoBehaviour
         if (col != null && step.sqrMagnitude > 0f)
         {
             var filter = new ContactFilter2D { useTriggers = false };
-            filter.SetLayerMask(groundLayer);
+
+
             RaycastHit2D[] hits = new RaycastHit2D[1];
             if (col.Cast(step.normalized, filter, hits, step.magnitude) > 0)
+
             {
                 var hit = hits[0];
                 if (!hit.collider.isTrigger && !hit.collider.CompareTag("Player"))
                 {
-                    if (_airDiscState == AirDiscState.Follow || _airDiscState == AirDiscState.Backstep)
+                    // 允许推进距离与剩余距离
+                    const float SKIN = 0.005f;
+                    float allow = Mathf.Max(0f, hit.distance - SKIN);
+                    float total = step.magnitude;
+                    Vector2 inDir = (total > 0f) ? step.normalized
+                                                 : ((_airDiscVel.sqrMagnitude > 0.0001f) ? _airDiscVel.normalized : wantDir);
+
+                    if (cfg.sceneBounceOnHit)
                     {
-                        Vector2 vDir = (_airDiscVel.sqrMagnitude > 0.0001f) ? _airDiscVel.normalized : wantDir;
-                        Vector2 r = Vector2.Reflect(vDir, hit.normal);
-                        if (r.sqrMagnitude < 0.0001f) r = -vDir;
-                        _airDiscVel = r * _airDiscCurrentSpeed;
-                        step = _airDiscVel * dt;
+                        // 反弹：沿反射方向把剩余位移补走，并微偏离表面避免下一帧再次命中
+                        Vector2 baseDir = (_airDiscState == AirDiscState.Retreat && _airDiscVel.sqrMagnitude > 0.0001f)
+                                          ? _airDiscVel.normalized
+                                          : inDir;
+
+                        Vector2 rDir = Vector2.Reflect(baseDir, hit.normal);
+                        if (rDir.sqrMagnitude < 0.0001f) rDir = -baseDir;
+                        rDir = rDir.normalized;
+
+                        float rem = Mathf.Max(0f, total - allow);
+                        float speed = Mathf.Max(_airDiscVel.magnitude, _airDiscCurrentSpeed);
+
+                        // 更新发现阶段“主速度”为反弹方向
+                        _airDiscVel = rDir * speed;
+
+                        // 本帧位移 = 贴到表面 + 剩余沿反弹方向 + 极小分离
+                        step = inDir * allow + rDir * rem + rDir * 0.01f;
+
+                        // 保留你原有的 lastDir 更新语义
                         if (_airDiscState == AirDiscState.Follow)
-                            _airDiscLastDir = vDir;
+                            _airDiscLastDir = baseDir;
+                        else if (_airDiscState == AirDiscState.Retreat)
+                            _airDiscLastDir = -((_airDiscVel.sqrMagnitude > 0.0001f) ? _airDiscVel.normalized : _airDiscLastDir);
                     }
-                    else if (_airDiscState == AirDiscState.Retreat)
+                    else
                     {
-                        _airDiscVel = Vector2.Reflect(_airDiscVel, hit.normal);
-                        _airDiscLastDir = -(_airDiscVel.sqrMagnitude > 0.0001f ? _airDiscVel.normalized : _airDiscLastDir);
-                        step = _airDiscVel * dt;
+                        // 贴边停止：推进到允许距离并清零速度，避免持续反弹抖动
+                        step = (allow > 0f) ? inDir * allow : Vector2.zero;
+                        _airDiscVel = Vector2.zero;
+                        _airDiscCurrentSpeed = 0f;
                     }
                 }
             }
+
         }
 
         // ===== 9. 应用位移（固定步） =====
@@ -648,9 +719,439 @@ public partial class MonsterController : MonoBehaviour
         var discCfg = config?.airStageConfig?.discovery;
         if (discCfg == null) return;
 
+        // 攻击期间跳过位移物理（空中攻击不使用四相物理）
+        if (_skyInAttack) return;
+
         Vector2 myPos = GetMonsterDistPos();
         Vector2 targetPos = GetPlayerDistPos();
         AirDiscoveryPhysicsStep(myPos, targetPos, discCfg);
+    }
+
+    // ---------- 新增：空中攻击运行态方法 ----------
+
+    private void HandleSkyAttack(float dist, Vector2 myPos, Vector2 targetPos, AirDiscoveryConfig cfg)
+    {
+        // 条件：空中独占且配置存在
+        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (cfg == null || cfg.skyAttacks == null || cfg.skyAttacks.Count == 0) return;
+        if (_skyInAttack) return; // 正在攻击
+        if (_skyAttackRestCooldown > 0f)
+        {
+            _skyAttackRestCooldown -= Time.deltaTime;
+
+            // 冷却刚结束：恢复当前攻击配置的原始范围
+            if (_skyAttackRestCooldown <= 0f)
+            {
+                // 找到当前要使用的攻击配置（按顺序位置），这里恢复缓存到配置
+                if (_skyMeleeRangeOriginal >= 0f || _skyRangedRangeOriginal >= 0f)
+                {
+                    // 恢复到最近一次缓存到的攻击事件（若你的攻击是多个事件循环，这里使用下次将要使用的事件在开始前恢复）
+                    // 简单就地恢复：如果队列存在下次攻击索引，则恢复其范围；否则恢复上次缓存对象（如果仍引用）
+                    // 为最小改动：直接在 discovery.skyAttacks[_skyAttackOrder[_skyAttackOrderPos]] 上恢复
+                    var discCfgLocal = config?.airStageConfig?.discovery;
+                    if (discCfgLocal != null && discCfgLocal.skyAttacks != null && discCfgLocal.skyAttacks.Count > 0)
+                    {
+                        int idxRestore = (_skyAttackOrder != null && _skyAttackOrder.Count > 0) ? _skyAttackOrder[_skyAttackOrderPos] : 0;
+                        var restoreAttack = discCfgLocal.skyAttacks[Mathf.Clamp(idxRestore, 0, discCfgLocal.skyAttacks.Count - 1)];
+                        if (restoreAttack != null)
+                        {
+                            if (_skyMeleeRangeOriginal >= 0f) restoreAttack.SkyattackMeleeRange = _skyMeleeRangeOriginal;
+                            if (_skyRangedRangeOriginal >= 0f) restoreAttack.SkyattackRangedRange = _skyRangedRangeOriginal;
+                        }
+                    }
+                    _skyMeleeRangeOriginal = -1f;
+                    _skyRangedRangeOriginal = -1f;
+                }
+            }
+
+            // 冷却期仍未结束：不发起新攻击
+            if (_skyAttackRestCooldown > 0f)
+                return;
+        }
+
+        BuildSkyAttackOrderIfNeeded(cfg);
+
+        int n = _skyAttackOrder.Count;
+        if (n == 0) return;
+
+        int startPos = _skyAttackOrderPos;
+        for (int step = 0; step < n; step++)
+        {
+            int idx = _skyAttackOrder[_skyAttackOrderPos];
+            var a = cfg.skyAttacks[idx];
+            bool meleeReady = a != null &&
+                              a.SkyattackMeleeRange > 0f &&
+                              dist <= a.SkyattackMeleeRange &&
+                              !string.IsNullOrEmpty(a.SkyattackAnimation) &&
+                              a.SkyattackEffectPrefab != null;
+
+            bool rangedReady = a != null &&
+                               a.SkyattackRangedRange > 0f &&
+                               dist <= a.SkyattackRangedRange &&
+                               !string.IsNullOrEmpty(a.SkyattackFarAnimation) &&
+                               a.SkyattackFarEffectPrefab != null &&
+                               a.Skyprojectile != null;
+
+            if (meleeReady || rangedReady)
+            {
+                StartSkyAttack(a, meleeReady ? AttackType.Melee : AttackType.Ranged, myPos, targetPos, cfg);
+                _skyAttackOrderPos = (_skyAttackOrderPos + 1) % n;
+                if (_skyAttackOrderPos == 0 && cfg.skyattacksRandomOrder && n > 1)
+                    Shuffle(_skyAttackOrder);
+                return;
+            }
+            _skyAttackOrderPos = (_skyAttackOrderPos + 1) % n;
+        }
+    }
+
+    private void StartSkyAttack(AirAttackEvent a, AttackType execType, Vector2 myPos, Vector2 targetPos, AirDiscoveryConfig cfg)
+    {
+        _activeSkyAttack = a;
+        _skyAttackExecType = execType;
+        _skyInAttack = true;
+
+        _skyAttackTimer = Mathf.Max(0.01f, a.SkyattackDuration);
+        _skyAttackCyclesPlanned = Mathf.Max(1, a.SkyrepeatedHitsCount);
+        _skyAttackCyclesDone = 0;
+        _skyRangedFiredThisAttack = false;
+        _skyRangedFiredInCycle = false;
+
+        // 开始攻击：复位“已到达近距离”标记，由 UpdateSkyAttack 在推进过程中再判定
+        _skyAttackReachedPlayer = false;
+
+        // Homing 频率计时器重置：首帧即可更新一次
+        _skyAttackHomingTimer = 0f;
+
+        // 锁面向
+        int faceSign = (targetPos.x - myPos.x >= 0f) ? +1 : -1;
+
+        // 进入空中攻击：取消发现阶段的面向驻留，避免因为驻留死区仍保持背对玩家
+        _airFaceFlipDwellTimer = 0f;
+
+        // 初始化攻击面向锁定符号（用于近距离扩展死区防抖）
+        _skyAttackFaceLockSign = faceSign;
+
+        ForceFaceSign(faceSign);
+
+        // 播动画
+        if (_skyAttackExecType == AttackType.Melee && !string.IsNullOrEmpty(a.SkyattackAnimation))
+        {
+            animator.CrossFadeInFixedTime(a.SkyattackAnimation, 0f, 0, 0f);
+            animator.Update(0f);
+        }
+        else if (_skyAttackExecType == AttackType.Ranged && !string.IsNullOrEmpty(a.SkyattackFarAnimation))
+        {
+            animator.CrossFadeInFixedTime(a.SkyattackFarAnimation, 0f, 0, 0f);
+            animator.Update(0f);
+        }
+
+        // 构建叠加移动
+        _skyAttackMoveRuntime = null;
+
+        if (a.SkyattackMotionMode == SkyAttackMotionMode.SkyfollowmoveXY)
+        {
+            float spd = (_skyAttackExecType == AttackType.Melee) ? a.SkyattackmoveSpeedMelee : a.SkyattackmoveSpeedRanged;
+            float acc = (_skyAttackExecType == AttackType.Melee) ? a.SkyattackaccelerationMelee : a.SkyattackaccelerationRanged;
+            float accT = (_skyAttackExecType == AttackType.Melee) ? a.SkyattackaccelerationTimeMelee : a.SkyattackaccelerationTimeRanged;
+            float dec = (_skyAttackExecType == AttackType.Melee) ? a.SkyattackdecelerationMelee : a.SkyattackdecelerationRanged;
+            float decT = (_skyAttackExecType == AttackType.Melee) ? a.SkyattackdecelerationTimeMelee : a.SkyattackdecelerationTimeRanged;
+            float dur = (_skyAttackExecType == AttackType.Melee) ? a.SkyattackmoveDurationMelee : a.SkyattackmoveDurationRanged;
+
+            if (spd > 0f && dur > 0f)
+            {
+                float accelTime = Mathf.Min(accT, dur);
+                float decelTime = Mathf.Min(decT, Mathf.Max(0f, dur - accelTime));
+                float cruiseTime = Mathf.Max(0f, dur - accelTime - decelTime);
+
+                _skyAttackMoveRuntime = new PatrolMovement
+                {
+                    type = MovementType.Straight,
+                    moveSpeed = spd,
+                    acceleration = acc,
+                    accelerationTime = accelTime,
+                    deceleration = dec,
+                    decelerationTime = decelTime,
+                    moveDuration = cruiseTime,
+                    restMin = 0f,
+                    restMax = 0f
+                };
+                _skyAttackMoveRuntime.rtStraightPhase = StraightPhase.None;
+            }
+        }
+    }
+
+    private void UpdateSkyAttack(Vector2 myPos, Vector2 targetPos)
+    {
+        if (!_skyInAttack || _activeSkyAttack == null) return;
+
+        // 面向锁定：使用中心点（monsterDistPoint → playerDistPoint），每帧强制朝向玩家
+        int faceSign;
+        {
+            Vector2 myC = GetMonsterDistPos();
+            Vector2 plC = GetPlayerDistPos();
+            float dxCenter = plC.x - myC.x;
+
+            // 稳定化：在水平死区内保持当前面向，死区外才转向；避免垂直攻击时左右闪烁
+            if (Mathf.Abs(dxCenter) <= faceFlipDeadZone)
+                faceSign = FacingSign();
+            else
+                faceSign = (dxCenter >= 0f) ? +1 : -1;
+
+            if (faceSign == 0) faceSign = 1;
+
+            // 攻击期不保留面向驻留，避免驻留造成反向
+            _airFaceFlipDwellTimer = 0f;
+            _skyAttackFaceLockSign = faceSign;
+
+            ForceFaceSign(faceSign);
+        }
+
+        if (_skyAttackReachedPlayer)
+        {
+            // 1. 已到达近距：只锁面向 + 停止移动，等待动画/计时结束
+            faceSign = FacingSign();
+            if (faceSign == 0) faceSign = (targetPos.x - myPos.x >= 0f) ? +1 : -1;
+            ForceFaceSign(faceSign);
+
+            rb.velocity = Vector2.zero;
+        }
+        else
+        {
+            // 2. 未到近距：在攻击中根据与玩家的水平距离对面向做“锁定死区”稳定处理
+            float dxToPlayer = targetPos.x - myPos.x;
+            float absDx = Mathf.Abs(dxToPlayer);
+
+            // 扩展死区：原死区基础上增加 0.15f，用于攻击跟踪期间锁定面向
+            float attackLockDeadZone = faceFlipDeadZone + 0.15f;
+
+            // 保险：若锁定符号未初始化（极少见），按当前玩家方向初始化
+            if (_skyAttackFaceLockSign == 0)
+                _skyAttackFaceLockSign = (dxToPlayer >= 0f) ? +1 : -1;
+
+            if (absDx <= attackLockDeadZone)
+            {
+                // 近距离：完全使用锁定面向，不随 dx 微小符号变化抖动
+                faceSign = _skyAttackFaceLockSign;
+            }
+            else
+            {
+                // 离开扩展死区：允许通过滞回逻辑稳定翻面，并更新锁定符号
+                faceSign = StabilizeFaceSign(faceSign, dxToPlayer);
+                _skyAttackFaceLockSign = faceSign;
+            }
+
+            ForceFaceSign(faceSign);
+        }
+
+        // 3. 攻击期间的叠加移动（只有在尚未到达近距且有移动配置时才推进）
+        if (_skyAttackMoveRuntime != null && !_skyAttackReachedPlayer)
+        {
+            // 3.1 先按原有 StraightTickCommon 水平推进
+            StraightTickCommon(
+                _skyAttackMoveRuntime,
+                dirSign: faceSign,
+                useWaypoints: false,
+                useMoveDirForProbes: true,
+                allowTurnOnObstacle: false,
+                stopAtCliffEdgeWhenNoTurn: true,
+                suppressTurnInAutoJumpZone: true
+            );
+
+            // 3.2 SkyfollowmoveXY：按 SkyattackHomingStrength 在水平→XY 跟踪之间插值 (Strength=0 ⇒ 水平)
+            if (_activeSkyAttack != null && _activeSkyAttack.SkyattackMotionMode == SkyAttackMotionMode.SkyfollowmoveXY)
+            {
+                float spd = Mathf.Max(0f, _skyAttackMoveRuntime.rtCurrentSpeed);
+
+                // 频率门控：freq<=0 每帧；>0 按 1/freq 秒刷新
+                float freq = Mathf.Max(0f, _activeSkyAttack.SkyattackHomingFrequency);
+                bool shouldUpdateDir = (freq <= 0f);
+                if (!shouldUpdateDir)
+                {
+                    _skyAttackHomingTimer -= Time.deltaTime;
+                    if (_skyAttackHomingTimer <= 0f)
+                    {
+                        _skyAttackHomingTimer = 1f / freq;
+                        shouldUpdateDir = true;
+                    }
+                }
+
+                if (shouldUpdateDir)
+                {
+                    // 地面阶段的作法：水平基向只根据“面向玩家”的符号，而不是速度符号
+                    int baseXSign = faceSign;
+                    Vector2 horizDir = new Vector2(baseXSign, 0f);
+
+                    Vector2 toPlayer = (targetPos - myPos);
+                    Vector2 fullDir = (toPlayer.sqrMagnitude > 0.0001f) ? toPlayer.normalized : horizDir;
+
+                    float s = Mathf.Clamp01(_activeSkyAttack.SkyattackHomingStrength);
+                    Vector2 blendedDir =
+                        (s <= 0f) ? horizDir :
+                        (s >= 1f ? fullDir : Vector2.Lerp(horizDir, fullDir, s)).normalized;
+
+                    // 玩家在脚下时的稳定窗口：完全禁止水平移动，仅按垂直方向移动
+                    var dxLocal = toPlayer.x;
+                    var dyLocal = toPlayer.y;
+
+                    // “脚下中间”判定：水平在死区内，竖直距离占优
+                    const float verticalBias = 0.25f; // Y 优先阈值（局部常量，不改配置）
+                    bool playerUnderFoot =
+                        Mathf.Abs(dxLocal) <= faceFlipDeadZone &&
+                        Mathf.Abs(dyLocal) >= verticalBias;
+
+                    if (playerUnderFoot)
+                    {
+                        // 纯上下移动，不给任何水平速度，面向只由 faceSign 控制
+                        blendedDir = new Vector2(0f, Mathf.Sign(dyLocal));
+                        rb.velocity = blendedDir.normalized * spd;
+                    }
+                    else
+                    {
+                        // 普通情况：仍按插值结果移动，但在水平死区内保持当前水平符号，避免来回翻向
+                        if (Mathf.Abs(dxLocal) <= faceFlipDeadZone && Mathf.Abs(rb.velocity.x) > 0.0001f)
+                        {
+                            float keepSign = Mathf.Sign(rb.velocity.x);
+                            blendedDir.x = keepSign;
+                        }
+
+                        rb.velocity = blendedDir.normalized * spd;
+                    }
+                }
+            }
+
+            // 3.3 到达就近阈值后：停止本次攻击期间的跟踪移动，等待下次攻击再恢复
+            float dx = targetPos.x - myPos.x;
+            float dy = targetPos.y - myPos.y;
+            float nearX = Mathf.Max(0.05f, faceFlipDeadZone); // 水平近距离阈值
+            const float nearY = 0.12f;                        // 垂直近距离阈值
+            const float nearR = 0.25f;                        // 综合半径阈值（XY 模式）
+
+            if (!_skyAttackReachedPlayer)
+            {
+                bool reached =
+                    (_activeSkyAttack.SkyattackMotionMode == SkyAttackMotionMode.SkyfollowmoveXY)
+                        ? ((Mathf.Abs(dx) <= nearX && Mathf.Abs(dy) <= nearY) ||
+                           ((targetPos - myPos).sqrMagnitude <= (nearR * nearR)))
+                        : (Mathf.Abs(dx) <= nearX);
+
+                if (reached)
+                {
+                    _skyAttackReachedPlayer = true;
+                    _skyAttackMoveRuntime = null;    // 停止后续 StraightTickCommon 推进
+                    rb.velocity = Vector2.zero;      // 彻底静止，避免残余微速导致抖动
+                }
+            }
+        }
+        else
+        {
+            // 没有叠加移动配置：保持水平静止（只保留可能的竖直速度）
+            rb.velocity = new Vector2(0f, rb.velocity.y);
+        }
+
+        // 攻击中跟踪方向插值（仅当叠加移动模式启用 & 未到达近距离）
+        if (!_skyAttackReachedPlayer &&
+            _skyAttackMoveRuntime != null &&
+            _activeSkyAttack.SkyattackMotionMode != SkyAttackMotionMode.SkyfollowmoveXY &&
+            _activeSkyAttack.SkyattackHomingFrequency > 0f &&
+            _activeSkyAttack.SkyattackHomingStrength > 0f)
+        {
+            {
+                // 简化：每帧粗略插值（改用当前速度的二维方向作为插值基准）
+                Vector2 toPlayer = (targetPos - myPos);
+                if (toPlayer.sqrMagnitude > 0.0001f)
+                {
+                    toPlayer.Normalize();
+                    float s = _activeSkyAttack.SkyattackHomingStrength;
+
+                    // 用当前速度方向（二维）作为基准，若速度几乎为0则直接取指向玩家
+                    Vector2 curVel = rb.velocity;
+                    Vector2 curDir = (curVel.sqrMagnitude > 0.0001f) ? curVel.normalized : toPlayer;
+
+                    Vector2 newDir = Vector2.Lerp(curDir, toPlayer, s).normalized;
+
+                    // 维持现有速度幅值，避免插值阶段突然加速/减速
+                    float speedMag = curVel.magnitude;
+
+                    // 近距离抖动抑制：
+                    // 水平在 faceFlipDeadZone 内：保持当前水平符号的速度，不随微小位置改变翻向
+                    var dxLocal = toPlayer.x; // 原 dxToPlayer 未在此作用域声明，改为局部 dxLocal
+                    if (Mathf.Abs(dxLocal) <= faceFlipDeadZone && Mathf.Abs(curVel.x) > 0.0001f)
+                        newDir.x = Mathf.Sign(curVel.x);
+
+                    // 垂直在很小阈值内：清零竖直分量，避免上下抖动
+                    float dyToPlayer = targetPos.y - myPos.y;
+                    if (Mathf.Abs(dyToPlayer) <= 0.10f)
+                        newDir.y = 0f;
+
+                    rb.velocity = newDir.normalized * speedMag;
+                }
+            }
+        }
+
+        // 计时与循环
+        _skyAttackTimer -= Time.deltaTime;
+        var info = animator.GetCurrentAnimatorStateInfo(0);
+
+        string animName = (_skyAttackExecType == AttackType.Melee) ? _activeSkyAttack.SkyattackAnimation : _activeSkyAttack.SkyattackFarAnimation;
+        if (!string.IsNullOrEmpty(animName) && info.IsName(animName) && info.normalizedTime >= 1f)
+        {
+            if (_skyAttackCyclesDone < _skyAttackCyclesPlanned - 1 && _skyAttackTimer > 0f)
+            {
+                _skyAttackCyclesDone++;
+                animator.Play(animName, 0, 0f);
+                animator.Update(0f);
+                _skyRangedFiredInCycle = false;
+            }
+        }
+
+        if (_skyAttackTimer <= 0f)
+        {
+            EndSkyAttack();
+        }
+    }
+
+    private void EndSkyAttack()
+    {
+        if (!_skyInAttack) return;
+        _skyInAttack = false;
+        _skyAttackMoveRuntime = null;
+
+        // 攻击结束：复位“已到达近距离”标记，避免下个攻击周期卡住
+        _skyAttackReachedPlayer = false;
+
+        // 清除面向锁定符号
+        _skyAttackFaceLockSign = 0;
+
+        // 在休息期间将当前攻击的检查范围设为 0（并缓存原值）
+        if (_activeSkyAttack != null)
+        {
+            if (_skyMeleeRangeOriginal < 0f) _skyMeleeRangeOriginal = _activeSkyAttack.SkyattackMeleeRange;
+            if (_skyRangedRangeOriginal < 0f) _skyRangedRangeOriginal = _activeSkyAttack.SkyattackRangedRange;
+        }
+
+        // 休息冷却
+        float min = Mathf.Max(0f, _activeSkyAttack.SkyattackRestMin);
+        float max = Mathf.Max(min, _activeSkyAttack.SkyattackRestMax);
+
+        // 置零范围（进入休息）
+        if (_activeSkyAttack != null)
+        {
+            _activeSkyAttack.SkyattackMeleeRange = 0f;
+            _activeSkyAttack.SkyattackRangedRange = 0f;
+        }
+
+        _skyAttackRestCooldown = (max > 0f) ? Random.Range(min, max) : 0f;
+
+        _activeSkyAttack = null;
+    }
+
+    private void BuildSkyAttackOrderIfNeeded(AirDiscoveryConfig cfg)
+    {
+        if (_skyAttackOrder != null && _skyAttackOrder.Count == cfg.skyAttacks.Count) return;
+        _skyAttackOrder = new List<int>();
+        for (int i = 0; i < cfg.skyAttacks.Count; i++) _skyAttackOrder.Add(i);
+        if (cfg.skyattacksRandomOrder && _skyAttackOrder.Count > 1) Shuffle(_skyAttackOrder);
+        _skyAttackOrderPos = 0;
     }
 
     private void HandleAirDiscoveryRotation(Vector2 myPos, Vector2 targetPos, AirDiscoveryConfig cfg)
