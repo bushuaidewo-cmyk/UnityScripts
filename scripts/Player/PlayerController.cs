@@ -402,6 +402,7 @@ public class PlayerController : MonoBehaviour
 
         // 收尾
         AutoEndAirAttack();
+        AutoEndGroundAttack();
         AutoEndBackFlash_ByDistance();
         AutoExitBackFlashOnStateLeave();
 
@@ -1116,6 +1117,10 @@ public class PlayerController : MonoBehaviour
                 isDucking = true;
                 crouchReenterLockFrames = 3; // 可按需微调为 2~4
             }
+
+            // 立即应用锁存的下蹲，避免落地当帧先站立再下蹲的闪烁
+            if (isDucking) colliderDuckActive = true;
+
             // 锁存期内强制保持下蹲
             else if (crouchReenterLockFrames > 0)
             {
@@ -1156,6 +1161,10 @@ public class PlayerController : MonoBehaviour
         if (backFlashActive) CancelBackFlash();                    // 随时打断
         if (magicActive && !magicAttackPlaying) CancelMagic();
         if (magicAttackPlaying) return;
+
+        // 门禁：处于攻击主段或正在过渡时，不重新触发（防“连续两次”）
+        var st = anim.GetCurrentAnimatorStateInfo(0);
+        if (st.IsName("player_attack") || anim.IsInTransition(0)) return;
 
         groundAttackActive = true;
         anim.SetTrigger(TRIG_Attack);
@@ -1260,6 +1269,32 @@ public class PlayerController : MonoBehaviour
             airAttackAnimPlaying = false;
             if (shieldHeld && !isGrounded) shieldActiveAir = true;
         }
+    }
+
+    // 地面攻击自动收尾（防止动画事件缺失导致卡死）
+    private void AutoEndGroundAttack()
+    {
+        if (!groundAttackActive) return;
+
+        var st = anim.GetCurrentAnimatorStateInfo(0);
+        bool inGroundAtk =
+            st.IsName("player_attack") ||
+            st.IsName("player_duck_attack") ||
+            st.IsName("player_duckForward_attack");
+
+        // 仍在攻击主状态或过渡中就不收尾
+        if (inGroundAtk || anim.IsInTransition(0)) return;
+
+        // 仅当进入“攻击收尾段”且接近结束时才兜底收尾，避免中途解锁移动
+        bool inGroundAtkEnd =
+            st.IsName("player_attack_end") ||
+            st.IsName("player_duck_attack_end") ||
+            st.IsName("player_duckForward_attack_end");
+        if (!inGroundAtkEnd || st.normalizedTime < 0.95f) return;
+
+        // 已进入 End 段且即将结束：按当前姿态触发既有结束流程
+        if (isDucking) OnDuckAttackEnd();
+        else OnAttackEnd();
     }
 
     private void ForceEndAirAttack()
@@ -1450,7 +1485,9 @@ public class PlayerController : MonoBehaviour
     {
         var st = anim.GetCurrentAnimatorStateInfo(0);
 
-        if ((backFlashActive && backFlashMoving) || (magicAttackPlaying && isGrounded)) return;
+
+
+        if (backFlashActive /* 全程禁用转向 */ || (magicAttackPlaying && isGrounded)) return;
 
         if (airAttackActive || st.IsName(STATE_JumpAttack) || st.IsName(STATE_JumpDownFwdAttack)) return;
 

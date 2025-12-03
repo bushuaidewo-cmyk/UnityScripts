@@ -247,6 +247,13 @@ public partial class MonsterController : MonoBehaviour
     private float attackRestCooldown = 0f;      // 攻击休息期间屏蔽攻击检测
     private AttackEventV2 activeAttack = null;  // 当前攻击配置
     private bool rangedFiredThisAttack = false; // 远程只发一次（由关键帧触发）
+
+    // 命中/死亡运行时
+    private float currentHP;                 // 使用 config.maxHP 初始化
+    private bool inHitStun = false;         // 命中硬直中（怪物不动）
+    private float hitStunTimer = 0f;
+    private bool deathStarted = false;      // 死亡流程已触发
+
     private string activeAttackAnimName = null; // 当前攻击动画名（用于“停最后一帧”）
     private float attackAnimFreezeSpeedBackup = 1f;
     private bool attackAnimFrozen = false;
@@ -344,15 +351,15 @@ public partial class MonsterController : MonoBehaviour
                     suppressionPhaseTimer = Random.Range(dcfg.backDCTMin, dcfg.backDCTMax);
                 }
             }
-
             turnCooldown = 1f;
             EnsureActiveDiscoveryEventSetup(resetRuntimes: true);
         }
-
         BuildAttackOrderFromConfig();
-        
         turnCooldown = 1f;
         rb.interpolation = RigidbodyInterpolation2D.Interpolate;
+
+        // 初始化血量
+        currentHP = Mathf.Max(0f, config?.maxHP ?? 0f);
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
         StartCoroutine(StateMachine());
     }
@@ -411,6 +418,25 @@ public partial class MonsterController : MonoBehaviour
         if (faceFlipDwellTimer > 0f) faceFlipDwellTimer -= Time.deltaTime;
         if (attackRestCooldown > 0f) attackRestCooldown -= Time.deltaTime;
         if (faceProximityLockTimer > 0f) faceProximityLockTimer -= Time.deltaTime;
+
+        // 命中硬直：怪物不动（冻结动画速度与水平移动），到时解除
+        if (inHitStun)
+        {
+            hitStunTimer -= Time.deltaTime;
+            if (hitStunTimer <= 0f)
+            {
+                inHitStun = false;
+                if (animator) animator.speed = attackAnimFrozen ? attackAnimFreezeSpeedBackup : 1f;
+            }
+            else
+            {
+                // 冻结水平移动，不改变已有空中/地面逻辑的结构，仅清零速度
+                rb.velocity = new Vector2(0f, rb.velocity.y);
+                desiredSpeedX = 0f;
+                ApplySlopeIdleStopIfNoMove();
+                if (animator) animator.speed = 0f; // 冻结动画
+            }
+        }
 
         // 只有在“最后一个循环已播放完”才冻结；否则由 AttackUpdate 负责重播下一次循环
         if (inAttack && !string.IsNullOrEmpty(activeAttackAnimName) && animator)
@@ -1154,6 +1180,79 @@ public partial class MonsterController : MonoBehaviour
             EndAttack();
         }
     }
+
+    // 玩家击中怪物（由外部调用，damage 可为正数）
+    public void TakeHit(float damage)
+    {
+        if (deathStarted) return;
+        float dm = Mathf.Max(0f, damage);
+        if (dm > 0f)
+        {
+            currentHP = Mathf.Max(0f, currentHP - dm);
+        }
+
+        // 命中动画（若配置）
+        var hitCfg = config?.monsterHitConfig;
+        if (hitCfg != null && !string.IsNullOrEmpty(hitCfg.MasterHitAnimaton) && animator)
+        {
+            animator.CrossFadeInFixedTime(hitCfg.MasterHitAnimaton, 0f, 0, 0f);
+            animator.Update(0f);
+        }
+
+        // 命中硬直时间：空中配置覆盖优先
+        float stun = Mathf.Max(0f, hitCfg?.hitStunTime ?? 0f);
+        float overrideStun = Mathf.Max(0f, config?.airStageConfig?.airHit?.hitStunTimeOverride ?? 0f);
+        if (overrideStun > 0f) stun = overrideStun;
+
+        if (stun > 0f)
+        {
+            inHitStun = true;
+            hitStunTimer = stun;
+        }
+
+        // 生命清零 → 进入死亡流程
+        if (currentHP <= 0f)
+        {
+            StartDeath();
+        }
+    }
+
+    private void StartDeath()
+    {
+        if (deathStarted) return;
+        deathStarted = true;
+
+        if (inAttack) EndAttack();
+        if (animator) animator.speed = 1f;
+
+        // 播死亡动画
+        var hitCfg = config?.monsterHitConfig;
+        if (hitCfg != null && !string.IsNullOrEmpty(hitCfg.MasterDieAnimaton) && animator)
+        {
+            animator.CrossFadeInFixedTime(hitCfg.MasterDieAnimaton, 0f, 0, 0f);
+            animator.Update(0f);
+        }
+
+        // 进入死亡状态，清零速度
+        rb.velocity = Vector2.zero;
+        desiredSpeedX = 0f;
+        ApplySlopeIdleStopIfNoMove();
+
+        // 等动画完毕后销毁（协程复用现有 WaitForStateFinished）
+        StartCoroutine(DieAfterAnimation(hitCfg?.MasterDieAnimaton));
+    }
+
+    private IEnumerator DieAfterAnimation(string dieState)
+    {
+        if (!string.IsNullOrEmpty(dieState))
+            yield return WaitForStateFinished(dieState, 0);
+
+        // 通知 spawner
+        spawner?.NotifyMonsterDeath(gameObject);
+        // 删除怪物
+        Destroy(gameObject);
+    }
+
     private void EndAttack()
     {
         if (attackAnimFrozen && animator)
@@ -3346,6 +3445,56 @@ public partial class MonsterController : MonoBehaviour
         if (anchor == null) anchor = transform;
 
         PlayEffect(activeAttack.attackFarEffectPrefab, anchor);
+    }
+
+    // 命中 FX（由动画事件 FxMasterHitPrefab 调用）
+    public void OnFxMasterHitPrefab()
+    {
+        var hitCfg = config?.monsterHitConfig; // 新增：取得配置
+        if (hitCfg == null) return;
+        if (string.IsNullOrEmpty(hitCfg.MasterHitAnimaton)) return;
+        if (hitCfg.MasterHitPrefab == null) return;
+
+        Transform anchor = null;
+        if (!string.IsNullOrEmpty(hitCfg.MasterHitSpawnChildPath))
+        {
+            string rawPath = hitCfg.MasterHitSpawnChildPath.Trim();
+            string rootName = transform.name;
+            if (rawPath.StartsWith(rootName + "/"))
+                rawPath = rawPath.Substring(rootName.Length + 1);
+            if (rawPath.StartsWith("/"))
+                rawPath = rawPath.Substring(1);
+            var t = transform.Find(rawPath);
+            if (t != null) anchor = t;
+        }
+        if (anchor == null) anchor = transform;
+
+        PlayEffect(hitCfg.MasterHitPrefab, anchor);
+    }
+
+    // 死亡 FX（由动画事件 FxMasterDiePrefab 调用）
+    public void OnFxMasterDiePrefab()
+    {
+        var hitCfg = config?.monsterHitConfig;
+        if (hitCfg == null) return;
+        if (string.IsNullOrEmpty(hitCfg.MasterDieAnimaton)) return;
+        if (hitCfg.MasterDiePrefab == null) return;
+
+        Transform anchor = null;
+        if (!string.IsNullOrEmpty(hitCfg.MasterDieSpawnChildPath))
+        {
+            string rawPath = hitCfg.MasterDieSpawnChildPath.Trim();
+            string rootName = transform.name;
+            if (rawPath.StartsWith(rootName + "/"))
+                rawPath = rawPath.Substring(rootName.Length + 1);
+            if (rawPath.StartsWith("/"))
+                rawPath = rawPath.Substring(1);
+            var t = transform.Find(rawPath);
+            if (t != null) anchor = t;
+        }
+        if (anchor == null) anchor = transform;
+
+        PlayEffect(hitCfg.MasterDiePrefab, anchor);
     }
 
     // 远程发射：删掉对 projectileSpawnChildPath 的解析

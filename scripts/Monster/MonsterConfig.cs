@@ -14,7 +14,6 @@ public class MonsterConfig : ScriptableObject
     [Tooltip("被击败后给予的经验值")]
     public int exp;
 
-    [Header("资源配置")]
     [Tooltip("怪物的Prefab（包含动画、碰撞体、脚本等）")]
     public GameObject monsterPrefab;
 
@@ -37,6 +36,30 @@ public class MonsterConfig : ScriptableObject
     [Header("空中阶段配置")]
     [Tooltip("空中‘巡逻/发现’配置占位，先占位置，后续再补参数")]
     public AirStageConfig airStageConfig = new AirStageConfig();
+
+    [Header("怪物命中/死亡配置")]
+    [Tooltip("命中硬直与死亡表现配置（使用 maxHP 作为血量依据）")]
+    public MonsterHitConfig monsterHitConfig = new MonsterHitConfig();
+}
+
+[System.Serializable]
+public class MonsterHitConfig
+{
+    [Header("命中（玩家击中怪物）")]
+    [Tooltip("命中动画状态名（关键帧触发 FxMasterHitPrefab）")]
+    public string MasterHitAnimaton;
+    [Tooltip("命中特效 Prefab")]
+    public GameObject MasterHitPrefab;
+    [Tooltip("命中硬直时间（秒），硬直期间怪物不动")]
+    public float hitStunTime = 0.3f;
+    [Tooltip("命中特效释放点子物体路径（从怪物根开始的相对路径），为空则回退怪物根")]
+    public string MasterHitSpawnChildPath;
+    [Tooltip("死亡动画状态名（关键帧触发 FxMasterDiePrefab）")]
+    public string MasterDieAnimaton;
+    [Tooltip("死亡特效 Prefab")]
+    public GameObject MasterDiePrefab;
+    [Tooltip("死亡特效释放点子物体路径（从怪物根开始的相对路径），为空则回退怪物根")]
+    public string MasterDieSpawnChildPath;
 }
 
 [System.Serializable]
@@ -62,13 +85,21 @@ public class AirStageConfig
 
     [Header("空中-发现阶段配置(占位)")]
     public AirDiscoveryConfig discovery = new AirDiscoveryConfig();
+
+    [Header("命中配置（空中配置下）")]
+    public AirHitConfig airHit = new AirHitConfig();
+}
+
+[System.Serializable]
+public class AirHitConfig
+{
+    [Tooltip("命中硬直时间（秒），优先覆盖全局 MonsterHitConfig 的设置")]
+    public float hitStunTimeOverride = 0f; // 0 表示不覆盖
 }
 
 [System.Serializable]
 public class AirPatrolConfig
 {
-    
-   
     public AirPatrolPathType pathType = AirPatrolPathType.AreaRandom;
 
     [Tooltip("按列表从上到下执行，或随机挑选下一条")]

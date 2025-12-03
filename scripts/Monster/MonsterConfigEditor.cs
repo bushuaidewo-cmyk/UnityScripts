@@ -60,10 +60,33 @@ public class MonsterConfigEditor : Editor
         // 5) 空中配置（巡逻/发现）
         DrawAirStageConfig(spAirStage);
 
+        // 5.1) 命中/死亡配置
+        var spHit = serializedObject.FindProperty("monsterHitConfig");
+        DrawMonsterHitConfig(spHit);
+
         // 6) 导入/导出
         DrawIOButtons();
 
         serializedObject.ApplyModifiedProperties();
+    }
+
+    private void DrawMonsterHitConfig(SerializedProperty spHit)
+    {
+        if (spHit == null) return;
+        if (!Fold("hit", "命中/死亡配置", true)) return;
+
+        using (new EditorGUI.IndentLevelScope())
+        {
+            
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterHitAnimaton"), new GUIContent("命中动画"));
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterHitPrefab"), new GUIContent("命中特效 Prefab"));
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("hitStunTime"), new GUIContent("硬直时间(秒)"));
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterHitSpawnChildPath"), new GUIContent("命中特效释放点路径"));
+            EditorGUILayout.Space(4);
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterDieAnimaton"), new GUIContent("死亡动画"));
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterDiePrefab"), new GUIContent("死亡特效 Prefab"));
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterDieSpawnChildPath"), new GUIContent("死亡特效释放点路径"));
+        }
     }
 
     private void DrawAirStageConfig(SerializedProperty spAirStage)
@@ -321,6 +344,17 @@ public class MonsterConfigEditor : Editor
                                 EditorGUILayout.BeginHorizontal();
                                 if (GUILayout.Button("+ 添加空中攻击")) spSkyList.InsertArrayElementAtIndex(spSkyList.arraySize);
                                 if (spSkyList.arraySize > 0 && GUILayout.Button("- 移除最后")) spSkyList.DeleteArrayElementAtIndex(spSkyList.arraySize - 1);
+
+                                // 命中配置（空中）
+                                var spAirHit = spAirStage.FindPropertyRelative("airHit");
+                                if (Fold("air.stage.hit", "命中配置(空中)", true))
+                                {
+                                    using (new EditorGUI.IndentLevelScope())
+                                    {
+                                        EditorGUILayout.PropertyField(spAirHit.FindPropertyRelative("hitStunTimeOverride"), new GUIContent("硬直时间覆盖(秒，0表示不覆盖)"));
+                                    }
+                                }
+
                                 EditorGUILayout.EndHorizontal();
                             }
                         }

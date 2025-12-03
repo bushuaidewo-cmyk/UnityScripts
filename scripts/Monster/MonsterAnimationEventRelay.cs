@@ -173,4 +173,18 @@ public class MonsterAnimationEventRelay : MonoBehaviour
         if (debugEvents) Debug.Log("[Relay] skyattackFarFire()");
         controller?.OnSkyAttackFarFire();
     }
+
+    // 玩家击中怪物：命中特效（动画事件）
+    public void FxMasterHitPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] FxMasterHitPrefab()");
+        controller?.OnFxMasterHitPrefab();
+    }
+
+    // 怪物死亡：死亡特效（动画事件）
+    public void FxMasterDiePrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] FxMasterDiePrefab()");
+        controller?.OnFxMasterDiePrefab();
+    }
 }

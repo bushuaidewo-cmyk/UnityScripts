@@ -26,6 +26,9 @@ public class AnimationEventRelay : MonoBehaviour
     [Tooltip("下蹲举盾时，盾Hub Animator 要播放的状态名（循环显示盾）")]
     public string shieldDuckState = "player_duck_shield_idle";
 
+    // 新增：当前武器命中体控制器（由 WeaponManager 在装备时设置）
+    [SerializeField] private HitboxController weaponHitbox;
+
     private void Awake()
     {
         player = GetComponentInParent<PlayerController>();
@@ -38,7 +41,6 @@ public class AnimationEventRelay : MonoBehaviour
         if (!TryParseXY(xy, out float x, out float y)) return;
         attackHub.SetWeaponXYOffset(x, y);
     }
-
     public void PlayWeapon(string stateName)
     {
         if (attackHub) attackHub.PlayWeapon(stateName);
@@ -59,7 +61,6 @@ public class AnimationEventRelay : MonoBehaviour
             hub.SetWeaponXYOffset(x, y);
         }
     }
-
     public void PlayVfx(string stateName)
     {
         if (string.IsNullOrEmpty(stateName)) return;
@@ -109,7 +110,6 @@ public class AnimationEventRelay : MonoBehaviour
         shieldHub.PlayWeapon(shieldDuckState);
     }
 
-
     // 追加到类内其它事件旁
     public void OnWallJumpForwardUnlock()
     {
@@ -117,9 +117,29 @@ public class AnimationEventRelay : MonoBehaviour
     }
     // ================= 原有：转发角色其它事件（保留） =================
 
-    public void OnAttackEnd() => player?.OnAttackEnd();
-    public void OnDuckAttackEnd() => player?.OnDuckAttackEnd();
-   
+    public void OnAttackEnd()
+    {
+        player?.OnAttackEnd();
+        weaponHitbox?.CloseAll(); // 兜底：关闭所有命中体，防止漏关
+    }
+    public void OnDuckAttackEnd()
+    {
+        player?.OnDuckAttackEnd();
+        weaponHitbox?.CloseAll(); // 兜底：关闭所有命中体，防止漏关
+    }
+
+    // ====== 命中体：动画事件入口（仅保留两条） ======
+    public void EvtHitOn(int index)
+    {
+        if (weaponHitbox) weaponHitbox.Open(index);
+    }
+    public void EvtHitOff(int index)
+    {
+        if (weaponHitbox) weaponHitbox.Close(index);
+    }
+    // 供 WeaponManager 在装备时注入命中体控制器
+    public void SetWeaponHitbox(HitboxController hb) { weaponHitbox = hb; }
+
     // ================= Helpers =================
     private static bool TryParseXY(string input, out float x, out float y)
     {
