@@ -35,6 +35,13 @@ public class WeaponManager : MonoBehaviour
         EquipWeapon("001");
     }
 
+    // 调试：数字键切换武器ID（仅开发期）
+    private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.Alpha1)) EquipWeapon("001");
+        if (Input.GetKeyDown(KeyCode.Alpha2)) EquipWeapon("002");
+    }
+
     private void BuildIndex()
     {
         _map.Clear();
@@ -47,6 +54,7 @@ public class WeaponManager : MonoBehaviour
     public bool EquipWeapon(string id)
     {
         if (string.IsNullOrEmpty(id) || !_map.TryGetValue(id, out var def)) return false;
+        if (CurrentWeaponId == id) return true;
 
         // 1) 覆盖玩家攻击动画 6 段
         if (playerAnimator && def.playerOverride)
@@ -109,8 +117,7 @@ public class WeaponManager : MonoBehaviour
         if (relay)
         {
             relay.attackHub = _currentWeaponHub;
-            relay.SendMessage("SetWeaponHitbox", _currentHitbox, SendMessageOptions.DontRequireReceiver);
-
+            if (_currentHitbox) relay.SetWeaponHitbox(_currentHitbox);
             relay.vfxHubs.Clear();
 
             // 收集两个 FX 插槽里的 AttackEventHub（一个 FX 里也可以有多个 Hub）
