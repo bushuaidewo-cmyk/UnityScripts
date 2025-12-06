@@ -154,4 +154,10 @@ public class AnimationEventRelay : MonoBehaviour
         bool okY = float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out y);
         return okX && okY;
     }
+
+    // 统一关闭所有攻击命中体（供 PlayerController 在兜底/强制收尾时直接调用）
+    public void StopAttackHitbox()
+    {
+        weaponHitbox?.CloseAll();
+    }
 }

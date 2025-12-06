@@ -335,6 +335,13 @@ public class PlayerController : MonoBehaviour
 
         // BackFlash 触发
         var stNow = anim.GetCurrentAnimatorStateInfo(0);
+
+        bool inDuckAttackEnd = stNow.IsName("player_duck_attack_end") || stNow.IsName("player_duckForward_attack_end");
+
+        // 进入任何“下蹲攻击结束”状态时，立即解除下蹲姿态锁，让 IsDucking 跟随输入
+        if (groundAttackActive && inDuckAttackEnd)
+            duckAttackFacingLocked = false;
+
         bool inBackflashAnimOrTransition = stNow.IsName(STATE_BackFlash) || anim.IsInTransition(0);
         if (keyDownBackFlash &&
             isGrounded && !isDucking &&
@@ -483,19 +490,22 @@ public class PlayerController : MonoBehaviour
         if (keyDownJump && isGrounded && !isJumping && !groundAttackActive && !magicAttackPlaying)
         {
             if (backFlashActive) CancelBackFlash();                // 随时打断
-            
-
             ExitSlopeIdleLock();
             justJumpedFrames = 2;
-
             isJumping = true;
             jumpStartY = rb.position.y;
 
             float dir = GetEffectiveInputDir();
             currentSpeedX = dir * moveSpeed;
             rb.velocity = new Vector2(currentSpeedX, jumpForce);
+            
+            landDebounceUntil = Time.time + 0.12f;     // 短暂压制“落地去抖”，防被 AnyState 抢占
 
             isDucking = false;
+
+            ForceStandingCollider();
+            crouchGroundStickyFrames = 0; // 起跳时清掉粘地锁
+
             duckInputSuspendFrames = 2;
 
             if (shieldActiveDuck) CancelShieldDuck(false);
@@ -543,6 +553,7 @@ public class PlayerController : MonoBehaviour
             isJumping = false;
             airAttackActive = false;
             airAttackAnimPlaying = false;
+            relay?.StopAttackHitbox();          // ← 兜底：落地切出时关掉命中体
 
             SafeResetTrigger(TRIG_JumpUp);
             SafeResetTrigger(TRIG_JumpForward);
@@ -628,6 +639,13 @@ public class PlayerController : MonoBehaviour
 
         if (!isGrounded) // 空中：只改状态，不播可视
         {
+            // 空中攻击进行时：硬禁空中盾（按住 L 也无效）
+            if (airAttackActive || airAttackAnimPlaying)
+            {
+                if (shieldActiveAir) CancelShieldAir();
+                return;
+            }
+
             if (shieldHeld)
             {
                 if (!shieldActiveAir)
@@ -760,6 +778,18 @@ public class PlayerController : MonoBehaviour
         SafeSetTrigger(TRIG_DuckShieldUp);
         shieldAnimUpPlayed = true;
         
+    }
+
+    // 新增：工具方法，强制切回站立碰撞体
+    private void ForceStandingCollider()
+    {
+        if (!standingCollider || !duckCollider) return;
+        if (!colliderDuckActive) return;
+
+        duckCollider.enabled = false;
+        standingCollider.enabled = true;
+        colliderDuckActive = false;
+        Physics2D.SyncTransforms();
     }
 
     private void CancelShieldStanding(bool playDownAnim)
@@ -1096,11 +1126,21 @@ public class PlayerController : MonoBehaviour
     #region 下蹲 & 地面攻击
     private void HandleGroundDuckAndAttacks()
     {
-        // 只在地面才处理下蹲与地面攻击
-        if (!isGrounded) { isDucking = false; return; }
+        // 放宽：允许在 coyote 窗口内仍然处理下蹲（解决地面判定抖动导致不切换的问题）
+        bool groundedOrCoyote = isGrounded || (Time.time - lastGroundedAt <= groundedExitCoyote);
+
+        if (!groundedOrCoyote) { isDucking = false; return; }
         if (isJumping) { isDucking = false; return; }
 
-        bool justLandedNow = !prevGrounded && isGrounded;
+        // 追加：攻击期间不允许按下切换碰撞体，保持当前姿态
+        if (groundAttackActive)
+        {
+            // 仅保留“鸭攻锁朝向”时的下蹲态，其余保持站立
+            isDucking = duckAttackFacingLocked;
+            return;
+        }
+
+        bool justLandedNow = !prevGrounded && groundedOrCoyote;
 
         if (duckInputSuspendFrames > 0) duckInputSuspendFrames--;
 
@@ -1117,9 +1157,6 @@ public class PlayerController : MonoBehaviour
                 isDucking = true;
                 crouchReenterLockFrames = 3; // 可按需微调为 2~4
             }
-
-            // 立即应用锁存的下蹲，避免落地当帧先站立再下蹲的闪烁
-            if (isDucking) colliderDuckActive = true;
 
             // 锁存期内强制保持下蹲
             else if (crouchReenterLockFrames > 0)
@@ -1213,6 +1250,8 @@ public class PlayerController : MonoBehaviour
         {
             if (shieldActiveAir && !airShieldBlocksAttack)
                 CancelShieldAir();
+            // 同步参数：避免状态机因 ShieldHold=true 抢占空攻过渡
+            SafeSetBool(PARAM_ShieldHold, false);
 
             var st = anim.GetCurrentAnimatorStateInfo(0);
             foreach (var a in new[] { STATE_JumpAttack, STATE_JumpDownFwdAttack })
@@ -1267,6 +1306,7 @@ public class PlayerController : MonoBehaviour
         {
             airAttackActive = false;
             airAttackAnimPlaying = false;
+            relay?.StopAttackHitbox();          // ← 兜底
             if (shieldHeld && !isGrounded) shieldActiveAir = true;
         }
     }
@@ -1293,6 +1333,7 @@ public class PlayerController : MonoBehaviour
         if (!inGroundAtkEnd || st.normalizedTime < 0.95f) return;
 
         // 已进入 End 段且即将结束：按当前姿态触发既有结束流程
+        relay?.StopAttackHitbox();              // ← 兜底
         if (isDucking) OnDuckAttackEnd();
         else OnAttackEnd();
     }
@@ -1451,6 +1492,18 @@ public class PlayerController : MonoBehaviour
     private void LateUpdate()
     {
         if (IsInBackFlashAnimOrTransition()) return;
+
+        var st = anim.GetCurrentAnimatorStateInfo(0);
+        bool inGroundAttackMain =
+            st.IsName("player_attack") ||
+            st.IsName("player_duck_attack") ||
+            st.IsName("player_duckForward_attack");
+        bool inAirAttackMain =
+            st.IsName(STATE_JumpAttack) ||
+            st.IsName(STATE_JumpDownFwdAttack);
+
+        if (!(inGroundAttackMain || inAirAttackMain))
+            relay?.StopAttackHitbox();          // ← 巡检兜底
 
         UpdateShieldVisuals();
     }
@@ -1670,6 +1723,13 @@ public class PlayerController : MonoBehaviour
         }
 
         SafeSetFloat(PARAM_MoveSpeed, animSpeed);
+
+        // 空攻期间硬压 ShieldHold=false，防止 L 覆盖攻击动画
+        if (!isGrounded && (airAttackActive || airAttackAnimPlaying))
+            SafeSetBool(PARAM_ShieldHold, false);
+        else
+            SafeSetBool(PARAM_ShieldHold, shieldHeld);
+
         SafeSetBool(PARAM_ShieldHold, shieldHeld);
         SafeSetBool(PARAM_IsGrounded, isGrounded);
         SafeSetBool(PARAM_IsDucking,
@@ -2027,37 +2087,38 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    #region 碰撞体同步（站立/下蹲）
+
     // 站立/下蹲碰撞体切换后，提高“粘地”持续帧数，极端 S/D 抖动更不易丢地
-private void SyncCrouchColliders()
-{
-    if (!standingCollider || !duckCollider) return;
-
-    if (!isGrounded || isJumping) return;
-
-    bool wantDuck = isDucking;
-    if (wantDuck == colliderDuckActive) return;
-
-    if (wantDuck)
+    // 片段：SyncCrouchColliders
+    private void SyncCrouchColliders()
     {
-        standingCollider.enabled = false;
-        duckCollider.enabled = true;
-        colliderDuckActive = true;
-    }
-    else
-    {
-        duckCollider.enabled = false;
-        standingCollider.enabled = true;
-        colliderDuckActive = false;
+        if (!standingCollider || !duckCollider) return;
+
+        // 只禁止在“起跳态”中切换，放宽对 isGrounded 的要求，解决抖动导致的切换失败
+        if (isJumping) return;
+
+        bool wantDuck = isDucking;
+        if (wantDuck == colliderDuckActive) return;
+
+        if (wantDuck)
+        {
+            standingCollider.enabled = false;
+            duckCollider.enabled = true;
+            colliderDuckActive = true;
+        }
+        else
+        {
+            duckCollider.enabled = false;
+            standingCollider.enabled = true;
+            colliderDuckActive = false;
+        }
+
+        Physics2D.SyncTransforms();
+
+        // 保持更长的粘地窗口，减少极端抖动
+        crouchGroundStickyFrames = 5;
     }
 
-    Physics2D.SyncTransforms();
-
-    // 原来是 2 帧，适当加长，配合更长的 Ray 粘地更稳
-    crouchGroundStickyFrames = 5;
-    }
-    
-    #endregion
 
     private bool IsPushingIntoWallNow()
     {
@@ -2190,11 +2251,6 @@ private void SyncCrouchColliders()
                 }
             }
         }
-        // --- 尖角补偿逻辑结束 ---
-
-
-
-
 
         return false;
     }
