@@ -983,13 +983,21 @@ public class ProjectileConfig
     public float duration = 0.8f;
     [Tooltip("爆炸伤害/子效果的tick间隔（秒）")]
     public float interval = 0.2f;
+
+
     [Tooltip("爆炸动画名")]
     public string FlygunBoomAnimation;
     [Tooltip("爆炸特效Prefab")]
     public GameObject FlygunBoomEffectPrefab;
 
+    [Header("伤害")]
+    [Tooltip("投射物命中造成的伤害数值")]
+    public int damage = 1;
+    [Tooltip("投射物爆炸半径内的伤害（0=不生效）")]
+    public int explosionDamage = 0;
+
     // ========== 直线（基线推进） ==========
-    
+
     [Tooltip("启用直线基线推进（speed/accel等）。关闭后不使用直线推进（回旋镖返程不受影响）。")]
     public bool linearEnabled = true;
 

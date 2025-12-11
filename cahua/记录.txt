@@ -861,61 +861,403 @@ SkyattackmoveDurationRanged：远程时的总位移时长（含加/匀/减）
 
 
 
+添加groundPhase勾选，勾上就是永远运行地面阶段，那么怪物出生那一刻开始就要有重力，落到地面，地面阶段自己循环，
+不勾选就不执行地面阶段逻辑，这个已经实现
 
-
-airPhaseConfig.groundPhaseID去掉，再airPhaseConfig.groundPhaseID位置添加groundPhase勾选，勾上就是永远运行地面阶段，那么怪物出生那一刻开始就要有重力，落到地面，地面阶段自己循环，
-不勾选就不执行地面阶段逻辑
-
-airPhaseConfig.airPhaseID去掉，再airPhaseConfig.airPhaseID位置添加airPhase勾选，勾上就是永远运行空中阶段，那么怪物出生那一刻开始就要没有重力，空中漂浮，空中阶段自己循环，
-不勾选就不执行空中阶段逻辑
-
-
+添加airPhase勾选，勾上就是永远运行空中阶段，那么怪物出生那一刻开始就要没有重力，空中漂浮，空中阶段自己循环，
+不勾选就不执行空中阶段逻辑，这个已经实现
 
 
 地面与空中 相互转换配置
-如果地面填ID1 ,空中ID2，那就从地面ID1-空中ID2-地面ID1循环
-如果空中填ID1 ,地面ID2，那就从空中ID1-地面ID2-空中ID1循环
-二者的区别就是谁先开始
+如果地面阶段和空中阶段全部勾上
+显示出选择地面优先 还是 空中优先
+选择地面优先就从地面阶段开始，选择空中优先从空中阶段开始
 
 转换条件
 1怪物血量HP到一定程度转换，这个时候不管怪物在做什么都要直接进入下一阶段
-2攻击次数判断
-怪物地面的时候近战攻击 或 远程攻击 了多少次后（近战和远程总和次数）  进入空中阶段
-怪物空中的时候近战攻击 或 远程攻击 了多少次后（近战和远程总和次数）  进入地面阶段
-边界：当二者都勾选并且设定满足的条件的时候，优先攻击判断，立刻转换并重置计数，但当HP满足条件的时候就立刻转换，HP越来越少，所以就一次，HP转换后就不会再按照HP条件转换了，但攻击转换仍然存在
+2攻击列表执行次数判断
+怪物地面的时候近战攻击 或 远程攻击 的 攻击列表（count=1）达到执行次数就 进入空中阶段
+怪物空中的时候近战攻击 或 远程攻击 的 攻击列表（count=1）达到执行次数就 进入地面阶段
+
+
+3怪物只有再地面发现阶段的攻击或空中发现阶段的攻击才会进入到地面与空中转换，巡逻和发现不会转换
+
+4当HP满足条件的时候就立刻转换，HP越来越少，所以就一次，HP转换后就不会再按照HP条件转换了，但攻击列表次数转换仍然存在
+
+5状态切换：地面阶段-地面到空中过度-空中阶段 或者 空中阶段-空中到地面过度-地面阶段
+例如：地面执行了1次地面面阶段的攻击列表逻辑后，启动地面到空中过度，升空时间：匀加速时间+匀速时间+匀减速时间之和，然后转换到空中阶段
+例如：空中执行了1次空中面阶段的攻击列表逻辑后，启动空中到地面过度，下降时间：匀加速时间+匀速时间+匀减速时间之和，然后转换到地面阶段
+
+只需要计数空中阶段攻击列表次数或地面阶段攻击列表次数，到达次数后打开airPhaseConfig.groundPhase，关闭airPhaseConfig.airPhase，或者，打开airPhaseConfig.airPhase，关闭airPhaseConfig.groundPhase，不要调整地面或空中的功能
+
+只在攻击列表 count=1 的那条攻击被执行时才算 1 次，count=1到=2到=3这样一直执行下去才算一次
+
+另外下降动画或升空动画直播放一次，保持最后一帧，只有替换状态的时候会换动画，举例：地面到空中转换动画到达最后一帧，继续上升，到达上升时间后转换动画
+
+只需要计数空中阶段攻击列表次数或地面阶段攻击列表次数，到达次数后打开airPhaseConfig.groundPhase，关闭airPhaseConfig.airPhase，或者，打开airPhaseConfig.airPhase，关闭airPhaseConfig.groundPhase，不要调整地面或空中的功能
+
+只勾airPhaseConfig.groundPhase出生在地面，这个已经实现
+只勾airPhaseConfig.airPhase出生在空中，这个已经实现
+二者都勾选，这时候再选择Air First，相当于先执行空中阶段，出生在空中，执行空中阶段逻辑，然后接空中到地面转换，到地面以后再转换成地面阶段 
+或者
+二者都勾选，这时候再选择Ground First，相当于先执行地面阶段，出生在地面，执行地面阶段逻辑，然后接地面到空中转换，到空中以后再转换成空中阶段 
 
 参数资源
-地面到空中转换
-空中的位置：当前地面位置，增加Y轴的高度，得到怪物从地面到空中后的位置
-升空中的匀速速度、匀速时间、匀加速、匀加速时间、匀减速、匀减速时间
+
+地面到空中转换 
+升空中的匀速速度、匀速时间、匀加速、匀加速时间、匀减速、匀减速时间（公用之前角色的移动底层）
 升空时候的动画、特效、播放特效关键帧、特效锚点等
-地面到空中转换增加一个选项，是否更换碰撞体，如果勾选，就可以从新指定碰撞体
+资源：
+
+地面到空中转换增加一个选项，是否更换碰撞体，如果勾选，就可以从新指定碰撞体切换
 
 空中到地面转换
-空中的位置：当前地面位置，增加Y轴的高度，得到怪物从地面到空中后的位置
-升空中的匀速速度、匀速时间、匀加速、匀加速时间、匀减速、匀减速时间
-升空时候的动画、特效、播放特效关键帧、特效锚点等
-空中到地面转换增加一个选项，是否更换碰撞体，如果勾选，就可以从新指定碰撞体
+下降中的匀速速度、匀速时间、匀加速、匀加速时间、匀减速、匀减速时间（公用之前角色的移动底层）
+下降中候的动画、特效、播放特效关键帧、特效锚点等
+资源：
+Skytoground动画
+SkytogroundPrefab特效
+SkytogroundPrefab动画播放特效事件关键帧
+Fxskytogroundpoint特效释放的锚点（再怪物inspetor下的fxSkyfindRestPoint的下方）
+
+
+Groundtosky动画
+GroundtoskyPrefab特效
+GroundtoskyPrefab动画播放特效事件关键帧
+Fxgroundtoskypoint特效释放的锚点（再怪物inspetor下的fxSkyfindRestPoint的下方）
+
+
+空中到地面转换增加一个选项，是否更换碰撞体，如果勾选，就可以从新指定碰撞体切换
+
+资源参数放在airPhaseConfig.showAirGizmosManual的下方
 
 
 辅助线显示
-地面辅助线显示选项：勾选的时候显示地面阶段发现 follow、backstep、攻击近战、攻击远程辅助线（不管airPhaseConfig.groundPhaseID是多少，显示或不显示辅助线无关）
-空中辅助线显示选项：勾选的时候显示空中阶段发现 follow、backstep、攻击近战、攻击远程辅助线（不需airPhaseConfig.airPhaseIDD是多少，显示或不显示辅助线无关）
+地面辅助线显示选项：勾选的时候显示地面阶段发现 follow、backstep、攻击近战、攻击远程辅助线（不管airPhaseConfig.groundPhaseID是多少，显示或不显示辅助线无关）这个已经实现
+空中辅助线显示选项：勾选的时候显示空中阶段发现 follow、backstep、攻击近战、攻击远程辅助线（不需airPhaseConfig.airPhaseIDD是多少，显示或不显示辅助线无关）这个已经实现
+
+是否需要单独脚本
+
+玩家击中怪物的命中效果
+怪物被击中时候的资源
+动画：MasterHitAnimaton
+特效：MasterHitPrefab
+特效在动画播放事件关键帧：FxMasterHitPrefab
+参数：击中的时候硬直时间，硬直表示怪物不会动
+
+相应参数放到空中配置下面
+
+死亡逻辑
+怪物血量清零、触发死亡区域
+死亡的时候播放资源
+死亡动画：MasterDieAnimaton
+死亡特效：MasterDiePrefab
+死亡特效在动画播放事件关键帧：FxMasterDiePrefab
+死亡动画播放完删除怪物
+
+相应参数放到怪物命中下面
+
+
+
+
+武器系统配置
+
+在PlayerRoot下Component下Ground Point下Flip下player下Inspector下的AnimationEventRelay脚本，这里只指定attackHub和shieldHub
+然后把vfxHubs下的vfxHubs.Array.data[0]与vfxHubs.Array.data[1]移动到PlayerRoot下Component下Ground Point下Flip下HandSocketR下WeaponOffset下player_weapon下Inspector下的AttackEventHub脚本配置里，
+
+
+先考虑角色武器动画和特效相关
+玩家自身的攻击动画需要替换PlayerRoot下Component下Ground Point下Flip下player下的Inspector下的animator状态机下的
+player_attack、player_attack_end、player_duck_attack、player_duck_attack_end、player_jump_attack、player_jump_downForward_attack
+每一种武器的角色攻击动画长短不同，所以从新设置关键帧事件
+
+在PlayerRoot下Component下Ground Point下Flip下player下Inspector下的AttackEventHub脚本，这里指定角色武器攻击动画、特效
+在PlayerRoot下Component下Ground Point下Flip下HandSocketR下WeaponOffset下player_weapon下Inspector下的AttackEventHub脚本，这里指定武器自身的攻击动画、特效
+
+新增武器自身攻击的boxcollider2D的物理伤害检测，并且给武器自身动画指定伤害关键帧开始和结束
+每种武器的攻击的boxcollider2D的物理伤害检测范围不同
+
+现在武器要增加很多，武器还会有远程飞行物，怎么设计这个武器系统，怎么配置更简单
+
+
+
+
+
+
+武器自身
+武器ID
+伤害：玩家的伤害碰撞体，触碰到怪物的检测体，减少怪物的血量，并且每次给怪物造成伤害都会触发怪物的命中效果（动画、特效等）当怪物血量为0得时候，怪物死亡
+
+近战武器
+武器自身动画prefab，替换PlayerRoot下Component下Ground Point下HandSocket下WeaponOffset下的player_weapon动画资源
+武器自身特效（支持动画和prefab特效，类似怪物编辑器）增加特效播放列表，武器的特效可以指定多个特效
+武器自身释放特效动画关键帧
+武器自身命中怪物的检测体（参考下怪物的检测体）
+武器自身命中动画关键帧事件区间（参考怪物编辑器的攻击关键帧区间）
+武器自身攻击特效的初始位置锚点
+
+远程武器
+武器飞行物（参考怪物编辑器的飞行物配置）
+
+飞行物发射队列
+PlayercountPerBurst：一次动画触发发射的数量
+PlayerintraBurstInterval：同一触发内连发的间隔（秒）
+PlayerlifeTime：投射物存活时间（秒）
+
+飞行物扇形分布
+PlayerspreadAngle：多发时的扇形角度（度），0 表示同向
+PlayerspreadUniform：多发时在扇形内是否均匀分布（false 则随机分布）
+
+飞行物表现资源
+PlayerFlygunAnimation：飞行中的动画名（飞行物自己的动画）
+PlayerFlygunEffectPrefab：飞行中的特效Prefab（飞行物的特效）
+PlayerattackFarSpawnChildPath：空中发射飞行物的点路径（参考地面远程攻击飞行物的路径逻辑）
+
+飞行物自身旋转
+PlayerselfRotate：是否飞行物自身旋转，勾上自身旋转
+xyz：再不同轴向自转
+PlayerselfRotateSpeedDeg：旋转速度（度/秒），对勾选的轴生效
+
+PlayerfaceAlongPath勾选后：根对象沿移动方向自动朝向；若“自身旋转”启用，本项失效
+
+飞行物发射朝向
+PlayerspawnAim下 ：Skytowards player / Skyhorizontal to player
+Playertowards player=朝向玩家飞；Skyhorizontal to player=按水平朝向玩家飞（忽略Y）
+
+飞行物爆炸表现
+Playerradius：爆炸半径（米）
+Playerduration：爆炸表现持续时间（秒）
+Playerinterval：爆炸伤害/子效果的tick间隔（秒）
+PlayerFlygunBoomAnimation：爆炸动画名（飞行物转到玩家、场景，或生命周期结束，爆炸的时候释放爆炸动画）
+PlayerFlygunBoomEffectPrefab：爆炸特效Prefab（飞行物转到玩家、场景，或生命周期结束，爆炸的时候释放爆炸特效）
+
+飞行物直线移动
+PlayerlinearEnabled：启用直线基线推进（speed/accel等），启用后显示下面的参数，关闭后不使用直线推进（回旋镖返程不受影响）
+Playerspeed：初始速度（米/秒）
+Playeraccel：加速度（米/秒²），当 accelTime<=0 时使用该值
+PlayeraccelTime：加速时间（秒），>0 时按时间插值至目标速度
+Playerdecel：减速度（米/秒²），当 decelTime<=0 时使用该值
+PlayerdecelTime：减速时间（秒），>0 时按时间插值至 0
+PlayermoveDuration：匀速阶段持续时间（秒），0 表示无匀速直接进入减速/结束
+
+飞行物S型直线（侧向正弦）
+PlayersinEnabled：启用 S 型侧向偏移，启用后显示下面的参数
+PlayersinAmplitude：正弦摆动幅度
+PlayersinFrequency：正弦摆动频率（Hz）
+
+飞行物抛物线（重力）
+PlayerparabolaEnabled：启用抛物线重力效果，启用后显示下面的参数
+PlayergravityScale：抛物线运动重力缩放
+PlayerbounceCoefficient：落地反弹系数（0=不反弹，>1 可越弹越高，不夹 [0,1]）
+PlayerbounceEnergyMode：constant/decay to zero  反弹能量模式：Constant=每次相同；DecayToZero=每次按衰减因子衰减，低于阈值即销毁
+PlayerbounceDecayFactor：每次反弹额外衰减因子（<1 逐渐变小；=1 不变；>1 逐渐变大）
+PlayerparabolaApexHeight：最高点高度（米，>0 时用来计算初始竖直速度 vy0 = sqrt(2*g*h)）
+PlayerbounceEndVyThreshold：竖直反弹速度低于该阈值则销毁（仅 DecayToZero 生效）
+
+飞行物跟踪导弹
+PlayerhomingEnabled：启用跟踪，按频率刷新朝向目标（频率低更棱角，频率高更顺滑），启用后显示下面的参数
+PlayerhomingFrequency：跟踪频率（Hz），每秒更新朝向的次数。0 表示不更新（关闭）
+PlayerhomingStrength：跟踪强度，1完全跟踪，0不跟踪
+
+飞行物半径旋转（相对载体，pathtangent空间）
+PlayerorbitEnabled：启用半径旋转，相对载体按半径做圆周偏移，启用后显示下面的参数
+PlayerorbitRadius：半径（米）
+PlayerorbitAngular：每次要旋转的角度（度）。例如 90/180/360。达到该角度后从0重新开始下一次 sweep。
+PlayerorbitSweepSpeedDeg：沿半径转动的角速度（度/秒）。符号决定方向：>0 逆时针，<0 顺时针。
+
+飞行物回旋镖
+PlayerboomerangEnabled：启用回旋镖，飞到最远距离 -> 停顿 -> 返回起点/发射者，启用后显示下面的参数
+PlayerboomerangOutMaxDistance：飞出最远距离（米）：到达后进入‘最远距离停顿’阶段"
+PlayerboomerangApexStopTime：最远距离停顿时间（秒）
+PlayerboomerangBackUniformSpeed：回程匀速目标速度（米/秒）。>0 时作为回程速度目标
+PlayerboomerangBackUniformTime：回程由当前速度匀速过渡到目标速度所需时间（秒）；=0 则瞬时切换
+PlayerboomerangBackAccel：回程加速度（米/秒²），当 backAccelTime<=0 时使用该值
+PlayerboomerangBackAccelTime：回程加速时间（秒），>0 时按时间插值到匀速目标
+PlayerboomerangBackDecel：回程减速度（米/秒²），当 backDecelTime<=0 时使用该值（用于接近终点减速，可选）
+PlayerboomerangBackDecelTime：回程减速时间（秒），>0 时按时间插值至 0（用于接近终点减速，可选）
+
+
+
+玩家角色
+
+角色攻击关键帧说明
+一、武器本体动画与偏移
+
+SetWeaponXYOffsetStr(string xy)
+功能：设置武器播放根的局部偏移（weaponOffsetRoot.localPosition 的 x/y）。
+参数：字符串格式的“x,y”或“x;y”或“x y”（小数用英文点）。示例："0.02,-0.03"。
+用法：偶发微调刀身/拖尾的出手锚点。一般很少在每把武器的关键帧里频繁用，更多用于一次性调位。
+PlayWeapon(string stateName)
+功能：通过 attackHub 播放“武器 Animator”的某个状态（如 weapon_slashA）。
+用法：若你不想用 EvtWeaponPlay，也可以直接在关键帧调用它；二者等价，EvtWeaponPlay 只是更明确语义。
+StopWeapon()
+功能：通过 attackHub 把武器 Animator 切回 idle，并归还“脱体”父子关系、可选复位偏移。
+用法：中途只停止“武器本体动画”而不停特效时使用；若要“武器+特效一起收尾”，用 EvtWeaponEnd（见下）。
+二、武器与角色层特效（VFX）
+
+SetVfxXYOffsetStr(string xy)
+功能：对 vfxHubs 列表中的每个 AttackEventHub 设置同样的 XY 偏移。
+用法：多 FX 同步移动的特殊需求；常规无需频繁使用。
+PlayVfx(string stateName)
+功能：广播到 vfxHubs，每个 hub 播放其 Animator 的该状态。
+用法：在关键帧触发刀光、冲击波等特效（如果这些 FX 是用 Animator 状态而不是 Prefab 粒子）。
+StopVfx()
+功能：广播停止 vfxHubs（切回各自 idle）。
+用法：结尾收尾，或中途转场时清理 FX。注意 EvtWeaponEnd 也会调用 StopVfx。
+三、盾牌显示（与攻击无直接关系，供盾的动画用）
+
+SetShieldXYOffsetStr(string xy)
+PlayShield(string stateName)
+StopShield()
+PlayShieldStanding()
+PlayShieldDuck()
+功能：与“武器/特效”的 Play/Stop 相同，但针对 shieldHub。
+用法：只在举盾相关的动画里用；普通武器攻击的关键帧中一般不要调用，避免干扰。
+四、玩家控制逻辑转发（PlayerController）
+
+OnWallJumpForwardUnlock()
+功能：转发给 PlayerController.OnWallJumpForwardUnlock，用于墙跳动画到达解锁帧。
+用法：只放在墙跳转身的动画关键帧；与武器无关。
+OnAttackEnd()
+OnDuckAttackEnd()
+功能：转发给 PlayerController 的攻击收尾回调，解除 groundAttackActive 等状态。
+用法：通常由玩家 Animator 的 *_attack_end 动画中尾帧调用；务必与 PlayerController 的现有配置一致。不要把它当作“武器收尾”，武器的收尾用 EvtWeaponEnd。
+
+
+
+
+角色攻击配置
+
+
+检查三个 prefab 的组件
+
+Weapon_001
+Animator（武器本体动画控制器）
+AttackEventHub（weaponAnimator 指向 Animator）
+HitboxController（已配置命中体列表，Collider2D isTrigger=true 初始禁用）
+weapon_001_effect
+Animator（特效 A 控制器）
+AttackEventHub（weaponAnimator 指向 Animator）
+weapon_001_effectstar
+Animator（特效 B 控制器）
+AttackEventHub（weaponAnimator 指向 Animator）
+创建武器定义资源
+
+在项目中右键 Create → Game → Weapon Definition，命名为 WeaponDef_001
+填写字段：
+id：Weapon_001（或你喜欢的唯一字符串）
+playerOverride：玩家 6 段攻击动画的覆盖控制器（AnimatorOverrideController）
+weaponPrefab：Weapon_001
+effectPrefab：weapon_001_effect
+effectStarPrefab：weapon_001_effectstar
+baseDamage：比如 20
+绑定 WeaponManager
+
+PlayerRoot → Component 上的 WeaponManager 已挂好，确保以下引用正确：
+Player Animator → Flip/player 上的 Animator
+Relay → Flip/player 下的 AnimationEventRelay 组件
+Weapon Slot → HandSocketR/WeaponOffset/player_weapon（Transform）
+Vfx Slot → HandSocketR/WeaponOffset/VfxWeaponOffset/player_weapon_effect（Transform）
+Vfx Star Slot → HandSocketR/WeaponOffset/VfxWeaponOffsetstar/player_weapon_effectstar（Transform）
+在 WeaponManager 的 Database 列表里，增加一个元素，把 WeaponDef_001 拖进去
+关键帧事件（只在玩家攻击动画 Clip 上）
+
+在 player_attack 等 6 段玩家攻击 Clip 中，按节奏打命中窗口：
+窗口开始帧：EvtHitOn(0)
+窗口结束帧：EvtHitOff(0)
+如有第二段/不同范围：EvtHitOn(1)/EvtHitOff(1) …
+不添加任何武器/特效的播放事件。武器和特效的表现由它们自己的 Animator 或现有管线自治播放。
+
+HitboxController下多个伤害碰撞体
+在 Hitboxes 列表里把 Hitbox1 的 Collider2D 拖进来，确保顺序是：
+Element 0 → Hitbox0 的 Collider2D
+Element 1 → Hitbox1 的 Collider2D
+确认两个 Collider2D 都是 isTrigger=true，默认 enabled=false。
+应用 prefab 覆盖（Apply），或者在运行时选中实例确认列表确实有两个元素。
+在玩家攻击 Clip 中成对配置事件：
+某段窗口用第一个命中体：EvtHitOn(0) → EvtHitOff(0)
+另一段窗口用第二个命中体：EvtHitOn(1) → EvtHitOff(1)
+如果还是只看到 Hitbox0，核对是否把 EvtHitOn(1)/EvtHitOff(1) 打在了实际会播放的那个 Clip 上；以及是否把 Off(1) 提前写成了 Off(0) 导致窗口被提前关掉。
+
+
+物理碰撞体逻辑
+站立到下蹲后  Col_Standing要关闭 Col_Duck打开
+下蹲到站立后  Col_Duck关闭Col_Standing要打开
+下蹲到跳跃 Col_Duck关闭Col_Standing要打开
+跳跃到下蹲 Col_Standing要关闭 Col_Duck打开
+跳跃到站立或站立到跳跃 都是 Col_Standing打开 ，Col_Duck关闭
+
+下蹲头顶检测体不可站立
+下蹲的时候头顶的检测体显示并且检测场景中的碰撞体，当检测到后下蹲期间玩家松开S下，也不会自动站立
+检测体是collider is trigger 
+
+
+受伤、死亡
+需求要点梳理
+受击来源与层：
+近战：怪物子物体的近战 Hitbox（Layer: mhitbox）
+贴身：怪物自身子物体 MHitbox（Layer: monster）
+远程：飞行物 Projectile 的碰撞（Layer: projectile）和飞行物爆炸范围伤害
+伤害来自于怪物近战、贴身、远程，飞行物爆炸伤害 
+受击效果：
+扣血并播放受伤动画
+根据命中方向产生强制位移（Knockback）：命中玩家正面则向后+向下；命中背面则向前+向下
+强制位移持续时间可调，位移距离/力度可调
+在强制位移期间玩家不可操作，并且拥有无敌（I-Frame），结束后无敌关闭
+空中与地面一致（同一物理底层）
+无敌规则：
+只有受伤后有一段无敌时间（与强制位移时间一致）
+闪避后退 BackFlash 不提供无敌
+除受伤后这段时间外，任何命中都会受伤
+死亡：
+血量降为 0 或触碰场景“即死”触发器（Collider isTrigger，如悬崖）即死亡
+死亡时播放死亡动画，死亡期间不可操作
+若血量已为 0，直接播死亡动画，同时也产生一次向后（可配置）强制位移
+动画循环：
+前向受击动画：player_frontHit1 与 player_frontHit2 交替循环
+后向受击动画：player_backHit1 与 player_backHit2 交替循环
+死亡动画：player_die（不可操作）
+使用excel设置怪物的近战、远程、远程爆炸物、自身伤害量
+新增加Col_Standing和Col_Duck这个是玩家与场景碰撞体，这个是不能与怪物自身产生碰撞的，所以增加了Hitbox_Standing和Hitbox_Duck，并且给它两个新的层PHitbox，这个曾与怪物的近战、远程、爆炸物、自身的伤害检测体碰撞伤害玩家、播放受伤或死亡动画，产生强制移动
+需要给Hitbox_Standing和Hitbox_Duck增加像Col_Standing和Col_Duck的转换（参考下Col_Standing和Col_Duck的转换代码）
+
+把强制位移时间和硬直时间分开，无敌时间归到硬直时间，动画持续时间不需要，因为时间短就提前结束，时间长就最后一帧持续
+并且给受伤和死亡各增加一个特效，都是受伤开始和死亡开始播放，不需要动画关键帧，循环或不循环看特效的配置不需要代码，还要特效播放的位置，这个位置可以是角色中心PlayerDistPoint，受伤动画、移动和特效没关系，各自播各自的，受伤动画结束了，特效不需要结束
+
+
+
+怪物飞行物命中玩家的规则：
+当玩家正面朝右，背面向左，飞行物从右面向左飞来，飞行物撞到玩家，玩家受到伤害，玩家朝向不变仍然是朝向右，受伤位移向左
+当玩家背面朝右，正面向左，飞行物从右面向左飞来，飞行物撞到玩家，玩家受到伤害，玩家朝向不变仍然是朝向左，受伤位移向左
+
 
 
 铁律/不变规则
-不要影响已有地面阶段的逻辑
-不要影响已有空中阶段的逻辑
+请用中文沟通
+空中阶段的逻辑不要影响已有地面阶段的逻辑
+地面阶段的逻辑不要影响已有空中阶段的逻辑
+不要不破坏已经可以的角色操作部分
+不要破坏player已经有的逻辑
 不改变已有资源/Prefab 的标签与层，补丁仅在代码
 不改已有“好用”的变量名。
 不新增和现有语义重复的变量名。
 优先在原变量、原方法里就地改逻辑，保持接口不变。
 不用给我全部代码
 修改的代码贴在哪个脚本，要把贴的脚本位置上两句代码和下两句代码给我 
+如果是修改函数，给出修改函数部分的整体代码
 已经有的逻辑直接引用不要再从新制造
+不要修改好以后影响已经完善的动画状态机
+修改过的代码不要影响了现在的动画状态机
 代码要全部一字不差的看完
+如果已经有的功能，代码里查漏补缺
+不需要给每句话都给中文注释
+不用给全部代码
+不用讲为什么，已经改好的不用告诉我，只需要告诉修改的部分
+给出的代码，不要丢失变量，自己要验证一遍
+不要每句话都有注释
 
 
-明天制作空中攻击
+怪物现在可以攻击玩家了，玩家受伤和死亡完成
+明天开始 把怪物对玩家的伤害转移到怪物编辑器上，同时 玩家武器也可以攻击怪物
 
 

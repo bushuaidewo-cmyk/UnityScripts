@@ -233,6 +233,19 @@ public class ProjectileBehaviour : MonoBehaviour
         UpdateFacing(prev, transform.position);
     }
 
+    
+    public float GetCurrentVelX()
+    {
+        float dt = Time.deltaTime;
+        if (dt > 0f)
+        {
+            Vector2 now = transform.position;
+            return (now.x - _prevPos.x) / dt;
+        }
+        // 退化：用“主推进方向 * 基线速度”的水平分量
+        return _heading.x * _baseSpeed;
+    }
+
     // 玩家命中：只在这里处理；地形碰撞统一在 ResolveSweptHit
     void OnTriggerEnter2D(Collider2D other)
     {
@@ -254,6 +267,21 @@ public class ProjectileBehaviour : MonoBehaviour
             var hitRoot = hitGo.transform.root;
             if ((hitRoot == targetRoot) || hitGo.CompareTag("Player"))
             {
+                // 新增：在扣血前，通知玩家当前投射物的水平速度（用于决定正确的击退方向）
+                var playerCtrl = hitGo.GetComponentInParent<PlayerController>();
+                if (playerCtrl != null)
+                {
+                    float vx = GetCurrentVelX();          // ← 你已有的“当前水平速度”估算
+                    playerCtrl.NotifyProjectileKnockback( // ← 新增的通知函数（见下文 PlayerController）
+                        transform.position,               // 伤害源当前位置（世界坐标）
+                        vx                                // 投射物当前水平速度（正右负左）
+                    );
+                }
+
+                // 原逻辑：造成伤害（保持顺序不变）
+                int projDamage = (_cfg != null && _cfg.damage > 0) ? _cfg.damage : 1;
+                hitGo.SendMessageUpwards("TakeDamage", projDamage, SendMessageOptions.DontRequireReceiver);
+
                 ExplodeAndDestroy();
             }
         }
@@ -397,6 +425,18 @@ public class ProjectileBehaviour : MonoBehaviour
                 life = Mathf.Max(life, maxDur);
             }
             Destroy(fx, life + 0.1f);
+        }
+
+        // 爆炸范围伤害（对 Player）
+        if (_cfg != null && _cfg.explosionDamage > 0 && _cfg.radius > 0f)
+        {
+            var hits = Physics2D.OverlapCircleAll(transform.position, _cfg.radius);
+            foreach (var h in hits)
+            {
+                if (!h) continue;
+                if (h.CompareTag("Player"))
+                    h.SendMessageUpwards("TakeDamage", _cfg.explosionDamage, SendMessageOptions.DontRequireReceiver);
+            }
         }
 
         Destroy(gameObject);

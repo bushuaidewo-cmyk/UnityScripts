@@ -173,6 +173,66 @@ public class PlayerController : MonoBehaviour
     // 受伤
     private float currentHP;
 
+    // === 受伤/死亡（新增配置与运行时） ===
+    [Header("玩家伤害命中体（PHitbox）")]
+    [Tooltip("站立姿态使用的伤害命中体（建议设置为子物体上的 Trigger Collider2D，Layer: EPHitbox）")]
+    [SerializeField] private Collider2D hitboxStanding;
+    [Tooltip("下蹲姿态使用的伤害命中体（建议设置为子物体上的 Trigger Collider2D，Layer: EPHitbox）")]
+    [SerializeField] private Collider2D hitboxDuck;
+
+    [Header("受伤/死亡 参数")]
+    [SerializeField] private int maxHP = 100;
+
+    [Header("时间参数 (秒)")]
+    [Tooltip("强制位移/硬直时间：此期间玩家受到击退力控制，无法移动")]
+    [SerializeField] private float hitForceDuration = 0.2f;
+
+    [Tooltip("无敌时间：此期间玩家处于无敌状态（通常 >= 硬直时间）")]
+    [SerializeField] private float hitStunDuration = 0.5f;
+
+    [Header("受击/死亡 特效")]
+    [SerializeField] private GameObject hitEffectPrefab;
+    [SerializeField] private GameObject deathEffectPrefab;
+    [Tooltip("特效生成位置 (如果不填则使用角色 Transform)")]
+    [SerializeField] private Transform vfxSpawnPoint;
+
+    [Header("击退力度")]
+    [Tooltip("正面受击时的击退力度（X=水平向后退的力，Y=垂直跳起的力）。X通常为负值表示向后，Y为正值表示向上。")]
+    [SerializeField] private Vector2 frontHitKnockback = new Vector2(-6f, -3f);
+    [Tooltip("背面受击时的击退力度（X=水平向前扑的力，Y=垂直跳起的力）。X通常为正值表示向前，Y为正值表示向上。")]
+    [SerializeField] private Vector2 backHitKnockback = new Vector2(6f, -3f);
+    [Tooltip("死亡时的击飞力度（无论面向，X总是背离伤害源方向，Y为垂直力）。")]
+    [SerializeField] private Vector2 deathKnockback = new Vector2(-4f, -2f);
+
+    [Header("受击来源伤害数值")]
+    [SerializeField] private int damageMelee = 10;     // MHitbox HIT
+    [SerializeField] private int damageBody = 5;       // EMHitbox / Monster
+    [SerializeField] private int damageProjectile = 8; // MProjectile HIT
+
+    // 运行时状态
+    private bool isInvulnerable = false;   // 是否无敌
+    private bool isKnockback = false;      // 是否处于硬直/不可操作状态
+
+    // 独立计时器
+    private float hitForceTimer = 0f;      // 控制硬直（不可操作）
+    private float hitStunTimer = 0f;       // 控制无敌
+
+    // 特效驱动动画相关
+    private float vfxTimer = 0f;           // 特效剩余时间
+    private bool isHitAnimFrozen = false;  // 是否已冻结在最后一帧
+    private string currentHitAnimState = ""; // 当前播放的受伤动画名
+
+    // 动画交替索引（0/1）
+    private int frontHitVariant = 0;
+    private int backHitVariant = 0;
+    private int lastHitSourceLayer = -1;
+
+    // 最近一次命中源位置（由 OnTriggerEnter2D 写入）
+    private Vector2 lastHitSourcePos = Vector2.zero;
+
+    private bool lastHitWasProjectile = false;
+    private float lastProjectileVelX = 0f;
+
     // 基础状态
     private bool isGrounded;
     private bool prevGrounded;
@@ -277,9 +337,6 @@ public class PlayerController : MonoBehaviour
     private int crouchReenterLockFrames = 0;
     private enum ShieldVisual { None, Standing, Duck, Air }
     private ShieldVisual lastShieldVisual = ShieldVisual.None;
-
-
-
     private bool IsAutoPhaseLocked() => wallJumpAutoPhase && !wallJumpControlUnlocked;
     private bool IsHardLocked() => wallTurnActive;
     #endregion
@@ -297,14 +354,124 @@ public class PlayerController : MonoBehaviour
         if (standingCollider) standingCollider.enabled = true;
         if (duckCollider) duckCollider.enabled = false;
         colliderDuckActive = false;
+        currentHP = Mathf.Max(0, maxHP);
+        // 受击命中体初始状态：站立启用、下蹲关闭（与碰撞体一致）
+        if (hitboxStanding) hitboxStanding.enabled = true;
+        if (hitboxDuck) hitboxDuck.enabled = false;
+        // 绑定命中体事件转发器（运行时自动挂载；不改资源/Prefab）
+        if (hitboxStanding)
+            hitboxStanding.gameObject.AddComponent<PlayerHitboxEventRelay>().Init(this);
+        if (hitboxDuck)
+            hitboxDuck.gameObject.AddComponent<PlayerHitboxEventRelay>().Init(this);
     }
 
     private void Update()
     {
         UpdateWallProximity();
-
         CaptureInput();
         CheckGrounded();
+
+        // --- 受伤/硬直/无敌 逻辑 ---
+        if (isKnockback)
+        {
+            // 递减计时器：hitForceDuration 只负责强制位移时间；hitStunDuration 包含硬直/无敌/动画停留时间
+            if (hitForceTimer > 0f) hitForceTimer -= Time.deltaTime;
+            if (hitStunTimer > 0f) hitStunTimer -= Time.deltaTime;
+
+            //控制动画时长（根据 VFX 时间 + hitStunDuration）★★★
+            UpdateHitAnimationByVfxDuration();
+
+            // 锁死输入：整个 hitStunDuration 期间不允许任何按键生效
+            rawInputX = 0f;
+            keyDownLeft = keyDownRight = keyDownJump = keyDownAttack = keyDownBackFlash = false;
+            keyDownMagic = false;
+            magicHeldKey = false;
+            shieldHeld = false;
+
+            // 强制关闭盾牌
+            if (shieldActiveStanding) CancelShieldStanding(false);
+            if (shieldActiveDuck) CancelShieldDuck(false);
+            if (shieldActiveAir) CancelShieldAir();
+
+            // 1. 强制位移处理
+            //    活着：hitForceDuration 结束后清水平速度
+            //    已死亡：不再依赖 hitForceTimer，交由下面“死亡最终静止”兜底
+            if (currentHP > 0)
+            {
+                if (hitForceTimer <= 0f)
+                {
+                    if (Mathf.Abs(currentSpeedX) > 0.01f)
+                    {
+                        currentSpeedX = 0f;
+                        rb.velocity = new Vector2(0f, rb.velocity.y);
+                    }
+                }
+            }
+
+            // 2. hitStunDuration 结束逻辑（硬直 + 无敌 + 受击动画停留整体结束）
+            //    活着：结束硬直/无敌 → 恢复操作
+            //    已死亡：保持 isKnockback=true，不再恢复操作（死亡阶段全程锁死）
+            if (hitStunTimer <= 0f)
+            {
+                hitStunTimer = 0f;          // 钳到 0，防止反复进入
+
+                if (currentHP > 0)
+                {
+                    isKnockback = false;
+                    isInvulnerable = false;
+                }
+
+                // 死亡阶段：当死亡动画停在最后一帧时，强制将水平速度清为 0，彻底静止
+                if (currentHP <= 0)
+                {
+                    var dieState = anim.GetCurrentAnimatorStateInfo(0);
+                    if (dieState.IsName("player_die") && dieState.normalizedTime >= 1f)
+                    {
+                        currentSpeedX = 0f;
+                        rb.velocity = new Vector2(0f, rb.velocity.y);
+                    }
+                }
+
+                // 结束时统一解冻动画速度（死亡也需要，让 Animator 正常停在最后一帧）
+                ForceEndHitAnimation();
+            }
+
+            // 3. 受击期间落地处理（只做“物理兜底”，不触动画面/状态机）
+            //    空中被击飞后落到地面，稳定一下水平速度，避免“在地面继续飘”
+            if (!prevGrounded && isGrounded && currentHP > 0)
+            {
+                // 只兜底 X 速度，不触发 Land 动画，不改 WallJump 等其它逻辑
+                if (hitForceTimer <= 0f)
+                {
+                    if (Mathf.Abs(currentSpeedX) > 0.01f)
+                    {
+                        currentSpeedX = 0f;
+                        rb.velocity = new Vector2(0f, rb.velocity.y);
+                    }
+                }
+            }
+
+            // === 死亡：死亡动画最后一帧时强制刹车 ===
+            if (currentHP <= 0)
+            {
+                // 约定：死亡主状态名为 "player_die"
+                var dieInfo = anim.GetCurrentAnimatorStateInfo(0);
+                bool inDieState = dieInfo.IsName("player_die");
+
+                // normalizedTime >= 1 表示已经播完一轮；!IsInTransition 保证不在过渡中
+                if (inDieState && dieInfo.normalizedTime >= 1.0f && !anim.IsInTransition(0))
+                {
+                    // 水平方向完全停止，只保留当前竖直速度（一般这里已经很小了）
+                    float vy = rb.velocity.y;
+                    rb.velocity = new Vector2(0f, vy);
+                    currentSpeedX = 0f;
+                }
+            }
+
+            return;
+        }
+
+        // --- 以下为正常控制逻辑 ---
 
         if (!isGrounded) ExitSlopeIdleLock();
 
@@ -447,6 +614,197 @@ public class PlayerController : MonoBehaviour
     }
     #endregion
 
+    // 播放特效并设置 vfxTimer (用于控制动画时长)
+    private void PlayVfx(GameObject prefab, Transform spawnPoint)
+    {
+        if (prefab == null)
+        {
+            vfxTimer = 0.5f; // 无特效时的保底时间
+            return;
+        }
+
+        Vector3 pos = spawnPoint ? spawnPoint.position : transform.position;
+        GameObject instance = Instantiate(prefab, pos, Quaternion.identity, spawnPoint ? spawnPoint : transform);
+
+        float duration = 1.0f;
+
+        // 1）优先按粒子系统时长
+        var ps = instance.GetComponent<ParticleSystem>();
+        if (ps != null)
+        {
+            ps.Play(true);                        // ← 确保粒子启动
+            duration = ps.main.duration;
+            // 特效自行销毁，稍微延迟一点防止刚播完就没
+            Destroy(instance, duration + 0.1f);
+        }
+        else
+        {
+            // 2）没有粒子系统：如果是带 Animator 的“死亡动画 prefab”，按状态时长销毁
+            var animVfx = instance.GetComponentInChildren<Animator>();
+            if (animVfx != null)
+            {
+                animVfx.gameObject.SetActive(true);   // 防止预制体子节点是关着的
+                try
+                {
+                    var info = animVfx.GetCurrentAnimatorStateInfo(0);
+                    duration = Mathf.Max(0.1f, info.length);
+                }
+                catch
+                {
+                    duration = 2.0f; // 兜底
+                }
+                Destroy(instance, duration + 0.1f);
+            }
+            else
+            {
+                // 3）既没有粒子也没有 Animator：默认给 2 秒
+                duration = 2.0f;
+                Destroy(instance, 2.0f);
+            }
+        }
+        vfxTimer = duration;
+    }
+
+    // === 提供给动画事件用的受击/死亡特效入口（只播特效，不改数值逻辑） ===
+    public void PlayHitVfxOnce()
+    {
+        PlayVfx(hitEffectPrefab, vfxSpawnPoint);
+    }
+
+    // === 提供给动画事件用的受击/死亡特效入口（只播特效，不改数值逻辑） ===
+    public void PlayDeathVfxOnce()
+    {
+        // 使用 Inspector 里配置的 deathEffectPrefab + vfxSpawnPoint
+        PlayVfx(deathEffectPrefab, vfxSpawnPoint);
+    }
+
+    // 由投射物或其它伤害体在命中瞬间通知“伤害源世界位置”
+    public void NotifyHitSource(Vector2 srcPos)
+    {
+        lastHitSourcePos = srcPos;
+    }
+
+    // PlayerController.cs 中：替换 ApplyKnockback
+    private void ApplyKnockback(Vector2 force, float dxToSource)
+    {
+        float magX = (Mathf.Abs(force.x) > 0.0001f) ? Mathf.Abs(force.x) : Mathf.Abs(frontHitKnockback.x);
+        float finalX = 0f;
+
+        if (lastHitWasProjectile)
+        {
+            
+            // 对于飞行物：优先使用飞行物的水平速度方向决定击退方向
+            if (Mathf.Abs(lastProjectileVelX) > 0.0001f)
+            {
+                finalX = Mathf.Sign(lastProjectileVelX) * magX;
+            }
+            else
+            {
+                // 兜底：使用记录的位置决定（飞来的方向）
+                float dir = lastHitSourcePos.x - transform.position.x;
+                if (Mathf.Abs(dir) < 0.0001f) dir = dxToSource;
+                // 注意：此处采用“飞来的方向”，与近战背离源不同
+                finalX = (dir > 0f) ? +magX : -magX;
+            }
+        }
+        else
+        {
+            // 非飞行物（近战/怪物等）：保持原有逻辑，总是背离伤害源
+            float dir = lastHitSourcePos.x - transform.position.x;
+            if (Mathf.Abs(dir) < 0.0001f) dir = dxToSource;
+            finalX = (dir > 0f) ? -magX : +magX;
+        }
+
+        rb.velocity = new Vector2(finalX, force.y);
+        currentSpeedX = finalX;
+
+        // 使用完成后清标志（避免影响下一次判定）
+        lastHitWasProjectile = false;
+        lastProjectileVelX = 0f;
+    }
+
+    // === 玩家受伤：动画关键帧触发特效（EPHitbox） ===
+    public void OnPlayerHitVfx()
+    {
+        PlayVfx(hitEffectPrefab, vfxSpawnPoint);
+    }
+
+    // === 玩家死亡：动画关键帧触发特效（EPDiebox） ===
+    public void OnPlayerDieVfx()
+    {
+        // 死亡流程中再补一次死亡特效（例如地面落地那一刻）
+        PlayVfx(deathEffectPrefab, vfxSpawnPoint);
+    }
+
+    // 死亡动画最后一帧：由动画事件调用，彻底停止水平移动
+    public void OnPlayerDeathAnimEnd()
+    {
+        if (rb != null)
+        {
+            rb.velocity = Vector2.zero;   // 水平和垂直都归零，保证尸体完全停住
+            currentSpeedX = 0f;
+        }
+    }
+
+    // --- 根据特效时长控制受伤动画 ---
+    private void UpdateHitAnimationByVfxDuration()
+    {
+        if (!isKnockback) return;       // 仅在受伤阶段处理
+        if (vfxTimer > 0f)
+            vfxTimer -= Time.deltaTime;
+
+        // 检查当前动画进度
+        var stateInfo = anim.GetCurrentAnimatorStateInfo(0);
+
+        if (stateInfo.IsName(currentHitAnimState))
+        {
+            if (hitStunTimer <= 0f)
+            {
+                hitStunTimer = 0f;      // 钳到 0，防止重复进入
+                ForceEndHitAnimation(); // 立即恢复动画速度，交回状态机
+
+                if (currentHP <= 0 && rb != null)
+                {
+                    rb.velocity = Vector2.zero; // X/Y 都清零
+                    currentSpeedX = 0f;
+                }
+            }
+            else
+            {
+                if (stateInfo.normalizedTime >= 1.0f)
+                {
+                    if (!isHitAnimFrozen)
+                    {
+                        anim.speed = 0f;    // 冻在最后一帧，直到 hitStunTimer 结束
+                        isHitAnimFrozen = true;
+                    }
+                }
+            }
+        }
+
+        if (vfxTimer <= 0f && hitStunTimer <= 0f)
+        {
+            ForceEndHitAnimation();
+        }
+    }
+
+    private void ForceEndHitAnimation()
+    {
+        if (isHitAnimFrozen)
+        {
+            anim.speed = 1f;
+            isHitAnimFrozen = false;
+        }
+    }
+
+    // 新增：供飞行物在命中扣血前注入击退方向依据（速度方向 + 源位置）
+    public void NotifyProjectileKnockback(Vector2 srcPos, float projectileVelX)
+    {
+        lastHitWasProjectile = true;
+        lastProjectileVelX = projectileVelX;
+        lastHitSourcePos = srcPos;
+    }
+
     #region 输入
     private void CaptureInput()
     {
@@ -548,34 +906,54 @@ public class PlayerController : MonoBehaviour
 
         if (!prevGrounded && isGrounded)
         {
-            ForceExitWallJumpLocks(true);
-
-            isJumping = false;
-            airAttackActive = false;
-            airAttackAnimPlaying = false;
-            relay?.StopAttackHitbox();          // ← 兜底：落地切出时关掉命中体
-
-            SafeResetTrigger(TRIG_JumpUp);
-            SafeResetTrigger(TRIG_JumpForward);
-            SafeResetTrigger("Trig_JumpDown");
-
-            if (Time.time >= landDebounceUntil)
-            {
-                landDebounceUntil = Time.time + 0.05f;
-                SafeResetTrigger(TRIG_Land);
-                SafeSetTrigger(TRIG_Land);
-                // 注意：这里不要再 CrossFade 到 STATE_JumpUp（你之前误加在这里了）
-            }
-
-            if (shieldHeld && !shieldActiveStanding && !shieldActiveDuck)
-                TryActivateStandingShield(true);
-
-            extraJumpsUsed = 0;
-            doubleJumpActive = false;
-            doubleJumpPoseHold = false;
+            OnLanding();
         }
     }
 
+    // 把原有的落地重置逻辑提取为一个独立方法
+    private void OnLanding()
+    {
+        // 只有非受伤状态下才去重置 WallJump 锁，避免受伤击飞过程被重置重力
+        if (!isKnockback)
+        {
+            ForceExitWallJumpLocks(true);
+        }
+        else
+        {
+            // 受伤期间落地，只简单把 WallJump 状态清掉，不强制改 velocity (否则会在这停住)
+            wallTurnActive = false;
+            wallJumpAutoPhase = false;
+            wallJumpControlUnlocked = false;
+            // 恢复重力以免卡在空中
+            if (rb.gravityScale == 0f) rb.gravityScale = savedGravityScale != 0f ? savedGravityScale : 1f;
+        }
+
+        isJumping = false;
+        airAttackActive = false;
+        airAttackAnimPlaying = false;
+        relay?.StopAttackHitbox();
+
+        // 无论是否受伤，都重置动画触发器，防止积压
+        SafeResetTrigger(TRIG_JumpUp);
+        SafeResetTrigger(TRIG_JumpForward);
+        SafeResetTrigger("Trig_JumpDown");
+
+        // 仅在非受伤时触发 Land 动画
+        if (!isKnockback && Time.time >= landDebounceUntil)
+        {
+            landDebounceUntil = Time.time + 0.05f;
+            SafeResetTrigger(TRIG_Land);
+            SafeSetTrigger(TRIG_Land);
+        }
+
+        // 恢复盾（仅非受伤）
+        if (!isKnockback && shieldHeld && !shieldActiveStanding && !shieldActiveDuck)
+            TryActivateStandingShield(true);
+
+        extraJumpsUsed = 0;
+        doubleJumpActive = false;
+        doubleJumpPoseHold = false;
+    }
     private void HandleAirJumpForwardSwitch()
     {
         if (isGrounded) return;
@@ -780,7 +1158,6 @@ public class PlayerController : MonoBehaviour
         
     }
 
-    // 新增：工具方法，强制切回站立碰撞体
     private void ForceStandingCollider()
     {
         if (!standingCollider || !duckCollider) return;
@@ -790,6 +1167,9 @@ public class PlayerController : MonoBehaviour
         standingCollider.enabled = true;
         colliderDuckActive = false;
         Physics2D.SyncTransforms();
+        // 同步：受击命中体切换为站立
+        if (hitboxDuck) hitboxDuck.enabled = false;
+        if (hitboxStanding) hitboxStanding.enabled = true;
     }
 
     private void CancelShieldStanding(bool playDownAnim)
@@ -1311,6 +1691,60 @@ public class PlayerController : MonoBehaviour
         }
     }
 
+    // PlayerController.cs 中：替换 HandleHitFromCollider
+    private void HandleHitFromCollider(Collider2D other)
+    {
+        if (!other) return;
+
+        // 只在非死亡且非受伤无敌时记录并生效
+        if (currentHP <= 0 || isInvulnerable) return;
+
+        int layer = other.gameObject.layer;
+        string lname = LayerMask.LayerToName(layer);
+
+        // 记录最近一次命中源位置（用于朝向 & 击退方向）
+        lastHitSourcePos = other.bounds.center;
+
+        // 重置飞行物标志
+        lastHitWasProjectile = false;
+        lastProjectileVelX = 0f;
+
+        // 如果是飞行物层，尝试记录其水平速度（attachedRigidbody）
+        if (lname == "projectile" || lname == "Projectile" || lname == "MProjectile HIT")
+        {
+            lastHitWasProjectile = true;
+            var otherRb = other.attachedRigidbody;
+            if (otherRb != null)
+                lastProjectileVelX = otherRb.velocity.x;
+            else
+                lastProjectileVelX = other.bounds.center.x - transform.position.x; // 兜底（位置差）
+        }
+
+        // 近战 / 怪物身体 / 飞行物 伤害
+        if (lname == "mhitbox" || lname == "MHitbox" || lname == "MHitbox HIT" ||
+            lname == "monster" || lname == "Monster" ||
+            lname == "projectile" || lname == "Projectile" || lname == "MProjectile HIT")
+        {
+            int dmg = 0;
+            if (lname == "mhitbox" || lname == "MHitbox" || lname == "MHitbox HIT")
+                dmg = Mathf.Max(0, damageMelee);
+            else if (lname == "monster" || lname == "Monster")
+                dmg = Mathf.Max(0, damageBody);
+            else
+                dmg = Mathf.Max(0, damageProjectile);
+
+            TakeDamage(dmg);
+            return;
+        }
+
+        // 即死触发器（如悬崖）
+        if (lname == "DeathZone" && other.isTrigger)
+        {
+            currentHP = 0;
+            TakeDamage(0); // 0伤也会触发死亡检测
+        }
+    }
+
     // 地面攻击自动收尾（防止动画事件缺失导致卡死）
     private void AutoEndGroundAttack()
     {
@@ -1560,6 +1994,9 @@ public class PlayerController : MonoBehaviour
     #endregion
 
     #region Ground Check
+
+
+
     // PATCH: 粘地 Ray 的“兜底长度”加大，快速站/蹲切换时更容易重新挂住地面
     private void CheckGrounded()
     {
@@ -2087,9 +2524,6 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-
-    // 站立/下蹲碰撞体切换后，提高“粘地”持续帧数，极端 S/D 抖动更不易丢地
-    // 片段：SyncCrouchColliders
     private void SyncCrouchColliders()
     {
         if (!standingCollider || !duckCollider) return;
@@ -2115,10 +2549,15 @@ public class PlayerController : MonoBehaviour
 
         Physics2D.SyncTransforms();
 
+        // 【关键逻辑】同步受击 Hitbox 的启用状态
+        // 确保 Hitbox_Standing 只在站立时启用，Hitbox_Duck 只在下蹲时启用
+        // 这对应了 requirements 中的 "need to switch them"
+        if (hitboxStanding) hitboxStanding.enabled = !colliderDuckActive;
+        if (hitboxDuck) hitboxDuck.enabled = colliderDuckActive;
+
         // 保持更长的粘地窗口，减少极端抖动
         crouchGroundStickyFrames = 5;
     }
-
 
     private bool IsPushingIntoWallNow()
     {
@@ -2131,6 +2570,27 @@ public class PlayerController : MonoBehaviour
         bool pushingLeftIntoLeftWall = (inX < 0f && groundSideNormalX > 0f);
 
         return pushingRightIntoRightWall || pushingLeftIntoLeftWall;
+    }
+
+
+    // PlayerController.cs 中：可以在玩家本体的 OnTriggerEnter2D 入口加一行日志（可选）
+    void OnTriggerEnter2D(Collider2D other)
+    {
+        HandleHitFromCollider(other);
+    }
+
+    // 命中体子物体的事件转发入口
+    public void OnPlayerHitboxTriggerEnter2D(Collider2D other)
+    {
+        HandleHitFromCollider(other);
+    }
+
+    // Collision 兜底
+    public void OnPlayerHitboxCollisionEnter2D(Collision2D col)
+    {
+        var other = col.collider;
+        if (!other) return;
+        HandleHitFromCollider(other);
     }
 
     // 斜坡上投影移动：不钳制向上分量；轻微贴地；回写 currentSpeedX 保持加速手感一致
@@ -2168,15 +2628,141 @@ public class PlayerController : MonoBehaviour
         currentSpeedX = vAlong.magnitude * dirSign;
     }
 
-    // TryStepUpSmallLedge：要求前方有落脚面才抬步，避免“抬到空气里”；同时消除未使用变量警告
-
+    #region 受伤与死亡逻辑
+    // 玩家受击入口（扣血、击退、特效、动画）
     public void TakeDamage(int damage)
     {
-        // 你的受伤逻辑
-        currentHP -= damage;
-        Debug.Log($"玩家受到 {damage} 点伤害，剩余 HP: {currentHP}");
+        // 铁律：仅在受伤窗口才无敌
+        if (isInvulnerable) return;
+
+        int dmg = Mathf.Max(0, damage);
+        currentHP -= dmg;
+
+        // 1. 立即打断当前所有动作（清理中间态）
+        ForceStopActionsOnHit();
+
+        // 判定死亡
+        if (currentHP <= 0)
+        {
+            currentHP = 0;
+            StartDeath();
+            return;
+        }
+
+        // --- 受伤逻辑 ---
+
+        // 2. 判定击退方向与力度
+        // hitFromFront: 源在角色前方
+        bool sourceIsRight = lastHitSourcePos.x > transform.position.x;
+        bool hitFromFront = (facingRight && sourceIsRight) || (!facingRight && !sourceIsRight);
+
+        Vector2 kbConfig = hitFromFront ? frontHitKnockback : backHitKnockback;
+
+        // 3. 应用击退速度
+        float dxToSource = lastHitSourcePos.x - transform.position.x;
+        ApplyKnockback(kbConfig, dxToSource);
+
+        // 4. 设置状态与计时器：
+        //    hitForceDuration：纯“被击飞位移”时间；
+        //    hitStunDuration：包含“硬直时间 + 无敌时间”的总时长（硬直结束=无敌结束）
+        isKnockback = true;
+        isInvulnerable = true;
+
+        hitForceTimer = hitForceDuration; // 仅控制强制位移阶段
+        hitStunTimer = hitStunDuration;   // 统一控制硬直+无敌整体时长
+
+        // 5. 先确定要播的受击动画状态，再立刻播放特效（保证“动画一开始就有特效”）
+        if (hitFromFront)
+        {
+            currentHitAnimState = (frontHitVariant == 0) ? "player_frontHit1" : "player_frontHit2";
+            frontHitVariant = 1 - frontHitVariant;
+        }
+        else
+        {
+            currentHitAnimState = (backHitVariant == 0) ? "player_backHit1" : "player_backHit2";
+            backHitVariant = 1 - backHitVariant;
+        }
+        PlayVfx(hitEffectPrefab, vfxSpawnPoint);  // 受击动画开始时立即在锚点生成并跟随
+
+        // 6. 播放受击动画
+        // 确保动画速度重置
+        anim.speed = 1f;
+        isHitAnimFrozen = false;
+        anim.CrossFadeInFixedTime(currentHitAnimState, 0f, 0, 0f);
+
+        Debug.Log($"玩家受到 {dmg} 点伤害，剩余 HP: {currentHP}");
     }
 
+    // 【用于受伤时清理所有残留状态
+    private void ForceStopActionsOnHit()
+    {
+        // 1. 打断 BackFlash
+        if (backFlashActive) CancelBackFlash();
+        backFlashLock = false;
+
+        // 2. 打断 魔法
+        if (magicActive) CancelMagic();
+
+        // 3. 打断 普通攻击 / 下蹲攻击
+        if (groundAttackActive)
+        {
+            groundAttackActive = false;
+            duckAttackFacingLocked = false;
+            relay?.StopAttackHitbox(); // 立即关闭攻击框
+        }
+
+        // 4. 打断 空中攻击
+        if (airAttackActive || airAttackAnimPlaying)
+        {
+            airAttackActive = false;
+            airAttackAnimPlaying = false;
+            relay?.StopAttackHitbox();
+        }
+
+        // 5. 打断 踩墙 / 自动跳
+        if (wallTurnActive || wallJumpAutoPhase)
+        {
+            ForceExitWallJumpLocks(false);
+        }
+
+        // 6. 重置盾牌相关的中间态
+        shieldActiveStanding = false;
+        shieldActiveDuck = false;
+        shieldActiveAir = false;
+        shieldAnimUpPlayed = false;
+        pendingShieldUp = false;
+        pendingShieldDown = false;
+
+        // 7. 确保重力恢复 (防止从斜坡锁定状态被打飞)
+        if (rb.gravityScale == 0f)
+        {
+            rb.gravityScale = (savedGravityScale != 0f) ? savedGravityScale :
+                              ((slopeSavedGravity != 0f) ? slopeSavedGravity : 1f);
+        }
+    }
+
+    // 死亡流程
+    private void StartDeath()
+    {
+        // 1. 播放死亡特效
+        PlayVfx(deathEffectPrefab, vfxSpawnPoint);
+
+        // 2. 施加死亡击飞
+        float dx = lastHitSourcePos.x - transform.position.x;
+        ApplyKnockback(deathKnockback, dx);
+
+        // 3. 状态锁定
+        isKnockback = true;
+        isInvulnerable = true;
+        // 死亡后不再恢复控制（hitStunTimer 只是用来控制动画冻结，不再解锁输入）
+        hitForceTimer = 9999f;
+        hitStunTimer = 9999f;
+
+        // 4. 播放死亡动画（保持已有状态机命名）
+        anim.speed = 1f;                                  // 确保不会是冻结状态进入
+        anim.CrossFadeInFixedTime("player_die", 0f, 0, 0f);
+        anim.Update(0f);
+    }
 
     private bool TryStepUpSmallLedge(float dirSign)
     {
@@ -2255,7 +2841,7 @@ public class PlayerController : MonoBehaviour
         return false;
     }
 
-    #region Safe Animator helpers
+    
     private void SafeSetTrigger(string name)
     {
         if (HasParam(anim, name, AnimatorControllerParameterType.Trigger))

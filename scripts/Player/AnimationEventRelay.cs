@@ -11,6 +11,9 @@ public class AnimationEventRelay : MonoBehaviour
     // 武器（单个）
     public AttackEventHub attackHub;
 
+    // 当前武器命中体控制器（由 WeaponManager 在装备时设置）
+    [SerializeField] private HitboxController weaponHitbox;
+
     // 特效（可多个）
     [Tooltip("可添加多个特效 AttackEventHub（HandSocket 下每个特效各挂一份）")]
     public List<AttackEventHub> vfxHubs = new List<AttackEventHub>();
@@ -26,8 +29,7 @@ public class AnimationEventRelay : MonoBehaviour
     [Tooltip("下蹲举盾时，盾Hub Animator 要播放的状态名（循环显示盾）")]
     public string shieldDuckState = "player_duck_shield_idle";
 
-    // 新增：当前武器命中体控制器（由 WeaponManager 在装备时设置）
-    [SerializeField] private HitboxController weaponHitbox;
+    
 
     private void Awake()
     {
@@ -104,6 +106,7 @@ public class AnimationEventRelay : MonoBehaviour
         if (!shieldHub || string.IsNullOrEmpty(shieldStandingState)) return;
         shieldHub.PlayWeapon(shieldStandingState);
     }
+
     public void PlayShieldDuck()
     {
         if (!shieldHub || string.IsNullOrEmpty(shieldDuckState)) return;
@@ -160,4 +163,36 @@ public class AnimationEventRelay : MonoBehaviour
     {
         weaponHitbox?.CloseAll();
     }
+
+    // === 玩家受伤/死亡：动画关键帧触发特效（EPHitbox / EPDiebox） ===
+    // 受伤关键帧事件：在受击动画中添加事件名“EPHitbox”
+    public void EPHitbox()
+    {
+        // 只播玩家受伤特效，不重复扣血
+        if (player != null)
+        {
+            player.OnPlayerHitVfx();
+        }
+    }
+
+    // 死亡关键帧事件：在死亡动画中添加事件名“EPDiebox”
+    public void EPDiebox()
+    {
+        // 死亡流程中再补一次死亡特效（例如倒地那一刻）
+        if (player != null)
+        {
+            player.OnPlayerDieVfx();
+        }
+    }
+
+    // 死亡动画最后一帧事件：在死亡动画最后一帧添加事件名“EPDieEnd”
+    public void EPDieEnd()
+    {
+        if (player != null)
+        {
+            player.OnPlayerDeathAnimEnd();
+        }
+    }
+
+
 }

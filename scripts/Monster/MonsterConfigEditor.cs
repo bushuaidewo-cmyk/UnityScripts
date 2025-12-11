@@ -1204,7 +1204,7 @@ public class MonsterConfigEditor : Editor
                     EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackFarAnimation"), new GUIContent("动画"));
                     EditorGUILayout.PropertyField(spAttack.FindPropertyRelative("attackFarEffectPrefab"), new GUIContent("特效Prefab"));
 
-                    if (Fold($"discover.attacks.{index}.projectile", "Projectile 配置", true))
+                    if (Fold($"discover.attacks.{index}.projectile", "地面飞行物配置", true))
                     {
                         using (new EditorGUI.IndentLevelScope())
                         {
@@ -1242,13 +1242,11 @@ public class MonsterConfigEditor : Editor
                                 }
 
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("spawnAim"), new GUIContent("发射朝向"));
-
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("radius"), new GUIContent("爆炸半径"));
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("duration"));
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("interval"));
-                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("FlygunBoomAnimation"));
-                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("FlygunBoomEffectPrefab"));
-
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("FlygunBoomAnimation"), new GUIContent("爆炸动画"));
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("FlygunBoomEffectPrefab"), new GUIContent("爆炸特效 Prefab"));
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("linearEnabled"));
                                 if (spProj.FindPropertyRelative("linearEnabled").boolValue)
                                 {
