@@ -1,15 +1,8 @@
-using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.Profiling;
 
-/// <summary>
-/// 怪物生成器（批量 + 间隔）：
-/// - maxSpawnCount == 0  => 不出生
-/// - 首批立即刷（按 spawnBatchCount，受剩余额度截断）
-/// - 每 spawnInterval 秒再刷一批，直到“总出生数”达到 maxSpawnCount
-/// - Points：同一批里若只有 1 个点，则同点重叠生成；多点则按顺序/随机分配
-/// - Area：同一批在区域内随机散点
-/// </summary>
 public class MonsterSpawner : MonoBehaviour
 {
     [Header("怪物配置 ScriptableObject")]
@@ -67,9 +60,6 @@ public class MonsterSpawner : MonoBehaviour
         loopRunning = false;
     }
 
-    /// <summary>
-    /// 计算本批应刷数量（受剩余名额截断）
-    /// </summary>
     private int CalcBatchToSpawn()
     {
         var spawn = monsterConfig.spawnConfig;
@@ -82,9 +72,6 @@ public class MonsterSpawner : MonoBehaviour
         return Mathf.Min(batch, remain);
     }
 
-    /// <summary>
-    /// 刷一批
-    /// </summary>
     private void SpawnBatch(int count)
     {
         var spawn = monsterConfig.spawnConfig;
@@ -130,6 +117,12 @@ public class MonsterSpawner : MonoBehaviour
             ctrl.config = monsterConfig;
             ctrl.spawner = this;
 
+            // 确保有伤害档案，并统一用配置的三种伤害（无爆炸伤害字段）
+            var prof = go.GetComponentInChildren<MonsterDamageProfile>();
+            if (prof == null) prof = go.AddComponent<MonsterDamageProfile>();
+            var dmg = monsterConfig.damage;
+            prof.Apply(dmg.bodyDamage, dmg.meleeDamage, dmg.projectileDamage);
+
             alive.Add(go);
             spawnedTotal++;
 
@@ -138,12 +131,7 @@ public class MonsterSpawner : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// 取本次生成坐标
-    /// Points：若仅 1 个点 -> 同一批所有都会用这个点（重叠）
-    /// 多个点时按 sequentialSpawn 顺序/随机挑点
-    /// Area在范围内随机
-    /// </summary>
+    
     private Vector3 GetSpawnPosition(SpawnConfig spawn)
     {
         if (spawn.positionType == SpawnPositionType.Area)
@@ -180,11 +168,7 @@ public class MonsterSpawner : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// 被 MonsterController 在 Die() 时调用
-    /// （当前逻辑下 maxSpawnCount 是“总出生数上限”，不是“存活上限”，
-    ///  因此这里不影响后续是否继续刷，只做清理。）
-    /// </summary>
+    
     public void NotifyMonsterDeath(GameObject monster)
     {
         if (monster) alive.Remove(monster);

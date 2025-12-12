@@ -11,6 +11,7 @@ public partial class MonsterController : MonoBehaviour
     private Transform player;
     private Collider2D col;
     private Rigidbody2D rb;
+    private MonsterDamageProfile damageProfile;
     private bool isDead;
     private int patrolIndex = 0;
     private bool isResting = false;
@@ -263,13 +264,6 @@ public partial class MonsterController : MonoBehaviour
     private PatrolMovement attackMoveRuntime = null;
     private PatrolMovement attackJumpRuntime = null;
 
-    // === 贴身伤害（新增） ===
-    [Header("贴身伤害")]
-    [SerializeField] private int bodyDamage = 5;
-
-    // 新增：公开访问器，供 PlayerController 读取配置伤害
-    public int BodyDamage => bodyDamage;
-
     // 命中体引用（近战）
     private Collider2D meleeHitboxCached = null;
 
@@ -300,6 +294,15 @@ public partial class MonsterController : MonoBehaviour
             enabled = false;
             return;
         }
+
+        // 将配置中的伤害注入到本体的 MonsterDamageProfile
+        damageProfile = GetComponentInChildren<MonsterDamageProfile>();
+        if (damageProfile != null && config != null)
+        {
+            var d = config.damage;
+            damageProfile.Apply(d.bodyDamage, d.meleeDamage, d.projectileDamage);
+        }                                                                          
+
         // 初始朝向
         if (config.spawnConfig.spawnOrientation == Orientation.FaceLeft)
             transform.rotation = Quaternion.Euler(0, 180f, 0);
@@ -1375,6 +1378,14 @@ public partial class MonsterController : MonoBehaviour
         int projLayer = LayerMask.NameToLayer("Projectile");
         if (projLayer >= 0) SetLayerRecursively(go, projLayer);
 
+        // 运行时覆盖（兜底）：命中伤害 + 爆炸伤害
+        var prof = GetComponent<MonsterDamageProfile>();
+        if (prof)
+        {
+            projCfg.damage = Mathf.Max(1, prof.ProjectileDamage);
+            
+        }
+
         // 最后再 Init（此时已存在触发器 Collider，不会再有警告）
         beh.Init(player, projCfg, shotDir, groundLayer);
     }
@@ -1504,6 +1515,9 @@ public partial class MonsterController : MonoBehaviour
         p.boomerangBackAccelTime = sky.SkyboomerangBackAccelTime;
         p.boomerangBackDecel = sky.SkyboomerangBackDecel;
         p.boomerangBackDecelTime = sky.SkyboomerangBackDecelTime;
+
+        // 爆炸伤害同 projectileDamage，半径已由 Sky 配置提供
+        p.explosionDamage = p.damage;
 
         return p;
     }
@@ -2945,7 +2959,12 @@ public partial class MonsterController : MonoBehaviour
         var other = col.collider;
         if (other != null && other.CompareTag("Player"))
         {
-            other.SendMessageUpwards("TakeDamage", Mathf.Max(0, bodyDamage), SendMessageOptions.DontRequireReceiver);
+            // 贴身伤害统一走 Profile / config，不再用本地字段
+            int dmg = damageProfile != null
+                ? damageProfile.BodyDamage
+                : (config != null ? config.damage.bodyDamage : 0);
+
+            other.SendMessageUpwards("TakeDamage", Mathf.Max(0, dmg), SendMessageOptions.DontRequireReceiver);
         }
     }
 
@@ -3354,7 +3373,19 @@ public partial class MonsterController : MonoBehaviour
         if (_activeSkyAttack == null) return;
 
         var hit = ResolveHitboxCollider(_activeSkyAttack.meleeHitboxChildPath);
-        if (hit) hit.enabled = true;
+        if (hit)
+        {
+            // 补充伤害注入逻辑，与地面近战保持一致 ===
+            var hb = hit.GetComponentInParent<HitboxController>(); // 假设 HitboxController 挂在 Collider 同级或父级
+            var prof = GetComponent<MonsterDamageProfile>();
+
+            // 从 MonsterDamageProfile 获取近战伤害并注入给 Hitbox
+            if (hb && prof)
+            {
+                hb.InjectBaseDamage(prof.MeleeDamage);
+            }
+            hit.enabled = true;
+        }
     }
 
     public void OnSkyAttackAnimationEnd()
@@ -3420,13 +3451,16 @@ public partial class MonsterController : MonoBehaviour
 
         var projCfg = MapSkyProjectileToRuntime(skyProj);
 
-        // 覆写本次发射的命中伤害（不污染资产）
+        // 运行时覆盖（兜底）：命中伤害 + 爆炸伤害
         var prof = GetComponent<MonsterDamageProfile>();
-        if (prof) projCfg.damage = Mathf.Max(1, prof.ProjectileDamage);
+        if (prof)
+        {
+            projCfg.damage = Mathf.Max(1, prof.ProjectileDamage);
+            
+        }
 
         StartCoroutine(SpawnBurstProjectiles(spawn, projCfg));
     }
-
 
     public void OnAttackAnimationStart()
     {
@@ -3572,13 +3606,16 @@ public partial class MonsterController : MonoBehaviour
             return;
         }
 
-        // 运行时覆盖本次飞行物的命中伤害（不会污染资产，因为 MonsterConfig 已在 Start 克隆）
+        // 运行时覆盖飞行物伤害（命中伤害 + 爆炸伤害）
         var prof = GetComponent<MonsterDamageProfile>();
-        if (prof) projCfg.damage = Mathf.Max(1, prof.ProjectileDamage);
+        if (prof)
+        {
+            projCfg.damage = Mathf.Max(1, prof.ProjectileDamage);
+            
+        }
 
         StartCoroutine(SpawnBurstProjectiles(spawn, projCfg));
     }
-
     private Collider2D ResolveHitboxCollider(string childPath)
     {
         if (meleeHitboxCached) return meleeHitboxCached;
@@ -3613,6 +3650,4 @@ public partial class MonsterController : MonoBehaviour
 
         PlayEffect(prefab, anchor);
     }
-
-
 }

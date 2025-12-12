@@ -17,6 +17,7 @@ public class MonsterConfigEditor : Editor
         var spMaxHP = serializedObject.FindProperty("maxHP");
         var spExp = serializedObject.FindProperty("exp");
         var spPrefab = serializedObject.FindProperty("monsterPrefab");
+        var spDamage = serializedObject.FindProperty("damage");
 
         // 各配置块
         var spSpawn = serializedObject.FindProperty("spawnConfig");
@@ -27,16 +28,14 @@ public class MonsterConfigEditor : Editor
         var spAirIDs = serializedObject.FindProperty("airPhaseConfig");
         var spAirStage = serializedObject.FindProperty("airStageConfig");
 
-        // 1) 基础属性（新增折叠三角）
-        if (Fold("basic", "基础属性", true))
+        // ===== 伤害配置 =====
+        if (spDamage != null && Fold("damage", "伤害配置（近战/贴身/远程/爆炸）", true))
         {
             using (new EditorGUI.IndentLevelScope())
             {
-                EditorGUILayout.PropertyField(spMonsterID);
-                EditorGUILayout.PropertyField(spLevel);
-                EditorGUILayout.PropertyField(spMaxHP);
-                EditorGUILayout.PropertyField(spExp);
-                EditorGUILayout.PropertyField(spPrefab);
+                EditorGUILayout.PropertyField(spDamage.FindPropertyRelative("bodyDamage"), new GUIContent("贴身伤害"));
+                EditorGUILayout.PropertyField(spDamage.FindPropertyRelative("meleeDamage"), new GUIContent("近战伤害"));
+                EditorGUILayout.PropertyField(spDamage.FindPropertyRelative("projectileDamage"), new GUIContent("远程伤害"));
             }
         }
 
@@ -57,7 +56,6 @@ public class MonsterConfigEditor : Editor
             }
         }
 
-        // 5) 空中配置（巡逻/发现）
         DrawAirStageConfig(spAirStage);
 
         // 5.1) 命中/死亡配置
@@ -70,11 +68,12 @@ public class MonsterConfigEditor : Editor
         serializedObject.ApplyModifiedProperties();
     }
 
+    
+
     private void DrawMonsterHitConfig(SerializedProperty spHit)
     {
         if (spHit == null) return;
         if (!Fold("hit", "命中/死亡配置", true)) return;
-
         using (new EditorGUI.IndentLevelScope())
         {
             

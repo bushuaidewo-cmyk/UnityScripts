@@ -390,22 +390,23 @@ public class ProjectileBehaviour : MonoBehaviour
         if (_explodedOrDestroyed) return;
         _explodedOrDestroyed = true;
 
+        // 1. Play Visual Effects (Animation/Particles)
         if (_cfg != null && _cfg.FlygunBoomEffectPrefab != null)
         {
             var fx = Instantiate(_cfg.FlygunBoomEffectPrefab, transform.position, Quaternion.identity);
 
-            // 若 FX 上有 Animator 且配置了动画名，则播放该状态
+            // Play Animation State if configured
             if (!string.IsNullOrEmpty(_cfg.FlygunBoomAnimation))
             {
                 var anim = fx.GetComponentInChildren<Animator>();
                 if (anim != null)
                 {
                     try { anim.Play(_cfg.FlygunBoomAnimation, 0, 0f); }
-                    catch { /* 若找不到状态，不影响粒子播放 */ }
+                    catch { /* State not found */ }
                 }
             }
 
-            // 原粒子播放逻辑保留
+            // Handle Particle System lifecycle
             var psArray = fx.GetComponentsInChildren<ParticleSystem>(true);
             float life = Mathf.Max(0.05f, _cfg.duration);
             if (psArray != null && psArray.Length > 0)
@@ -427,15 +428,42 @@ public class ProjectileBehaviour : MonoBehaviour
             Destroy(fx, life + 0.1f);
         }
 
-        // 爆炸范围伤害（对 Player）
-        if (_cfg != null && _cfg.explosionDamage > 0 && _cfg.radius > 0f)
+        // 2. Logic: Area of Effect (Explosion) Damage
+        // Use explosionDamage if set, otherwise fallback to direct hit damage
+        int dmg = _cfg != null ? (_cfg.explosionDamage > 0 ? _cfg.explosionDamage : _cfg.damage) : 0;
+        float radius = _cfg != null ? _cfg.radius : 0f;
+
+        if (dmg > 0 && radius > 0f)
         {
-            var hits = Physics2D.OverlapCircleAll(transform.position, _cfg.radius);
+            // Detect all colliders within radius
+            var hits = Physics2D.OverlapCircleAll(transform.position, radius);
             foreach (var h in hits)
             {
                 if (!h) continue;
-                if (h.CompareTag("Player"))
-                    h.SendMessageUpwards("TakeDamage", _cfg.explosionDamage, SendMessageOptions.DontRequireReceiver);
+
+                // Check if it is the Player
+                // We use the root logic to handle child colliders hitting the parent player
+                if (h.CompareTag("Player") || h.transform.root.CompareTag("Player"))
+                {
+                    var playerCtrl = h.GetComponentInParent<PlayerController>();
+
+                    // Optional: Notify Player of knockback direction based on explosion center
+                    if (playerCtrl != null)
+                    {
+                        // Calculate direction from Explosion Center to Player
+                        float dirX = h.bounds.center.x - transform.position.x;
+                        // Use a fake "velocity" to push player away from center
+                        float knockbackVelX = Mathf.Sign(dirX) * 10f;
+
+                        playerCtrl.NotifyProjectileKnockback(transform.position, knockbackVelX);
+                    }
+
+                    // Apply Damage
+                    h.SendMessageUpwards("TakeDamage", dmg, SendMessageOptions.DontRequireReceiver);
+
+                    // Break after hitting the player once to avoid multi-damage from multiple colliders on same player
+                    break;
+                }
             }
         }
 

@@ -205,9 +205,9 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private Vector2 deathKnockback = new Vector2(-4f, -2f);
 
     [Header("受击来源伤害数值")]
-    [SerializeField] private int damageMelee = 10;     // MHitbox HIT
-    [SerializeField] private int damageBody = 5;       // EMHitbox / Monster
-    [SerializeField] private int damageProjectile = 8; // MProjectile HIT
+    private int damageMelee = 10;     // MHitbox HIT
+    private int damageBody = 5;       // EMHitbox / Monster
+    private int damageProjectile = 8; // MProjectile HIT
 
     // 运行时状态
     private bool isInvulnerable = false;   // 是否无敌
@@ -1691,7 +1691,7 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    // PlayerController.cs 中：替换 HandleHitFromCollider
+    // PlayerController.cs 中：替换 HandleHitFromCollider 方法中的伤害判定部分
     private void HandleHitFromCollider(Collider2D other)
     {
         if (!other) return;
@@ -1721,17 +1721,40 @@ public class PlayerController : MonoBehaviour
         }
 
         // 近战 / 怪物身体 / 飞行物 伤害
+        // 修改：现在 mhitbox 图层混合了近战和身体，需要通过物体名字区分
         if (lname == "mhitbox" || lname == "MHitbox" || lname == "MHitbox HIT" ||
             lname == "monster" || lname == "Monster" ||
             lname == "projectile" || lname == "Projectile" || lname == "MProjectile HIT")
         {
             int dmg = 0;
-            if (lname == "mhitbox" || lname == "MHitbox" || lname == "MHitbox HIT")
-                dmg = Mathf.Max(0, damageMelee);
-            else if (lname == "monster" || lname == "Monster")
-                dmg = Mathf.Max(0, damageBody);
+
+            // 优先从命中源的 MonsterDamageProfile 读取伤害数值
+            var prof = other.GetComponentInParent<MonsterDamageProfile>();
+
+            // 1. 判断是否是飞行物
+            bool isProj = (lname == "projectile" || lname == "Projectile" || lname == "MProjectile HIT");
+
+            // 2. 判断是否是怪物身体 (Body)
+            // 逻辑：如果图层是 Monster (旧逻辑兼容)，或者 图层是 mhitbox 且 物体名字叫 "MHitbox" (新需求)
+            bool isBody = (lname == "monster" || lname == "Monster") ||
+                          (lname.Contains("mhitbox") || lname.Contains("MHitbox") && other.name.Equals("MHitbox"));
+
+            if (isProj)
+            {
+                // 飞行物伤害
+                dmg = (prof != null) ? Mathf.Max(0, prof.ProjectileDamage) : Mathf.Max(0, damageProjectile);
+            }
+            else if (isBody)
+            {
+                // 贴身伤害 (Body)
+                dmg = (prof != null) ? Mathf.Max(0, prof.BodyDamage) : Mathf.Max(0, damageBody);
+            }
             else
-                dmg = Mathf.Max(0, damageProjectile);
+            {
+                // 剩下的情况认为是：近战攻击 (Melee)
+                // 即：图层是 mhitbox，且名字不是 "MHitbox" (通常是 Hitbox_Attack 等)
+                dmg = (prof != null) ? Mathf.Max(0, prof.MeleeDamage) : Mathf.Max(0, damageMelee);
+            }
 
             TakeDamage(dmg);
             return;
@@ -2693,7 +2716,7 @@ public class PlayerController : MonoBehaviour
         Debug.Log($"玩家受到 {dmg} 点伤害，剩余 HP: {currentHP}");
     }
 
-    // 【用于受伤时清理所有残留状态
+    // 【用于受伤时清理所有残留状态】
     private void ForceStopActionsOnHit()
     {
         // 1. 打断 BackFlash
@@ -2709,6 +2732,7 @@ public class PlayerController : MonoBehaviour
             groundAttackActive = false;
             duckAttackFacingLocked = false;
             relay?.StopAttackHitbox(); // 立即关闭攻击框
+            relay?.StopWeapon();       // ★新增：强制调用 StopWeapon 关闭武器显示
         }
 
         // 4. 打断 空中攻击
@@ -2717,6 +2741,7 @@ public class PlayerController : MonoBehaviour
             airAttackActive = false;
             airAttackAnimPlaying = false;
             relay?.StopAttackHitbox();
+            relay?.StopWeapon();       // ★新增：强制调用 StopWeapon 关闭武器显示
         }
 
         // 5. 打断 踩墙 / 自动跳
@@ -2732,6 +2757,7 @@ public class PlayerController : MonoBehaviour
         shieldAnimUpPlayed = false;
         pendingShieldUp = false;
         pendingShieldDown = false;
+        relay?.StopShield();           // ★新增：强制关闭盾牌显示（防止残留）
 
         // 7. 确保重力恢复 (防止从斜坡锁定状态被打飞)
         if (rb.gravityScale == 0f)

@@ -40,6 +40,12 @@ public class MonsterConfig : ScriptableObject
     [Header("怪物命中/死亡配置")]
     [Tooltip("命中硬直与死亡表现配置（使用 maxHP 作为血量依据）")]
     public MonsterHitConfig monsterHitConfig = new MonsterHitConfig();
+
+    [Header("伤害配置")]
+    [Tooltip("怪物对玩家的伤害设置（近战/贴身/远程/爆炸）")]
+    public DamageConfig damage = new DamageConfig();
+
+    public int projectileExplosionDamage = 0;
 }
 
 [System.Serializable]
@@ -95,6 +101,14 @@ public class AirHitConfig
 {
     [Tooltip("命中硬直时间（秒），优先覆盖全局 MonsterHitConfig 的设置")]
     public float hitStunTimeOverride = 0f; // 0 表示不覆盖
+}
+
+[System.Serializable]
+public class DamageConfig
+{
+    public int bodyDamage = 5;
+    public int meleeDamage = 10;
+    public int projectileDamage = 8;
 }
 
 [System.Serializable]
