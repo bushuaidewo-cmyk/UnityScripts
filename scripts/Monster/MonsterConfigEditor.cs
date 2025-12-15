@@ -28,6 +28,19 @@ public class MonsterConfigEditor : Editor
         var spAirIDs = serializedObject.FindProperty("airPhaseConfig");
         var spAirStage = serializedObject.FindProperty("airStageConfig");
 
+        // 基础属性界面 (改为折叠栏)
+        if (Fold("baseStats", "基础属性", true))
+        {
+            using (new EditorGUI.IndentLevelScope())
+            {
+                EditorGUILayout.PropertyField(spMonsterID, new GUIContent("怪物ID"));
+                EditorGUILayout.PropertyField(spLevel, new GUIContent("等级"));
+                EditorGUILayout.PropertyField(spMaxHP, new GUIContent("最大血量(MaxHP)"));
+                EditorGUILayout.PropertyField(spExp, new GUIContent("经验值"));
+                EditorGUILayout.PropertyField(spPrefab, new GUIContent("怪物Prefab"));
+            }
+        }
+
         // ===== 伤害配置 =====
         if (spDamage != null && Fold("damage", "伤害配置（近战/贴身/远程/爆炸）", true))
         {
@@ -77,14 +90,13 @@ public class MonsterConfigEditor : Editor
         using (new EditorGUI.IndentLevelScope())
         {
             
-            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterHitAnimaton"), new GUIContent("命中动画"));
-            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterHitPrefab"), new GUIContent("命中特效 Prefab"));
-            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("hitStunTime"), new GUIContent("硬直时间(秒)"));
-            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterHitSpawnChildPath"), new GUIContent("命中特效释放点路径"));
-            EditorGUILayout.Space(4);
             EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterDieAnimaton"), new GUIContent("死亡动画"));
             EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterDiePrefab"), new GUIContent("死亡特效 Prefab"));
             EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterDieSpawnChildPath"), new GUIContent("死亡特效释放点路径"));
+            EditorGUILayout.Space(2);
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("deathKnockbackForce"), new GUIContent("死亡击飞力度(XY)"));
+            EditorGUILayout.Space(4);
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("corpseVanishTime"), new GUIContent("尸体消失时间(秒)"));
         }
     }
 
@@ -344,15 +356,6 @@ public class MonsterConfigEditor : Editor
                                 if (GUILayout.Button("+ 添加空中攻击")) spSkyList.InsertArrayElementAtIndex(spSkyList.arraySize);
                                 if (spSkyList.arraySize > 0 && GUILayout.Button("- 移除最后")) spSkyList.DeleteArrayElementAtIndex(spSkyList.arraySize - 1);
 
-                                // 命中配置（空中）
-                                var spAirHit = spAirStage.FindPropertyRelative("airHit");
-                                if (Fold("air.stage.hit", "命中配置(空中)", true))
-                                {
-                                    using (new EditorGUI.IndentLevelScope())
-                                    {
-                                        EditorGUILayout.PropertyField(spAirHit.FindPropertyRelative("hitStunTimeOverride"), new GUIContent("硬直时间覆盖(秒，0表示不覆盖)"));
-                                    }
-                                }
 
                                 EditorGUILayout.EndHorizontal();
                             }

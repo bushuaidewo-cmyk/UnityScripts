@@ -4,7 +4,7 @@ using UnityEngine;
 [CreateAssetMenu(fileName = "NewMonsterConfig", menuName = "怪物配置/新怪物配置")]
 public class MonsterConfig : ScriptableObject
 {
-    [Header("基础属性")]
+    
     [Tooltip("怪物唯一ID，用于查找或存档标识")]
     public string monsterID;
     [Tooltip("怪物等级（用于数值与掉落曲线）")]
@@ -51,21 +51,17 @@ public class MonsterConfig : ScriptableObject
 [System.Serializable]
 public class MonsterHitConfig
 {
-    [Header("命中（玩家击中怪物）")]
-    [Tooltip("命中动画状态名（关键帧触发 FxMasterHitPrefab）")]
-    public string MasterHitAnimaton;
-    [Tooltip("命中特效 Prefab")]
-    public GameObject MasterHitPrefab;
-    [Tooltip("命中硬直时间（秒），硬直期间怪物不动")]
-    public float hitStunTime = 0.3f;
-    [Tooltip("命中特效释放点子物体路径（从怪物根开始的相对路径），为空则回退怪物根")]
-    public string MasterHitSpawnChildPath;
-    [Tooltip("死亡动画状态名（关键帧触发 FxMasterDiePrefab）")]
+    
     public string MasterDieAnimaton;
     [Tooltip("死亡特效 Prefab")]
     public GameObject MasterDiePrefab;
     [Tooltip("死亡特效释放点子物体路径（从怪物根开始的相对路径），为空则回退怪物根")]
     public string MasterDieSpawnChildPath;
+    [Tooltip("死亡时的击飞力度（X=水平向后退的力，Y=垂直跳起的力）。建议 X=4, Y=6")]
+    public Vector2 deathKnockbackForce = new Vector2(4f, 6f);
+    [Tooltip("尸体消失时间（秒）：死亡动画播放完毕后，尸体保留多久再从场景删除")]
+    public float corpseVanishTime = 2.0f;
+
 }
 
 [System.Serializable]
@@ -97,11 +93,7 @@ public class AirStageConfig
 }
 
 [System.Serializable]
-public class AirHitConfig
-{
-    [Tooltip("命中硬直时间（秒），优先覆盖全局 MonsterHitConfig 的设置")]
-    public float hitStunTimeOverride = 0f; // 0 表示不覆盖
-}
+public class AirHitConfig{}
 
 [System.Serializable]
 public class DamageConfig

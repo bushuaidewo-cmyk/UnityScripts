@@ -251,10 +251,9 @@ public partial class MonsterController : MonoBehaviour
 
     // 命中/死亡运行时
     private float currentHP;                 // 使用 config.maxHP 初始化
-    private bool inHitStun = false;         // 命中硬直中（怪物不动）
-    private float hitStunTimer = 0f;
+    
     private bool deathStarted = false;      // 死亡流程已触发
-
+    private bool deathKnockbackActive = false; // 是否处于死亡击飞落地检测阶段
     private string activeAttackAnimName = null; // 当前攻击动画名（用于“停最后一帧”）
     private float attackAnimFreezeSpeedBackup = 1f;
     private bool attackAnimFrozen = false;
@@ -377,7 +376,6 @@ public partial class MonsterController : MonoBehaviour
     //Update() 内递减计时器
     void Update()
     {
-
         if (turnCooldown > 0f) turnCooldown -= Time.deltaTime;
         if (bandDwellTimer > 0f) bandDwellTimer -= Time.deltaTime;
 
@@ -429,24 +427,7 @@ public partial class MonsterController : MonoBehaviour
         if (attackRestCooldown > 0f) attackRestCooldown -= Time.deltaTime;
         if (faceProximityLockTimer > 0f) faceProximityLockTimer -= Time.deltaTime;
 
-        // 命中硬直：怪物不动（冻结动画速度与水平移动），到时解除
-        if (inHitStun)
-        {
-            hitStunTimer -= Time.deltaTime;
-            if (hitStunTimer <= 0f)
-            {
-                inHitStun = false;
-                if (animator) animator.speed = attackAnimFrozen ? attackAnimFreezeSpeedBackup : 1f;
-            }
-            else
-            {
-                // 冻结水平移动，不改变已有空中/地面逻辑的结构，仅清零速度
-                rb.velocity = new Vector2(0f, rb.velocity.y);
-                desiredSpeedX = 0f;
-                ApplySlopeIdleStopIfNoMove();
-                if (animator) animator.speed = 0f; // 冻结动画
-            }
-        }
+        
 
         // 只有在“最后一个循环已播放完”才冻结；否则由 AttackUpdate 负责重播下一次循环
         if (inAttack && !string.IsNullOrEmpty(activeAttackAnimName) && animator)
@@ -544,6 +525,20 @@ public partial class MonsterController : MonoBehaviour
 
     void FixedUpdate()
     {
+        // 如果正在死亡击飞中，检测是否落地
+        if (deathKnockbackActive)
+        {
+            // 如果垂直速度向下(开始下落) 且 检测到接地
+            if (rb.velocity.y <= 0.1f && CheckGrounded())
+            {
+                // 落地刹车
+                rb.velocity = Vector2.zero;
+                rb.gravityScale = 1f; // 恢复正常重力避免浮空
+                deathKnockbackActive = false; // 结束击飞物理阶段
+            }
+            return;
+        }
+
         if (state == MonsterState.Air)
         {
             AirPatrolPhysicsStep();
@@ -1201,24 +1196,8 @@ public partial class MonsterController : MonoBehaviour
             currentHP = Mathf.Max(0f, currentHP - dm);
         }
 
-        // 命中动画（若配置）
-        var hitCfg = config?.monsterHitConfig;
-        if (hitCfg != null && !string.IsNullOrEmpty(hitCfg.MasterHitAnimaton) && animator)
-        {
-            animator.CrossFadeInFixedTime(hitCfg.MasterHitAnimaton, 0f, 0, 0f);
-            animator.Update(0f);
-        }
-
-        // 命中硬直时间：空中配置覆盖优先
-        float stun = Mathf.Max(0f, hitCfg?.hitStunTime ?? 0f);
-        float overrideStun = Mathf.Max(0f, config?.airStageConfig?.airHit?.hitStunTimeOverride ?? 0f);
-        if (overrideStun > 0f) stun = overrideStun;
-
-        if (stun > 0f)
-        {
-            inHitStun = true;
-            hitStunTimer = stun;
-        }
+        // --- 打印怪物减血 Log ---
+        Debug.Log($"[Monster] 怪物受到伤害: {dm}, 剩余血量: {currentHP}");
 
         // 生命清零 → 进入死亡流程
         if (currentHP <= 0f)
@@ -1243,10 +1222,38 @@ public partial class MonsterController : MonoBehaviour
             animator.Update(0f);
         }
 
-        // 进入死亡状态，清零速度
-        rb.velocity = Vector2.zero;
-        desiredSpeedX = 0f;
-        ApplySlopeIdleStopIfNoMove();
+        // 1. 强制开启重力 (无论之前是地面怪还是空中怪，死亡都要受重力下落)
+        rb.gravityScale = 3.0f; // 这里的 3.0f 是经验值，为了让击飞抛物线手感比较实，类似 Player
+
+        // 2. 计算击飞方向 (背离玩家)
+        float dir = 1f;
+        if (player != null)
+        {
+            // 玩家在左，怪往右飞(+1)；玩家在右，怪往左飞(-1)
+            dir = (player.position.x < transform.position.x) ? 1f : -1f;
+        }
+        else
+        {
+            // 没玩家时按自身反方向
+            dir = (FacingSign() > 0) ? -1f : 1f;
+        }
+
+        // 3. 施加力度
+        if (hitCfg != null)
+        {
+            rb.velocity = new Vector2(dir * hitCfg.deathKnockbackForce.x, hitCfg.deathKnockbackForce.y);
+        }
+        else
+        {
+            // 兜底默认值
+            rb.velocity = new Vector2(dir * 4f, 6f);
+        }
+
+        // 4. 激活落地检测
+        deathKnockbackActive = true;
+
+        // 5. 确保斜坡锁等逻辑退出，避免物理冲突
+        ExitSlopeIdleLockMC();
 
         // 等动画完毕后销毁（协程复用现有 WaitForStateFinished）
         StartCoroutine(DieAfterAnimation(hitCfg?.MasterDieAnimaton));
@@ -1256,6 +1263,13 @@ public partial class MonsterController : MonoBehaviour
     {
         if (!string.IsNullOrEmpty(dieState))
             yield return WaitForStateFinished(dieState, 0);
+
+        // --- 死亡消失时间 ---
+        float vanishTime = config?.monsterHitConfig?.corpseVanishTime ?? 0f;
+        if (vanishTime > 0f)
+        {
+            yield return new WaitForSeconds(vanishTime);
+        }
 
         // 通知 spawner
         spawner?.NotifyMonsterDeath(gameObject);
@@ -3512,30 +3526,7 @@ public partial class MonsterController : MonoBehaviour
         PlayEffect(activeAttack.attackFarEffectPrefab, anchor);
     }
 
-    // 命中 FX（由动画事件 FxMasterHitPrefab 调用）
-    public void OnFxMasterHitPrefab()
-    {
-        var hitCfg = config?.monsterHitConfig; // 新增：取得配置
-        if (hitCfg == null) return;
-        if (string.IsNullOrEmpty(hitCfg.MasterHitAnimaton)) return;
-        if (hitCfg.MasterHitPrefab == null) return;
-
-        Transform anchor = null;
-        if (!string.IsNullOrEmpty(hitCfg.MasterHitSpawnChildPath))
-        {
-            string rawPath = hitCfg.MasterHitSpawnChildPath.Trim();
-            string rootName = transform.name;
-            if (rawPath.StartsWith(rootName + "/"))
-                rawPath = rawPath.Substring(rootName.Length + 1);
-            if (rawPath.StartsWith("/"))
-                rawPath = rawPath.Substring(1);
-            var t = transform.Find(rawPath);
-            if (t != null) anchor = t;
-        }
-        if (anchor == null) anchor = transform;
-
-        PlayEffect(hitCfg.MasterHitPrefab, anchor);
-    }
+    
 
     // 死亡 FX（由动画事件 FxMasterDiePrefab 调用）
     public void OnFxMasterDiePrefab()
