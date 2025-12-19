@@ -1211,6 +1211,9 @@ public partial class MonsterController : MonoBehaviour
         if (deathStarted) return;
         deathStarted = true;
 
+        state = MonsterState.Dead;
+        isDead = true;
+
         if (inAttack) EndAttack();
         if (animator) animator.speed = 1f;
 
@@ -1222,49 +1225,53 @@ public partial class MonsterController : MonoBehaviour
             animator.Update(0f);
         }
 
-        // 1. 强制开启重力 (无论之前是地面怪还是空中怪，死亡都要受重力下落)
-        rb.gravityScale = 3.0f; // 这里的 3.0f 是经验值，为了让击飞抛物线手感比较实，类似 Player
+        // 1. 恢复重力（防止空中怪悬浮）
+        rb.gravityScale = 1.5f; // 给一个合适的重力值，确保能掉下来
 
-        // 2. 计算击飞方向 (背离玩家)
-        float dir = 1f;
-        if (player != null)
-        {
-            // 玩家在左，怪往右飞(+1)；玩家在右，怪往左飞(-1)
-            dir = (player.position.x < transform.position.x) ? 1f : -1f;
-        }
-        else
-        {
-            // 没玩家时按自身反方向
-            dir = (FacingSign() > 0) ? -1f : 1f;
-        }
-
-        // 3. 施加力度
+        // 2. 计算击飞速度
+        Vector2 kbForce = Vector2.zero;
         if (hitCfg != null)
         {
-            rb.velocity = new Vector2(dir * hitCfg.deathKnockbackForce.x, hitCfg.deathKnockbackForce.y);
+            // 判定方向：背离玩家
+            float dirX = -FacingSign();
+            if (player != null)
+            {
+                dirX = (transform.position.x < player.position.x) ? -1f : 1f;
+            }
+            kbForce = new Vector2(dirX * hitCfg.deathKnockbackForce.x, hitCfg.deathKnockbackForce.y);
         }
-        else
-        {
-            // 兜底默认值
-            rb.velocity = new Vector2(dir * 4f, 6f);
-        }
+        rb.velocity = kbForce;
+        desiredSpeedX = 0f;
 
-        // 4. 激活落地检测
-        deathKnockbackActive = true;
-
-        // 5. 确保斜坡锁等逻辑退出，避免物理冲突
-        ExitSlopeIdleLockMC();
-
-        // 等动画完毕后销毁（协程复用现有 WaitForStateFinished）
+        // 3. 启动协程：等待落地后静止，再等待动画结束
         StartCoroutine(DieAfterAnimation(hitCfg?.MasterDieAnimaton));
     }
 
     private IEnumerator DieAfterAnimation(string dieState)
     {
+        // 先等待一小段时间让击飞速度生效，避免立刻检测到 Grounded
+        yield return new WaitForSeconds(0.1f);
+
+        // 循环检测直到落地
+        while (true)
+        {
+            UpdateGroundedAndSlope(); // 刷新 isGroundedMC
+            // 落地且Y速度向下或为0（防止起跳阶段误判）
+            if (isGroundedMC && rb.velocity.y <= 0.01f)
+            {
+                break;
+            }
+            yield return null;
+        }
+
+        // 落地后：彻底锁死物理，防止斜坡滑动
+        rb.velocity = Vector2.zero;
+        rb.gravityScale = 0f;
+        rb.angularVelocity = 0f;
+
         if (!string.IsNullOrEmpty(dieState))
             yield return WaitForStateFinished(dieState, 0);
 
-        // --- 死亡消失时间 ---
         float vanishTime = config?.monsterHitConfig?.corpseVanishTime ?? 0f;
         if (vanishTime > 0f)
         {

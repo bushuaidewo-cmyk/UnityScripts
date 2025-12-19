@@ -465,6 +465,9 @@ public class PlayerController : MonoBehaviour
                     float vy = rb.velocity.y;
                     rb.velocity = new Vector2(0f, vy);
                     currentSpeedX = 0f;
+
+                    if (isGrounded) rb.gravityScale = 0f;
+                    rb.velocity = Vector2.zero;
                 }
             }
 
@@ -743,6 +746,7 @@ public class PlayerController : MonoBehaviour
         {
             rb.velocity = Vector2.zero;   // 水平和垂直都归零，保证尸体完全停住
             currentSpeedX = 0f;
+            rb.gravityScale = 0f;
         }
     }
 

@@ -51,7 +51,6 @@ public class MonsterConfig : ScriptableObject
 [System.Serializable]
 public class MonsterHitConfig
 {
-    
     public string MasterDieAnimaton;
     [Tooltip("死亡特效 Prefab")]
     public GameObject MasterDiePrefab;
@@ -61,7 +60,6 @@ public class MonsterHitConfig
     public Vector2 deathKnockbackForce = new Vector2(4f, 6f);
     [Tooltip("尸体消失时间（秒）：死亡动画播放完毕后，尸体保留多久再从场景删除")]
     public float corpseVanishTime = 2.0f;
-
 }
 
 [System.Serializable]
@@ -69,10 +67,8 @@ public class AirPhaseConfig
 {
     [Tooltip("勾选：永远运行地面阶段（出生即按地面循环，使用重力）；不勾选：不运行地面阶段逻辑")]
     public bool groundPhase = true;
-
     [Tooltip("勾选：永远运行空中阶段（出生即无重力漂浮，使用空中循环）；不勾选：不运行空中阶段逻辑")]
     public bool airPhase = false;
-
     [Tooltip("勾选后：绘制地面阶段发现(follow/reverse/backstep)与攻击(近战/远程)辅助线 Gizmos")]
     public bool showGroundGizmosManual = false;
     [Tooltip("勾选后：绘制空中阶段发现(follow/reverse/backstep)与攻击(近战/远程)辅助线 Gizmos")]
