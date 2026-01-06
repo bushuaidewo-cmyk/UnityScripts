@@ -177,6 +177,9 @@ public partial class MonsterController : MonoBehaviour
             ? Mathf.Abs(targetPos.x - myPos.x)
             : Vector2.Distance(myPos, targetPos);
 
+        // === 空中阶段检测自爆 ===
+        if (CheckAndExecuteSelfDestruct(dist)) return;
+
         var discCfg = config.airStageConfig.discovery;
         if (discCfg == null)
         {
@@ -727,12 +730,12 @@ public partial class MonsterController : MonoBehaviour
         AirDiscoveryPhysicsStep(myPos, targetPos, discCfg);
     }
 
-    // ---------- 新增：空中攻击运行态方法 ----------
+    // ---------- 空中攻击运行态方法 ----------
 
     private void HandleSkyAttack(float dist, Vector2 myPos, Vector2 targetPos, AirDiscoveryConfig cfg)
     {
         // 条件：空中独占且配置存在
-        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (config?.airPhaseConfig?.airPhase != true) return;
         if (cfg == null || cfg.skyAttacks == null || cfg.skyAttacks.Count == 0) return;
         if (_skyInAttack) return; // 正在攻击
         if (_skyAttackRestCooldown > 0f)
@@ -745,9 +748,6 @@ public partial class MonsterController : MonoBehaviour
                 // 找到当前要使用的攻击配置（按顺序位置），这里恢复缓存到配置
                 if (_skyMeleeRangeOriginal >= 0f || _skyRangedRangeOriginal >= 0f)
                 {
-                    // 恢复到最近一次缓存到的攻击事件（若你的攻击是多个事件循环，这里使用下次将要使用的事件在开始前恢复）
-                    // 简单就地恢复：如果队列存在下次攻击索引，则恢复其范围；否则恢复上次缓存对象（如果仍引用）
-                    // 为最小改动：直接在 discovery.skyAttacks[_skyAttackOrder[_skyAttackOrderPos]] 上恢复
                     var discCfgLocal = config?.airStageConfig?.discovery;
                     if (discCfgLocal != null && discCfgLocal.skyAttacks != null && discCfgLocal.skyAttacks.Count > 0)
                     {
@@ -796,6 +796,12 @@ public partial class MonsterController : MonoBehaviour
             {
                 StartSkyAttack(a, meleeReady ? AttackType.Melee : AttackType.Ranged, myPos, targetPos, cfg);
                 _skyAttackOrderPos = (_skyAttackOrderPos + 1) % n;
+
+                if (_skyAttackOrderPos == 0)
+                {
+                    _currentPhaseAttackCycleCount++;
+                }
+
                 if (_skyAttackOrderPos == 0 && cfg.skyattacksRandomOrder && n > 1)
                     Shuffle(_skyAttackOrder);
                 return;
@@ -803,7 +809,6 @@ public partial class MonsterController : MonoBehaviour
             _skyAttackOrderPos = (_skyAttackOrderPos + 1) % n;
         }
     }
-
     private void StartSkyAttack(AirAttackEvent a, AttackType execType, Vector2 myPos, Vector2 targetPos, AirDiscoveryConfig cfg)
     {
         _activeSkyAttack = a;
@@ -1204,8 +1209,10 @@ public partial class MonsterController : MonoBehaviour
         _airTime = 0f;
         _airVel = Vector2.zero;
 
-        // 去重力（保存以便未来恢复）
-        _airSavedGravity = rb.gravityScale;
+        if (rb.gravityScale > 0.01f)
+        {
+            _airSavedGravity = rb.gravityScale;
+        }
         rb.gravityScale = 0f;
 
         // 空中阶段不受 AutoJumpZone 影响，进入空中时清理其状态
@@ -1227,6 +1234,7 @@ public partial class MonsterController : MonoBehaviour
     }
     private void AirPatrolUpdate()
     {
+
         // 如果配置了空中发现，且玩家存在，检测距离
         if (config?.airStageConfig?.discovery != null && player)
         {
@@ -2053,8 +2061,7 @@ public partial class MonsterController : MonoBehaviour
         // 仅在“空中独占”模式下播放：airPhase 勾选且 groundPhase 未勾选
         if (!(config?.airStageConfig?.discovery != null &&
               config?.airPhaseConfig != null &&
-              config.airPhaseConfig.airPhase &&
-              !config.airPhaseConfig.groundPhase))
+              config.airPhaseConfig.airPhase)) 
             return;
 
         var dcfg = config?.airStageConfig?.discovery;
@@ -2083,8 +2090,7 @@ public partial class MonsterController : MonoBehaviour
         // 仅在“空中独占”模式下播放：airPhase 勾选且 groundPhase 未勾选
         if (!(config?.airStageConfig?.discovery != null &&
               config?.airPhaseConfig != null &&
-              config.airPhaseConfig.airPhase &&
-              !config.airPhaseConfig.groundPhase))
+              config.airPhaseConfig.airPhase)) 
             return;
 
         var dcfg = config?.airStageConfig?.discovery;

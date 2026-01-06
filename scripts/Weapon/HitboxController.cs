@@ -1,25 +1,49 @@
-using System.Collections.Generic;
+ï»¿using System.Collections.Generic;
 using UnityEngine;
 
 public class HitboxController : MonoBehaviour
 {
-    [Tooltip("°´Ë÷ÒıË³ĞòµÄÃüÖĞÌå£¨isTrigger=true£¬³õÊ¼Çë½ûÓÃ£©")]
+    [Tooltip("æ”»å‡»åˆ¤å®šæ¡†åˆ—è¡¨ï¼ˆéœ€è¦åœ¨ Inspector ä¸­æŠŠ Collider2D æ‹–è¿›å»ï¼Œå¹¶å‹¾é€‰ IsTriggerï¼‰")]
     [SerializeField] private List<Collider2D> hitboxes = new List<Collider2D>();
 
-    [Tooltip("»ù´¡ÉËº¦£¬<=0 Ê±Ä¬ÈÏ 1")]
+    [Tooltip("åŸºç¡€ä¼¤å®³ï¼ˆå¦‚æœæœªæ³¨å…¥åˆ™ä½¿ç”¨æ­¤é»˜è®¤å€¼ï¼‰")]
     [SerializeField] private int baseDamage = 10;
 
-    // ÔÚÒ»¸ö¡°¿ª´°¡±ÄÚÒÑ¾­ÃüÖĞµÄ¶ÔÏó£¨±ÜÃâÍ¬Ò»Ö¡ÖØ¸´£©
+    public System.Action<Collider2D, int, GameObject, Vector2> OnHitEnemy;
+
+    private GameObject _currentHitVfxPrefab;
+
     private readonly HashSet<Collider2D> _hitOnceWindow = new HashSet<Collider2D>();
 
     void Awake()
     {
-        // ½øÈëÇ°È«²¿¹Ø±Õ£¨Èç¹ûÃ»ÔÚ±à¼­Æ÷Àï¹Ø£©
+        // 1. ç¡®ä¿è‡ªèº«æœ‰ Rigidbody2D (Kinematic)ï¼Œè¿™æ˜¯ Trigger ç”Ÿæ•ˆçš„å…³é”®
+        var rb = GetComponent<Rigidbody2D>();
+        if (rb == null)
+        {
+            rb = gameObject.AddComponent<Rigidbody2D>();
+            rb.bodyType = RigidbodyType2D.Kinematic; // ä¸å—é‡åŠ›å½±å“
+            rb.gravityScale = 0f;
+            rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous; // æé«˜å¿«é€ŸæŒ¥åŠ¨çš„æ£€æµ‹ç²¾åº¦
+            rb.sleepMode = RigidbodySleepMode2D.NeverSleep; // é˜²æ­¢ä¼‘çœ å¯¼è‡´æ£€æµ‹å¤±æ•ˆ
+        }
+
         foreach (var c in hitboxes)
-            if (c) c.enabled = false;
+        {
+            if (c)
+            {
+                c.enabled = false;
+                c.isTrigger = true;
+            }
+        }
     }
 
     public void InjectBaseDamage(int dmg) => baseDamage = dmg;
+
+    public void SetHitVfx(GameObject vfx)
+    {
+        _currentHitVfxPrefab = vfx;
+    }
 
     public void Open(int index)
     {
@@ -27,8 +51,9 @@ public class HitboxController : MonoBehaviour
         var c = hitboxes[index];
         if (!c) return;
         c.enabled = true;
-        _hitOnceWindow.Clear();
+        _hitOnceWindow.Clear(); 
     }
+
 
     public void Close(int index)
     {
@@ -36,7 +61,7 @@ public class HitboxController : MonoBehaviour
         var c = hitboxes[index];
         if (!c) return;
         c.enabled = false;
-        _hitOnceWindow.Clear();
+
     }
 
     public void CloseAll()
@@ -50,21 +75,33 @@ public class HitboxController : MonoBehaviour
 
     void OnTriggerEnter2D(Collider2D other)
     {
-        // ÈÎºÎ¿ªÆôµÄÃüÖĞÌå¶¼¿ÉÄÜ´¥·¢£¨Í³Ò»´¦Àí£©
         bool anyOpen = false;
+        Collider2D activeHitbox = null;
         foreach (var c in hitboxes)
         {
-            if (c && c.enabled) { anyOpen = true; break; }
+            if (c && c.enabled) { anyOpen = true; activeHitbox = c; break; }
         }
         if (!anyOpen) return;
 
-        if (_hitOnceWindow.Contains(other)) return; // ·ÀÒ»Ö¡¶à´Î
+        if (_hitOnceWindow.Contains(other)) return;
         _hitOnceWindow.Add(other);
 
         int dmg = baseDamage > 0 ? baseDamage : 1;
 
-        // ·¢ËÍÉËº¦¸ø¹ÖÎï»òÆäËû¿ÉÊÜ»÷¶ÔÏó£¨²»ÒªÇóÄ¿±êÒ»¶¨ÊµÏÖ£©
-        other.SendMessageUpwards("TakeDamage", dmg, SendMessageOptions.DontRequireReceiver);
-        // ÈôĞèÃüÖĞÌØĞ§£º¿ÉÔÚ´Ëµ÷ÓÃ Weapon FX Hub ²¥Ò»¸ö impact ×´Ì¬£¨Í¨¹ıÒıÓÃ»òÊÂ¼şÔÙÀ©Õ¹£©
+        Vector2 hitPoint = other.bounds.center; 
+        if (activeHitbox != null)
+        {
+            Vector2 weaponCenter = activeHitbox.bounds.center;
+            hitPoint = other.ClosestPoint(weaponCenter);
+        }
+
+        if (OnHitEnemy != null)
+        {
+            OnHitEnemy.Invoke(other, dmg, _currentHitVfxPrefab, hitPoint);
+        }
+        else
+        {
+            other.SendMessageUpwards("TakeDamage", dmg, SendMessageOptions.DontRequireReceiver);
+        }
     }
 }

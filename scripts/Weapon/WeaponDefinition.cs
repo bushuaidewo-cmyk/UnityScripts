@@ -15,6 +15,10 @@ public class WeaponDefinition : ScriptableObject
     public GameObject effectPrefab;       // -> VfxWeaponOffset/player_weapon_effect
     public GameObject effectStarPrefab;   // -> VfxWeaponOffsetstar/player_weapon_effectstar
 
+    [Header("命中反馈")]
+    [Tooltip("当武器击中敌人时，在接触点播放的特效（例如火花、血液等）")]
+    public GameObject hitImpactEffectPrefab;
+
     [Header("基础伤害")]
     public int baseDamage = 10;
 }

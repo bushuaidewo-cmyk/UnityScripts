@@ -186,4 +186,19 @@ public class MonsterAnimationEventRelay : MonoBehaviour
         if (debugEvents) Debug.Log("[Relay] EMDie() -> OnFxMasterDiePrefab");
         controller?.OnFxMasterDiePrefab();
     }
+
+    // 地面 -> 空中
+    public void GroundtoskyPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] GroundtoskyPrefab()");
+        controller?.OnFxTransition(true); // true = ground to sky
+    }
+
+    // 空中 -> 地面
+    public void SkytogroundPrefab()
+    {
+        if (debugEvents) Debug.Log("[Relay] SkytogroundPrefab()");
+        controller?.OnFxTransition(false); // false = sky to ground
+    }
+
 }

@@ -180,10 +180,10 @@ public class PlayerController : MonoBehaviour
     [Tooltip("下蹲姿态使用的伤害命中体（建议设置为子物体上的 Trigger Collider2D，Layer: EPHitbox）")]
     [SerializeField] private Collider2D hitboxDuck;
 
-    [Header("受伤/死亡 参数")]
+    [Header("角色最大血量")]
     [SerializeField] private int maxHP = 100;
 
-    [Header("时间参数 (秒)")]
+    [Header("击退无法控制时间 (秒)")]
     [Tooltip("强制位移/硬直时间：此期间玩家受到击退力控制，无法移动")]
     [SerializeField] private float hitForceDuration = 0.2f;
 
@@ -195,6 +195,12 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private GameObject deathEffectPrefab;
     [Tooltip("特效生成位置 (如果不填则使用角色 Transform)")]
     [SerializeField] private Transform vfxSpawnPoint;
+
+    [Header("受击材质闪烁")]
+    [Tooltip("材质球所在 Renderer 的路径（相对于 PlayerRoot），例如: Component/Ground Point/player")]
+    [SerializeField] private string hitMaterialPath = "Component/Ground Point/player";
+    [Tooltip("材质变化的总持续时间（秒）。前半段时间Blend=1，后半段Blend=0.5")]
+    [SerializeField] private float hitMaterialDuration = 0.2f; 
 
     [Header("击退力度")]
     [Tooltip("正面受击时的击退力度（X=水平向后退的力，Y=垂直跳起的力）。X通常为负值表示向后，Y为正值表示向上。")]
@@ -213,6 +219,13 @@ public class PlayerController : MonoBehaviour
     private bool isInvulnerable = false;   // 是否无敌
     private bool isKnockback = false;      // 是否处于硬直/不可操作状态
 
+    // 材质闪烁运行时
+    private Material _playerHitMat;
+    private int _playerHitPropID;
+    private float _playerHitFlashTimer = 0f;
+    private float _playerHitFlashTotalTime = 0f; // 记录当次闪烁的总时长用于计算阶段
+    private bool _playerMaterialFlashing = false;
+
     // 独立计时器
     private float hitForceTimer = 0f;      // 控制硬直（不可操作）
     private float hitStunTimer = 0f;       // 控制无敌
@@ -226,6 +239,12 @@ public class PlayerController : MonoBehaviour
     private int frontHitVariant = 0;
     private int backHitVariant = 0;
     private int lastHitSourceLayer = -1;
+    private GameObject currentWeaponHitVfx;
+
+    // 材质闪烁运行时
+    private Material _myHitMatInstance;
+    private int _myHitShaderBlendID;
+    private float _myHitFlashTimer = 0f;
 
     // 最近一次命中源位置（由 OnTriggerEnter2D 写入）
     private Vector2 lastHitSourcePos = Vector2.zero;
@@ -350,11 +369,17 @@ public class PlayerController : MonoBehaviour
 
         // 开启玩家刚体插值，让渲染帧看到连续位置（相机 LateUpdate 会更稳）
         if (rb) rb.interpolation = RigidbodyInterpolation2D.Interpolate;
-
         if (standingCollider) standingCollider.enabled = true;
         if (duckCollider) duckCollider.enabled = false;
         colliderDuckActive = false;
         currentHP = Mathf.Max(0, maxHP);
+
+        var hitboxes = GetComponentsInChildren<HitboxController>(true);
+        foreach (var hb in hitboxes)
+        {
+            hb.OnHitEnemy += OnMyWeaponHitEnemy;
+        }
+
         // 受击命中体初始状态：站立启用、下蹲关闭（与碰撞体一致）
         if (hitboxStanding) hitboxStanding.enabled = true;
         if (hitboxDuck) hitboxDuck.enabled = false;
@@ -363,6 +388,19 @@ public class PlayerController : MonoBehaviour
             hitboxStanding.gameObject.AddComponent<PlayerHitboxEventRelay>().Init(this);
         if (hitboxDuck)
             hitboxDuck.gameObject.AddComponent<PlayerHitboxEventRelay>().Init(this);
+
+        // 初始化受击材质
+        Transform renderTrans = transform.Find(hitMaterialPath);
+        Renderer r = (renderTrans != null) ? renderTrans.GetComponent<Renderer>() : GetComponentInChildren<Renderer>();
+        if (r != null)
+        {
+            _playerHitMat = r.material; // 获取实例材质
+            _playerHitPropID = Shader.PropertyToID("_Blend");
+        }
+        else
+        {
+            Debug.LogWarning("[PlayerController] 未找到材质球 Renderer，请检查 hitMaterialPath 配置");
+        }
     }
 
     private void Update()
@@ -377,6 +415,16 @@ public class PlayerController : MonoBehaviour
             // 递减计时器：hitForceDuration 只负责强制位移时间；hitStunDuration 包含硬直/无敌/动画停留时间
             if (hitForceTimer > 0f) hitForceTimer -= Time.deltaTime;
             if (hitStunTimer > 0f) hitStunTimer -= Time.deltaTime;
+
+            // 材质闪烁计时逻辑
+            if (_myHitFlashTimer > 0f)
+            {
+                _myHitFlashTimer -= Time.deltaTime;
+                if (_myHitFlashTimer <= 0f && _myHitMatInstance)
+                {
+                    _myHitMatInstance.SetFloat(_myHitShaderBlendID, 0f); // 恢复正常
+                }
+            }
 
             //控制动画时长（根据 VFX 时间 + hitStunDuration）★★★
             UpdateHitAnimationByVfxDuration();
@@ -461,13 +509,20 @@ public class PlayerController : MonoBehaviour
                 // normalizedTime >= 1 表示已经播完一轮；!IsInTransition 保证不在过渡中
                 if (inDieState && dieInfo.normalizedTime >= 1.0f && !anim.IsInTransition(0))
                 {
-                    // 水平方向完全停止，只保留当前竖直速度（一般这里已经很小了）
-                    float vy = rb.velocity.y;
-                    rb.velocity = new Vector2(0f, vy);
+                    // 水平方向完全停止
                     currentSpeedX = 0f;
 
-                    if (isGrounded) rb.gravityScale = 0f;
-                    rb.velocity = Vector2.zero;
+                    // Fix: 只有真正落地了才去重力并锁死位置，防止尸体悬空
+                    if (isGrounded)
+                    {
+                        rb.gravityScale = 0f;
+                        rb.velocity = Vector2.zero;
+                    }
+                    else
+                    {
+                        // 若还在空中，只清空水平速度，保留垂直速度让其自然下落
+                        rb.velocity = new Vector2(0f, rb.velocity.y);
+                    }
                 }
             }
 
@@ -614,8 +669,38 @@ public class PlayerController : MonoBehaviour
         prevGrounded = isGrounded;
         if (justJumpedFrames > 0) justJumpedFrames--;
         if (crouchReenterLockFrames > 0) crouchReenterLockFrames--;
+
+        UpdatePlayerHitMaterial();
     }
     #endregion
+
+    private void UpdatePlayerHitMaterial()
+    {
+        if (!_playerMaterialFlashing || _playerHitMat == null) return;
+
+        if (_playerHitFlashTimer > 0f)
+        {
+            _playerHitFlashTimer -= Time.deltaTime;
+
+            float halfTime = _playerHitFlashTotalTime * 0.5f;
+
+            if (_playerHitFlashTimer > halfTime)
+            {
+                _playerHitMat.SetFloat(_playerHitPropID, 1.0f);
+            }
+            else
+            {
+                _playerHitMat.SetFloat(_playerHitPropID, 0.5f);
+            }
+
+            if (_playerHitFlashTimer <= 0f)
+            {
+                _playerHitMat.SetFloat(_playerHitPropID, 0f);
+                _playerMaterialFlashing = false;
+            }
+        }
+    }
+
 
     // 播放特效并设置 vfxTimer (用于控制动画时长)
     private void PlayVfx(GameObject prefab, Transform spawnPoint)
@@ -1772,7 +1857,27 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    // 地面攻击自动收尾（防止动画事件缺失导致卡死）
+    // 供 WeaponManager 设置当前武器的命中特效
+    public void SetWeaponHitVfx(GameObject vfx)
+    {
+        currentWeaponHitVfx = vfx;
+    }
+
+    // 此方法供 WeaponManager 调用，传入当前武器配置的特效
+    public void OnMyWeaponHitEnemy(Collider2D enemyCol, int damage, GameObject hitVfxPrefab, Vector2 hitPoint)
+    {
+        if (!enemyCol) return;
+        var monster = enemyCol.GetComponentInParent<MonsterController>();
+        if (monster)
+        {
+            monster.TakeHit(damage, hitPoint, hitVfxPrefab);
+        }
+        else
+        {
+            enemyCol.SendMessageUpwards("TakeDamage", damage, SendMessageOptions.DontRequireReceiver);
+        }
+    }
+
     private void AutoEndGroundAttack()
     {
         if (!groundAttackActive) return;
@@ -1798,7 +1903,6 @@ public class PlayerController : MonoBehaviour
         if (isDucking) OnDuckAttackEnd();
         else OnAttackEnd();
     }
-
     private void ForceEndAirAttack()
     {
         if (!airAttackActive && !airAttackAnimPlaying) return;
@@ -2664,6 +2768,16 @@ public class PlayerController : MonoBehaviour
 
         int dmg = Mathf.Max(0, damage);
         currentHP -= dmg;
+
+        // 触发材质闪烁 (设置总时间和计时器)
+        if (_playerHitMat != null && hitMaterialDuration > 0f)
+        {
+            _playerHitFlashTimer = hitMaterialDuration;
+            _playerHitFlashTotalTime = hitMaterialDuration;
+            _playerMaterialFlashing = true;
+            // 立即设为第一阶段 (Blend = 1)
+            _playerHitMat.SetFloat(_playerHitPropID, 1.0f);
+        }
 
         // 1. 立即打断当前所有动作（清理中间态）
         ForceStopActionsOnHit();

@@ -48,7 +48,16 @@ public partial class MonsterController : MonoBehaviour
     private bool autoJumpReady = true;
     private bool autoJumpRearmAfterLanding = false;
     private bool isAutoJumping = false;
-    private enum MonsterState { Idle, Patrol, Discovery, Air, Dead }
+    private enum MonsterState { Idle, Patrol, Discovery, Air, Dead, Transition }
+
+    // --- 转换运行时变量 ---
+    private enum TransitionType { None, GroundToSky, SkyToGround }
+    private TransitionType _transType = TransitionType.None;
+    private PatrolMovement _transMoveParams = null; // 复用 Movement 结构记录运行数据
+    private bool _hpTriggerExecuted = false;        // HP 触发是否已执行过
+    private int _currentPhaseAttackCycleCount = 0;  // 当前阶段攻击列表循环计数
+    private float _transAnimFreezeSpeedBackup = 1f; // 动画冻结速度备份
+    private bool _transAnimFrozen = false;          // 动画是否已冻结在最后一帧
 
     private MonsterState state = MonsterState.Idle;
 
@@ -101,7 +110,17 @@ public partial class MonsterController : MonoBehaviour
     [SerializeField] private Transform fxSkyfindMovePoint;
     [SerializeField] private Transform fxSkyfindRestPoint;
 
-    // 1) 地形检测参数后，新增一组“前方低矮障碍自动跳（双射线）”配置
+    // --- 转换特效锚点 ---
+    [Header("转换特效锚点")]
+    [SerializeField] private Transform fxGroundToSkyPoint; // 对应 Fxgroundtoskypoint
+    [SerializeField] private Transform fxSkyToGroundPoint; // 对应 Fxskytogroundpoint
+
+    // --- 双 Collider 方案 (方案 A) ---
+    [Header("双碰撞体引用 (用于转换切换)")]
+    [SerializeField] public Collider2D colliderGround; // 地面阶段用的
+    [SerializeField] public Collider2D colliderAir;    // 空中阶段用的
+
+    // 地形检测参数后，新增一组“前方低矮障碍自动跳（双射线）”配置
     [Header("前方低矮障碍自动跳（双射线）")]
     [SerializeField] private bool enableForwardGapAutoJump = true;
     [SerializeField, Tooltip("脚部水平射线长度（米）")]
@@ -115,7 +134,7 @@ public partial class MonsterController : MonoBehaviour
     [SerializeField, Tooltip("脚尖向前的额外外扩（米）")]
     private float forwardToeOffset = 0.03f;
 
-    // 可选：脚下 GroundPoint（不填则用碰撞框脚边前沿）
+    // 脚下 GroundPoint（不填则用碰撞框脚边前沿）
     [Header("地面锚点（可选）")]
     [SerializeField] private Transform groundPoint;
 
@@ -279,6 +298,12 @@ public partial class MonsterController : MonoBehaviour
     // 本次攻击的执行模式（近战/远程），由距离决定
     private AttackType attackExecType = AttackType.Melee;
 
+    // === 材质闪烁运行时变量 ===
+    private Material _hitMaterialInstance;
+    private float _hitFlashTimer = 0f;
+    private int _shaderPropID_Blend;
+    private bool _isMaterialFlashing = false;
+
     void Start()
     {
         player = GameObject.FindWithTag("Player")?.transform;
@@ -323,13 +348,20 @@ public partial class MonsterController : MonoBehaviour
 
         var ap = config?.airPhaseConfig;
         {
-            // 空中独占：airPhase 勾选且 groundPhase 未勾选 → 去重力
-            if (ap.airPhase && !ap.groundPhase)
+            bool isAirStart = false;
+            if (ap != null)
+            {
+                // 情况1：仅空中
+                if (ap.airPhase && !ap.groundPhase) isAirStart = true;
+                // 情况2：双选但空中优先
+                if (ap.airPhase && ap.groundPhase && ap.startPriority == PhasePriority.AirFirst) isAirStart = true;
+            }
+
+            if (isAirStart)
             {
                 _airSavedGravity = rb.gravityScale;
                 rb.gravityScale = 0f;
             }
-            // 其它情况保持原重力（包括仅地面 / 双勾选 / 全不勾）
         }
 
         // 巡逻运行态
@@ -370,7 +402,31 @@ public partial class MonsterController : MonoBehaviour
         // 初始化血量
         currentHP = Mathf.Max(0f, config?.maxHP ?? 0f);
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+        InitHitMaterial();
         StartCoroutine(StateMachine());
+    }
+
+    private void InitHitMaterial()
+    {
+        var hitCfg = config?.monsterHitConfig;
+        // 即使 hitCfg 为空，只要有 Renderer 也要尝试获取材质，以防后续代码空引用
+        Renderer r = null;
+        if (hitCfg != null && !string.IsNullOrEmpty(hitCfg.hitMaterialRendererPath))
+        {
+            var t = transform.Find(hitCfg.hitMaterialRendererPath);
+            if (t) r = t.GetComponent<Renderer>();
+        }
+        else
+        {
+            r = GetComponent<Renderer>();
+            if (!r) r = GetComponentInChildren<Renderer>();
+        }
+
+        if (r != null)
+        {
+            _hitMaterialInstance = r.material; // 获取实例材质
+            _shaderPropID_Blend = Shader.PropertyToID("_Blend"); // 确保 Shader 里属性名叫 _Blend
+        }
     }
 
     //Update() 内递减计时器
@@ -418,7 +474,6 @@ public partial class MonsterController : MonoBehaviour
             }
         }
 
-
         if (ignoreCliffFramesLeft > 0) ignoreCliffFramesLeft--;
         if (autoJumpFxCooldownLeft > 0) autoJumpFxCooldownLeft--;
         if (obstacleTurnFaceLockTimer > 0f) obstacleTurnFaceLockTimer -= Time.deltaTime;
@@ -427,7 +482,14 @@ public partial class MonsterController : MonoBehaviour
         if (attackRestCooldown > 0f) attackRestCooldown -= Time.deltaTime;
         if (faceProximityLockTimer > 0f) faceProximityLockTimer -= Time.deltaTime;
 
-        
+        // 空中阶段不受 AutoJumpZone 影响 (强制清除标记)
+        bool isAirMode = (state == MonsterState.Air) ||
+                         (state == MonsterState.Discovery && rb.gravityScale <= 0.001f);
+
+        if (isAirMode)
+        {
+            inAutoJumpPermitZone = false;
+        }
 
         // 只有在“最后一个循环已播放完”才冻结；否则由 AttackUpdate 负责重播下一次循环
         if (inAttack && !string.IsNullOrEmpty(activeAttackAnimName) && animator)
@@ -446,12 +508,29 @@ public partial class MonsterController : MonoBehaviour
             }
         }
 
-
-
         if (autoJumpRearmAfterLanding && !isJumping && !inAutoJumpPermitZone && ignoreCliffFramesLeft <= 0)
         {
             autoJumpReady = true;
             autoJumpRearmAfterLanding = false;
+        }
+
+        UpdateHitMaterialFlash();
+    }
+
+    private void UpdateHitMaterialFlash()
+    {
+        if (!_isMaterialFlashing) return;
+
+        if (_hitFlashTimer > 0f)
+        {
+            _hitFlashTimer -= Time.deltaTime;
+            // 计时结束：材质复原
+            if (_hitFlashTimer <= 0f)
+            {
+                if (_hitMaterialInstance)
+                    _hitMaterialInstance.SetFloat(_shaderPropID_Blend, 0f); // 恢复为 0
+                _isMaterialFlashing = false;
+            }
         }
     }
 
@@ -481,6 +560,8 @@ public partial class MonsterController : MonoBehaviour
         if (state == MonsterState.Air)
             EnterAirPhaseSetup();
 
+        ApplyColliderState(state == MonsterState.Air);
+
         while (!isDead)
         {
             switch (state)
@@ -493,6 +574,9 @@ public partial class MonsterController : MonoBehaviour
                     break;
                 case MonsterState.Air:
                     AirPatrolUpdate();
+                    break;
+                case MonsterState.Transition:
+                    TransitionUpdate();
                     break;
                 default:
                     IdleUpdate();
@@ -513,29 +597,39 @@ public partial class MonsterController : MonoBehaviour
         bool wantGround = config.airPhaseConfig.groundPhase;
         bool wantAir = config.airPhaseConfig.airPhase;
 
-        if (wantAir && !wantGround)
+        // --- 增加优先级判断 ---
+        if (wantAir && wantGround)
+        {
+            // 双勾选，看优先级
+            if (config.airPhaseConfig.startPriority == PhasePriority.AirFirst)
+                state = MonsterState.Air;
+            else
+                state = MonsterState.Patrol; // Ground
+        }
+        else if (wantAir && !wantGround)
         {
             state = MonsterState.Air;
-            return;
         }
-        // 其余情况（仅地面 / 双勾选 / 全不勾）统一进入地面巡逻
-        state = MonsterState.Patrol;
-        return;
+        else
+        {
+            // 默认地面
+            state = MonsterState.Patrol;
+        }
     }
 
     void FixedUpdate()
     {
+        // 强制在物理步开始时清理 AutoJumpZone 标记（空中阶段）
+        // 防止 OnTriggerStay 在 Air 阶段持续置 true 导致逻辑误判
+        if (state == MonsterState.Air || (state == MonsterState.Discovery && rb.gravityScale <= 0.001f))
+        {
+            inAutoJumpPermitZone = false;
+        }
+
         // 如果正在死亡击飞中，检测是否落地
         if (deathKnockbackActive)
         {
-            // 如果垂直速度向下(开始下落) 且 检测到接地
-            if (rb.velocity.y <= 0.1f && CheckGrounded())
-            {
-                // 落地刹车
-                rb.velocity = Vector2.zero;
-                rb.gravityScale = 1f; // 恢复正常重力避免浮空
-                deathKnockbackActive = false; // 结束击飞物理阶段
-            }
+            // ... (保持原死亡逻辑不变) ...
             return;
         }
 
@@ -543,13 +637,20 @@ public partial class MonsterController : MonoBehaviour
         {
             AirPatrolPhysicsStep();
         }
-        else if (state == MonsterState.Discovery &&
-                 config?.airStageConfig?.discovery != null &&
-                 config?.airPhaseConfig != null &&
-                 config.airPhaseConfig.airPhase &&
-                 !config.airPhaseConfig.groundPhase)
+        else if (state == MonsterState.Discovery)
         {
-            AirDiscoveryFixedStep();
+            
+            bool isAirMode = (rb.gravityScale <= 0.001f); // 或者用 colliderAir.enabled 判断
+
+            if (isAirMode && config?.airStageConfig?.discovery != null)
+            {
+                AirDiscoveryFixedStep();
+            }
+            // === 修复点结束 ===
+        }
+        else if (state == MonsterState.Transition)
+        {
+            TransitionPhysicsStep();
         }
 
         if (isJumping && activeJumpMove != null)
@@ -676,22 +777,36 @@ public partial class MonsterController : MonoBehaviour
     // DiscoveryUpdate() 顶部 wantBand 计算处：在算出 wantBand 之后，若计时器>0，强制Follow
     void DiscoveryUpdate()
     {
-        // 空中发现启用条件：仅当 airPhase 勾选且 groundPhase 未勾选时，把当前发现阶段视为空中发现
+        bool isAirMode = (colliderAir != null && colliderAir.enabled) || (rb.gravityScale <= 0.001f);
+
         bool useAirDiscovery =
             state == MonsterState.Discovery &&
             config?.airStageConfig?.discovery != null &&
             config?.airPhaseConfig != null &&
             config.airPhaseConfig.airPhase &&
-            !config.airPhaseConfig.groundPhase;
+            (!config.airPhaseConfig.groundPhase || isAirMode);
 
         if (useAirDiscovery)
         {
             if (inAttack) EndAttack(); // 终止可能残留的地面攻击
+            
+            if (!_skyInAttack)
+            {
+                CheckPhaseTransitionCondition(isAir: true);
+                if (state == MonsterState.Transition) return;
+            }
+
             AirDiscoveryUpdate();
             return;
         }
 
         discoveryRestJustFinished = false;
+
+        if (!inAttack)
+        {
+            CheckPhaseTransitionCondition(isAir: false);
+            if (state == MonsterState.Transition) return;
+        }
 
         // 玩家引用丢失回巡逻
         if (!player) { state = MonsterState.Patrol; return; }
@@ -710,6 +825,8 @@ public partial class MonsterController : MonoBehaviour
         float d = discoveryUseHorizontalDistanceOnly
             ? Mathf.Abs(p.x - m.x)
             : Vector2.Distance(p, m);
+
+        if (CheckAndExecuteSelfDestruct(d)) return;
 
         // 超出发现范围 → 回巡逻
         if (d > dcfg.findRange)
@@ -929,6 +1046,97 @@ public partial class MonsterController : MonoBehaviour
         }
     }
 
+    // 检测并执行自爆
+    private bool CheckAndExecuteSelfDestruct(float distToPlayer)
+    {
+        var hitCfg = config?.monsterHitConfig;
+        if (hitCfg == null || !hitCfg.enableSelfDestructOnTouch) return false;
+
+        if (distToPlayer <= hitCfg.selfDestructTriggerRadius)
+        {
+            ExecuteSelfDestruct(hitCfg);
+            return true;
+        }
+        return false;
+    }
+
+    // 执行自爆具体逻辑
+    private void ExecuteSelfDestruct(MonsterHitConfig hitCfg)
+    {
+        if (deathStarted) return;
+        deathStarted = true;
+
+        // 标记死亡状态
+        state = MonsterState.Dead;
+        isDead = true;
+        currentHP = 0;
+
+        // 停止移动和动画
+        rb.velocity = Vector2.zero;
+        if (animator) animator.speed = 0f;
+
+        // 播放爆炸特效
+        if (hitCfg.selfDestructExplosionEffect != null)
+        {
+            Transform anchor = null;
+            if (!string.IsNullOrEmpty(hitCfg.selfDestructSpawnChildPath))
+            {
+                string rawPath = hitCfg.selfDestructSpawnChildPath.Trim();
+                string rootName = transform.name;
+                // 兼容处理：如果配了根节点名字开头或斜杠开头，去掉它们
+                if (rawPath.StartsWith(rootName + "/"))
+                    rawPath = rawPath.Substring(rootName.Length + 1);
+                if (rawPath.StartsWith("/"))
+                    rawPath = rawPath.Substring(1);
+
+                var t = transform.Find(rawPath);
+                if (t != null) anchor = t;
+            }
+            if (anchor == null) anchor = transform;
+
+            Instantiate(hitCfg.selfDestructExplosionEffect, anchor.position, Quaternion.identity);
+        }
+
+        // 对玩家造成伤害
+        if (player != null)
+        {
+            float d = Vector2.Distance(transform.position, player.position);
+            if (d <= hitCfg.selfDestructExplosionRadius)
+            {
+                // 使用现有的伤害接口攻击玩家
+                player.SendMessageUpwards("TakeDamage", hitCfg.selfDestructDamage, SendMessageOptions.DontRequireReceiver);
+            }
+        }
+
+        // 通知刷怪器
+        spawner?.NotifyMonsterDeath(gameObject);
+
+        // 直接销毁
+        Destroy(gameObject);
+    }
+
+// --- 阶段转换条件检测 (攻击循环) ---
+private void CheckPhaseTransitionCondition(bool isAir)
+    {
+        // 仅在 Discovery 状态下有效
+        // HP 触发是一次性的，且在 TakeHit 中立即执行，这里只处理循环次数
+
+        var airCfg = config?.airPhaseConfig;
+        if (airCfg == null) return;
+
+        // 如果只勾选了一个阶段，无法转换
+        if (!airCfg.groundPhase || !airCfg.airPhase) return;
+
+        var transCfg = isAir ? airCfg.skyToGroundConfig : airCfg.groundToSkyConfig;
+        if (transCfg == null) return;
+
+        // 检查攻击循环次数
+        if (transCfg.attackCycleThreshold > 0 && _currentPhaseAttackCycleCount >= transCfg.attackCycleThreshold)
+        {
+            // 触发转换
+            StartPhaseTransition(isAir ? TransitionType.SkyToGround : TransitionType.GroundToSky);
+        }
+    }
 
     // 按“顺序/随机循环 + 可用性筛选”挑下一条
     private void TryStartAttack(DiscoveryV2Config dcfg, float dToPlayer, Vector2 playerPos, Vector2 monsterPos)
@@ -968,6 +1176,12 @@ public partial class MonsterController : MonoBehaviour
 
                     // 前进顺位；若回到 0 且随机开启，整轮结束后重新洗牌
                     attackOrderPos = (attackOrderPos + 1) % n;
+
+                    if (attackOrderPos == 0)
+                    {
+                        _currentPhaseAttackCycleCount++;
+                    }
+
                     if (attackOrderPos == 0 && dcfg.attacksRandomOrder && n > 1)
                         Shuffle(attackOrder);
                     return;
@@ -1186,24 +1400,360 @@ public partial class MonsterController : MonoBehaviour
         }
     }
 
-    // 玩家击中怪物（由外部调用，damage 可为正数）
-    public void TakeHit(float damage)
+    // 玩家击中怪物（由外部调用，damage 可为正数，hitPoint 为世界坐标接触点）
+    public void TakeHit(float damage, Vector2 hitPoint, GameObject weaponHitVfx = null)
     {
+        // 0. 状态检查
         if (deathStarted) return;
+        // 1. 扣血
         float dm = Mathf.Max(0f, damage);
         if (dm > 0f)
         {
             currentHP = Mathf.Max(0f, currentHP - dm);
         }
+        // 2. 播放命中特效 (修复：生成后必须销毁！)
+        GameObject vfxToPlay = weaponHitVfx;
 
-        // --- 打印怪物减血 Log ---
-        Debug.Log($"[Monster] 怪物受到伤害: {dm}, 剩余血量: {currentHP}");
+        // 如果武器没有传特效，就用怪物的默认受击特效
+        if (!vfxToPlay && config != null && config.monsterHitConfig != null)
+        {
+            vfxToPlay = config.monsterHitConfig.hitImpactEffectPrefab;
+        }
 
-        // 生命清零 → 进入死亡流程
+        if (vfxToPlay != null)
+        {
+            // 1. 生成特效实例
+            GameObject vfxInstance = Instantiate(vfxToPlay, hitPoint, Quaternion.identity);
+
+            // 2. 计算销毁时间 (默认 1秒兜底)
+            float destroyDelay = 1.0f;
+
+            // 情况A: 如果是粒子系统，取粒子时长
+            var ps = vfxInstance.GetComponent<ParticleSystem>();
+            if (ps != null)
+            {
+                destroyDelay = ps.main.duration;
+            }
+            // 情况B: 如果是序列帧动画 (Animator)，取动画片段时长
+            else
+            {
+                var anim = vfxInstance.GetComponent<Animator>();
+                if (anim != null)
+                {
+                    // 强制让 Animator 初始化，以便获取正确的状态信息
+                    anim.Update(0f);
+                    var info = anim.GetCurrentAnimatorStateInfo(0);
+                    // 如果获取到了有效时长，就使用它 (加一点缓冲)
+                    if (info.length > 0f)
+                    {
+                        destroyDelay = info.length;
+                    }
+                }
+            }
+
+            // 3. 定时销毁 (多给 0.1s 防止动画没播完就消失)
+            Destroy(vfxInstance, destroyDelay + 0.1f);
+        }
+        // 3. 材质闪烁
+        if (config != null && config.monsterHitConfig != null && _hitMaterialInstance != null)
+        {
+            if (config.monsterHitConfig.hitMaterialFlashDuration > 0f)
+            {
+                _hitMaterialInstance.SetFloat(_shaderPropID_Blend, config.monsterHitConfig.hitMaterialBlendTarget);
+                _hitFlashTimer = config.monsterHitConfig.hitMaterialFlashDuration;
+                _isMaterialFlashing = true;
+            }
+        }
+        // 4. 阶段转换检测
+        if (!_hpTriggerExecuted && config != null && config.airPhaseConfig != null)
+        {
+            var airCfg = config.airPhaseConfig;
+            if (airCfg.groundPhase && airCfg.airPhase)
+            {
+                float hpPercent = (config.maxHP > 0f) ? (currentHP / config.maxHP) : 0f;
+                bool currentIsAir = (rb.gravityScale <= 0.01f);
+                var transCfg = currentIsAir ? airCfg.skyToGroundConfig : airCfg.groundToSkyConfig;
+
+                if (transCfg != null && transCfg.hpThresholdPercent > 0f && hpPercent <= transCfg.hpThresholdPercent)
+                {
+                    _hpTriggerExecuted = true;
+                    StartPhaseTransition(currentIsAir ? TransitionType.SkyToGround : TransitionType.GroundToSky);
+                }
+            }
+        }
+        // 5. 死亡检测
         if (currentHP <= 0f)
         {
             StartDeath();
         }
+    }
+
+    public void TakeHit(float damage)
+    {
+        TakeHit(damage, transform.position, null); // 默认使用怪物中心，无武器特效
+    }
+
+    // 辅助方法：支持指定位置和旋转的 PlayEffect 重载
+    private void PlayEffect(GameObject prefab, Vector3 pos, Quaternion rot, Transform parent)
+    {
+        if (prefab == null) return;
+        GameObject fx = Instantiate(prefab, pos, rot, parent);
+
+        float lifeTime = 1.0f; // 默认存活时间
+
+        var ps = fx.GetComponentInChildren<ParticleSystem>(true);
+        if (ps)
+        {
+            ps.Play();
+            lifeTime = ps.main.duration;
+        }
+        else
+        {
+            var anim = fx.GetComponentInChildren<Animator>(true);
+            if (anim)
+            {
+                anim.gameObject.SetActive(true);
+                AnimatorStateInfo info = anim.GetCurrentAnimatorStateInfo(0);
+
+                float clipLen = info.length;
+                if (clipLen <= 0f || float.IsInfinity(clipLen)) clipLen = 0.5f;
+
+                lifeTime = clipLen;
+            }
+        }
+
+        var sr = fx.GetComponentInChildren<SpriteRenderer>(true);
+        if (sr)
+        {
+            sr.sortingOrder = 1000;
+        }
+        Destroy(fx, lifeTime + 0.1f);
+    }
+
+    // --- 开始转换 ---
+    private void StartPhaseTransition(TransitionType type)
+    {
+        if (state == MonsterState.Dead) return;
+
+        // 无论怪物在做什么，强制进入
+        if (inAttack) EndAttack();
+        if (_skyInAttack) { _skyInAttack = false; _activeSkyAttack = null; }
+        isJumping = false; isAutoJumping = false;
+
+        _transType = type;
+        state = MonsterState.Transition;
+
+        // 准备配置
+        var airCfg = config.airPhaseConfig;
+        var cfg = (type == TransitionType.GroundToSky) ? airCfg.groundToSkyConfig : airCfg.skyToGroundConfig;
+
+        _transMoveParams = new PatrolMovement
+        {
+            moveSpeed = cfg.moveParams.moveSpeed,
+            accelerationTime = cfg.moveParams.accelerationTime,
+            decelerationTime = cfg.moveParams.decelerationTime,
+            moveDuration = cfg.moveParams.moveDuration
+        };
+
+        // 初始化三相计时器 (借用 PatrolMovement 的运行时字段)
+        _transMoveParams.rtCurrentSpeed = 0f;
+        _transMoveParams.rtAccelTimer = Mathf.Max(0f, cfg.moveParams.accelerationTime);
+        _transMoveParams.rtCruiseTimer = Mathf.Max(0f, cfg.moveParams.moveDuration);
+        _transMoveParams.rtDecelTimer = Mathf.Max(0f, cfg.moveParams.decelerationTime);
+
+        // 确定初始相位
+        bool instantAccel = (cfg.moveParams.accelerationTime <= 0f);
+        _transMoveParams.rtStraightPhase = instantAccel
+            ? (_transMoveParams.rtCruiseTimer > 0f ? StraightPhase.Cruise : StraightPhase.Decel)
+            : StraightPhase.Accel;
+
+        if (instantAccel) _transMoveParams.rtCurrentSpeed = cfg.moveParams.moveSpeed;
+
+        // 播放动画
+        if (!string.IsNullOrEmpty(cfg.transitionAnimation))
+        {
+            animator.CrossFadeInFixedTime(cfg.transitionAnimation, 0.1f, 0, 0f);
+            animator.Update(0f);
+        }
+
+        // 播放特效
+        if (cfg.transitionEffectPrefab != null)
+        {
+            var anchor = (type == TransitionType.GroundToSky) ? fxGroundToSkyPoint : fxSkyToGroundPoint;
+            PlayEffect(cfg.transitionEffectPrefab, anchor ? anchor : transform);
+        }
+
+        // 切换碰撞体 (如果勾选)
+        if (cfg.switchCollider)
+        {
+            bool toAir = (type == TransitionType.GroundToSky);
+            ApplyColliderState(toAir);
+        }
+
+        // 物理设置：去重力，准备垂直移动
+        if (type == TransitionType.GroundToSky)
+        {
+            // 只有当当前重力正常时才保存，防止存入0
+            if (rb.gravityScale > 0.01f) _airSavedGravity = rb.gravityScale;
+            // 兜底：如果存下来的是0，给个默认值 1
+            if (_airSavedGravity <= 0.01f) _airSavedGravity = 1f;
+        }
+
+        rb.gravityScale = 0f;
+        rb.velocity = Vector2.zero;
+        desiredSpeedX = 0f;
+
+        // 重置动画冻结状态
+        _transAnimFrozen = false;
+        animator.speed = 1f;
+    }
+
+    // --- 转换状态更新 (Update) ---
+    private void TransitionUpdate()
+    {
+        // 动画冻结逻辑：保持最后一帧
+        if (animator)
+        {
+            var cfg = (_transType == TransitionType.GroundToSky) ? config.airPhaseConfig.groundToSkyConfig : config.airPhaseConfig.skyToGroundConfig;
+            if (!string.IsNullOrEmpty(cfg.transitionAnimation))
+            {
+                var info = animator.GetCurrentAnimatorStateInfo(0);
+                if (info.IsName(cfg.transitionAnimation) && info.normalizedTime >= 1f && !_transAnimFrozen)
+                {
+                    _transAnimFreezeSpeedBackup = animator.speed;
+                    animator.speed = 0f;
+                    _transAnimFrozen = true;
+                }
+            }
+        }
+    }
+
+    // --- 转换物理步 (FixedUpdate) ---
+    private void TransitionPhysicsStep()
+    {
+        if (_transMoveParams == null) return;
+
+        float dt = Time.fixedDeltaTime;
+        float targetSpeed = _transMoveParams.moveSpeed;
+
+        // 三相计算 (垂直速度)
+        // Accel
+        if (_transMoveParams.rtStraightPhase == StraightPhase.Accel)
+        {
+            float accelRate = (_transMoveParams.accelerationTime > 0f) ? (targetSpeed / _transMoveParams.accelerationTime) : float.MaxValue;
+            _transMoveParams.rtCurrentSpeed = Mathf.MoveTowards(_transMoveParams.rtCurrentSpeed, targetSpeed, accelRate * dt);
+            _transMoveParams.rtAccelTimer -= dt;
+
+            if (_transMoveParams.rtCurrentSpeed >= targetSpeed || _transMoveParams.rtAccelTimer <= 0f)
+            {
+                _transMoveParams.rtCurrentSpeed = targetSpeed;
+                _transMoveParams.rtStraightPhase = (_transMoveParams.rtCruiseTimer > 0f) ? StraightPhase.Cruise : StraightPhase.Decel;
+            }
+        }
+        // Cruise
+        else if (_transMoveParams.rtStraightPhase == StraightPhase.Cruise)
+        {
+            _transMoveParams.rtCurrentSpeed = targetSpeed;
+            _transMoveParams.rtCruiseTimer -= dt;
+            if (_transMoveParams.rtCruiseTimer <= 0f)
+            {
+                _transMoveParams.rtStraightPhase = StraightPhase.Decel;
+            }
+        }
+        // Decel
+        else if (_transMoveParams.rtStraightPhase == StraightPhase.Decel)
+        {
+            float decelRate = (_transMoveParams.decelerationTime > 0f) ? (targetSpeed / _transMoveParams.decelerationTime) : float.MaxValue;
+            _transMoveParams.rtCurrentSpeed = Mathf.MoveTowards(_transMoveParams.rtCurrentSpeed, 0f, decelRate * dt);
+            _transMoveParams.rtDecelTimer -= dt;
+
+            // 结束判定
+            if (_transMoveParams.rtCurrentSpeed <= 0.001f || _transMoveParams.rtDecelTimer <= -0.1f) // 给点余量
+            {
+                FinishPhaseTransition();
+                return;
+            }
+        }
+
+        // 应用速度
+        float vy = _transMoveParams.rtCurrentSpeed;
+        // 如果是 SkyToGround，速度向下
+        if (_transType == TransitionType.SkyToGround) vy = -vy;
+
+        rb.velocity = new Vector2(0f, vy);
+
+        // 空中转地面时，检测是否已触地，若触地则提前结束转换
+        if (_transType == TransitionType.SkyToGround)
+        {
+            UpdateGroundedAndSlope();
+            if (isGroundedMC)
+            {
+                FinishPhaseTransition();
+            }
+        }
+    }
+
+    private void FinishPhaseTransition()
+    {
+        if (_transAnimFrozen && animator)
+        {
+            animator.speed = _transAnimFreezeSpeedBackup;
+            _transAnimFrozen = false;
+        }
+
+        rb.velocity = Vector2.zero;
+
+        if (_transType == TransitionType.GroundToSky)
+        {
+            state = MonsterState.Air;
+            Debug.Log($"[MonsterController] 转换完成：Ground -> Sky。当前状态: {state}");
+
+            EnterAirPhaseSetup();
+
+            // === 策划需求：升空后，把当前位置设为新的空中巡逻中心，防止它飞回老家 ===
+            if (config?.airStageConfig?.patrol?.elements != null)
+            {
+                foreach (var elem in config.airStageConfig.patrol.elements)
+                {
+                    elem.areaCenter = transform.position;
+                }
+                Debug.Log($"[MonsterController] 空中巡逻中心已重置为当前位置: {transform.position}");
+            }
+
+            _airDiscSetupDone = false;       // 强制重新运行 AirDiscoveryUpdate 的初始化块
+            _airIsReturningToCenter = false; // 确保不处于归位状态
+            _airDiscStateTimer = 0f;         // 重置状态计时器
+
+            _currentPhaseAttackCycleCount = 0;
+        }
+        else
+        {
+            // 1. 设置状态回 Patrol
+            state = MonsterState.Patrol;
+            Debug.Log($"[MonsterController] 转换完成：Sky -> Ground。当前状态: {state}");
+
+            // 2. 恢复重力 (使用之前保存的值，若没保存过给默认值 1)
+            rb.gravityScale = (_airSavedGravity > 0.01f) ? _airSavedGravity : 1f;
+
+            // 3. 清理空中标记，允许下次再升空时重新初始化
+            _airSetupDone = false;
+
+            _currentPhaseAttackCycleCount = 0;
+        }
+
+        _transType = TransitionType.None;
+        _transMoveParams = null;
+    }
+
+    // --- 切换 Collider 辅助 ---
+    private void ApplyColliderState(bool isAirMode)
+    {
+        if (colliderGround) colliderGround.enabled = !isAirMode;
+        if (colliderAir) colliderAir.enabled = isAirMode;
+
+        // 更新 col 引用，方便其他逻辑使用 (Bounds检测等)
+        col = isAirMode ? colliderAir : colliderGround;
+        if (col == null) col = GetComponent<Collider2D>(); // 兜底
     }
 
     private void StartDeath()
@@ -1463,6 +2013,10 @@ public partial class MonsterController : MonoBehaviour
         p.countPerBurst = Mathf.Max(1, sky.SkycountPerBurst);
         p.intraBurstInterval = Mathf.Max(0f, sky.SkyintraBurstInterval);
         p.lifeTime = Mathf.Max(0.01f, sky.SkylifeTime);
+
+        // 映射空中击毁配置
+        p.canBeDestroyedByWeapon = sky.SkycanBeDestroyedByWeapon;
+        p.destroyEffectPrefab = sky.SkydestroyEffectPrefab;
 
         // 扇形
         p.spreadAngle = Mathf.Max(0f, sky.SkyspreadAngle);
@@ -2947,8 +3501,9 @@ public partial class MonsterController : MonoBehaviour
     {
         if (!other.CompareTag(autoJumpPermitTag)) return;
 
-        // NEW: 空中阶段忽略 AutoJumpZone
-        if (state == MonsterState.Air) return;
+        bool isAirMode = (state == MonsterState.Air) || (state == MonsterState.Discovery && rb.gravityScale <= 0.001f);
+        if (isAirMode) return;
+
 
         inAutoJumpPermitZone = true;
 
@@ -2967,12 +3522,13 @@ public partial class MonsterController : MonoBehaviour
 
     void OnTriggerExit2D(Collider2D other)
     {
-        if (!other.CompareTag(autoJumpPermitTag)) return;
+        bool isAirMode = (state == MonsterState.Air) || (state == MonsterState.Discovery && rb.gravityScale <= 0.001f);
+        if (isAirMode) return;
 
-        // NEW: 空中阶段忽略 AutoJumpZone
-        if (state == MonsterState.Air) return;
-
-        inAutoJumpPermitZone = false;
+        if (other.CompareTag(autoJumpPermitTag))
+        {
+            inAutoJumpPermitZone = false;
+        }
     }
 
     void OnCollisionEnter2D(Collision2D col)
@@ -3046,13 +3602,10 @@ public partial class MonsterController : MonoBehaviour
         {
             if (airDisc != null)
             {
-                // 空中发现三档圈
                 Gizmos.color = new Color(1f, 0.3f, 0.3f); DrawCircleXY(pos, airDisc.findRange);      // follow
                 Gizmos.color = new Color(0.9f, 0.9f, 0.9f); DrawCircleXY(pos, airDisc.reverseRange);   // retreat
                 Gizmos.color = new Color(0.2f, 0.2f, 0.2f); DrawCircleXY(pos, airDisc.backRange);      // backstep
-
-                // 追加：空中攻击触发范围（仅在空中独占时显示）
-                if (config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)
+                if (config?.airPhaseConfig?.airPhase == true)
                 {
                     float meleeMax = 0f, rangedMax = 0f;
                     var sky = airDisc.skyAttacks;
@@ -3077,6 +3630,21 @@ public partial class MonsterController : MonoBehaviour
                     }
                 }
             }
+        }
+
+        // ==== 自爆范围 Gizmos 绘制 ====
+        // 增加 showSelfDestructGizmos 判断
+        if (config != null && config.monsterHitConfig != null &&
+            config.monsterHitConfig.enableSelfDestructOnTouch &&
+            config.monsterHitConfig.showSelfDestructGizmos)
+        {
+            // 触发半径 (Trigger Radius) - 橙色
+            Gizmos.color = new Color(1f, 0.5f, 0f);
+            DrawCircleXY(pos, config.monsterHitConfig.selfDestructTriggerRadius);
+
+            // 爆炸半径 (Explosion Radius) - 深红色
+            Gizmos.color = new Color(0.8f, 0f, 0f);
+            DrawCircleXY(pos, config.monsterHitConfig.selfDestructExplosionRadius);
         }
     }
 
@@ -3363,7 +3931,7 @@ public partial class MonsterController : MonoBehaviour
     public void OnFxSkyAttack()
     {
         // 仅在空中独占 + 空中发现攻击期间生效
-        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (config?.airPhaseConfig?.airPhase != true) return;
         if (_activeSkyAttack == null) return;
 
         var prefab = _activeSkyAttack.SkyattackEffectPrefab;
@@ -3390,7 +3958,7 @@ public partial class MonsterController : MonoBehaviour
     public void OnSkyAttackAnimationStart()
     {
         // 空中近战命中体启用
-        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (config?.airPhaseConfig?.airPhase != true) return;
         if (_activeSkyAttack == null) return;
 
         var hit = ResolveHitboxCollider(_activeSkyAttack.meleeHitboxChildPath);
@@ -3412,7 +3980,7 @@ public partial class MonsterController : MonoBehaviour
     public void OnSkyAttackAnimationEnd()
     {
         // 空中近战命中体关闭
-        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (config?.airPhaseConfig?.airPhase != true) return;
         if (_activeSkyAttack == null) return;
 
         var hit = ResolveHitboxCollider(_activeSkyAttack.meleeHitboxChildPath);
@@ -3422,7 +3990,7 @@ public partial class MonsterController : MonoBehaviour
     public void OnFxSkyAttackFar()
     {
         // 空中远程攻击 FX（动画事件）
-        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (config?.airPhaseConfig?.airPhase != true) return;
         if (_activeSkyAttack == null) return;
 
         var prefab = _activeSkyAttack.SkyattackFarEffectPrefab;
@@ -3448,7 +4016,7 @@ public partial class MonsterController : MonoBehaviour
     public void OnSkyAttackFarFire()
     {
         // 空中远程攻击发射飞行物（动画事件）
-        if (!(config?.airPhaseConfig?.airPhase == true && config?.airPhaseConfig?.groundPhase == false)) return;
+        if (config?.airPhaseConfig?.airPhase != true) return;
         if (_activeSkyAttack == null) return;
 
         Transform spawn = null;
@@ -3647,5 +4215,18 @@ public partial class MonsterController : MonoBehaviour
         if (anchor == null) return; // 无锚点不播
 
         PlayEffect(prefab, anchor);
+    }
+
+    // --- 转换特效回调 ---
+    public void OnFxTransition(bool toSky)
+    {
+        if (state != MonsterState.Transition) return;
+
+        var cfg = toSky ? config.airPhaseConfig.groundToSkyConfig : config.airPhaseConfig.skyToGroundConfig;
+        if (cfg == null || cfg.transitionEffectPrefab == null) return;
+
+        var anchor = toSky ? fxGroundToSkyPoint : fxSkyToGroundPoint;
+        // 如果没有配专用锚点，回退 transform
+        PlayEffect(cfg.transitionEffectPrefab, anchor ? anchor : transform);
     }
 }

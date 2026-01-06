@@ -3,21 +3,22 @@ using UnityEngine;
 
 public class WeaponManager : MonoBehaviour
 {
-    [Header("绑定路径")]
-    [SerializeField] private Animator playerAnimator;           // PlayerRoot/.../Flip/player 的 Animator
-    [SerializeField] private AnimationEventRelay relay;         // 同层级的 AnimationEventRelay
-    [SerializeField] private Transform weaponSlot;              // HandSocketR/WeaponOffset/player_weapon
-    [SerializeField] private Transform vfxSlot;                 // HandSocketR/WeaponOffset/VfxWeaponOffset
-    [SerializeField] private Transform vfxStarSlot;             // HandSocketR/WeaponOffset/VfxWeaponOffsetstar
+    [Header("组件引用")]
+    [SerializeField] private Animator playerAnimator;
+    [SerializeField] private AnimationEventRelay relay;
+    [SerializeField] private PlayerController playerController;
+    [SerializeField] private Transform weaponSlot;
+    [SerializeField] private Transform vfxSlot;
+    [SerializeField] private Transform vfxStarSlot;
 
-    [Header("武器库（按 id 查找）")]
+    [Header("武器数据库")]
     [SerializeField] private List<WeaponDefinition> database = new List<WeaponDefinition>();
 
     private readonly Dictionary<string, WeaponDefinition> _map = new Dictionary<string, WeaponDefinition>();
     private GameObject _currentWeaponGO;
     private GameObject _currentFxGO;
     private GameObject _currentFxStarGO;
-    private AttackEventHub _currentWeaponHub; // 本体 Hub
+    private AttackEventHub _currentWeaponHub;
     private HitboxController _currentHitbox;
 
     public string CurrentWeaponId { get; private set; } = "";
@@ -26,16 +27,15 @@ public class WeaponManager : MonoBehaviour
     {
         if (!playerAnimator) playerAnimator = GetComponentInChildren<Animator>();
         if (!relay) relay = GetComponentInChildren<AnimationEventRelay>();
+        if (!playerController) playerController = GetComponentInParent<PlayerController>();
         BuildIndex();
     }
 
     private void Start()
     {
-        // 用你在 WeaponDefinition 里配置的 id，比如 "001" 或 "Weapon_001"
         EquipWeapon("001");
     }
 
-    // 调试：数字键切换武器ID（仅开发期）
     private void Update()
     {
         if (Input.GetKeyDown(KeyCode.Alpha1)) EquipWeapon("001");
@@ -56,11 +56,9 @@ public class WeaponManager : MonoBehaviour
         if (string.IsNullOrEmpty(id) || !_map.TryGetValue(id, out var def)) return false;
         if (CurrentWeaponId == id) return true;
 
-        // 1) 覆盖玩家攻击动画 6 段
         if (playerAnimator && def.playerOverride)
             playerAnimator.runtimeAnimatorController = def.playerOverride;
 
-        // 2) 替换武器本体
         if (weaponSlot)
         {
             if (_currentWeaponGO) Destroy(_currentWeaponGO);
@@ -74,9 +72,22 @@ public class WeaponManager : MonoBehaviour
                 _currentWeaponHub = _currentWeaponGO.GetComponentInChildren<AttackEventHub>(true);
                 _currentHitbox = _currentWeaponGO.GetComponentInChildren<HitboxController>(true);
 
-                if (_currentHitbox && def.baseDamage > 0) _currentHitbox.InjectBaseDamage(def.baseDamage);
+                if (_currentHitbox)
+                {
+                    if (def.baseDamage > 0) _currentHitbox.InjectBaseDamage(def.baseDamage);
 
-                // 将 bodyAnimator 绑定到玩家（用于速度同步）；如果该字段是 private，可用反射；若你愿意把它改为 public/setter，则直接赋值即可
+                    _currentHitbox.SetHitVfx(def.hitImpactEffectPrefab);
+
+                    // FIXED: Explicitly define types to avoid CS0103/CS0123 errors
+                    _currentHitbox.OnHitEnemy = (Collider2D target, int dmg, GameObject vfxPrefab, Vector2 hitPoint) =>
+                    {
+                        if (playerController)
+                        {  
+                            playerController.OnMyWeaponHitEnemy(target, dmg, vfxPrefab, hitPoint);
+                        }
+                    };
+                }
+
                 if (_currentWeaponHub && playerAnimator)
                 {
                     var f = typeof(AttackEventHub).GetField("bodyAnimator", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
@@ -85,42 +96,41 @@ public class WeaponManager : MonoBehaviour
             }
         }
 
-        // 3) 替换 FX A（player_weapon_effect）
+        if (playerController)
+        {
+            playerController.SetWeaponHitVfx(def.effectStarPrefab);
+        }
+
         if (vfxSlot)
         {
             if (_currentFxGO) Destroy(_currentFxGO);
             _currentFxGO = null;
-
             if (def.effectPrefab)
             {
                 _currentFxGO = Instantiate(def.effectPrefab, vfxSlot, worldPositionStays: false);
-                _currentFxGO.name = "player_weapon_effect"; // 可选：保持原命名
+                _currentFxGO.name = "player_weapon_effect";
                 BindFxHubBodyAnimator(_currentFxGO);
             }
         }
 
-        // 4) 替换 FX B（player_weapon_effectstar）
         if (vfxStarSlot)
         {
             if (_currentFxStarGO) Destroy(_currentFxStarGO);
             _currentFxStarGO = null;
-
             if (def.effectStarPrefab)
             {
                 _currentFxStarGO = Instantiate(def.effectStarPrefab, vfxStarSlot, worldPositionStays: false);
-                _currentFxStarGO.name = "player_weapon_effectstar"; // 可选：保持原命名
+                _currentFxStarGO.name = "player_weapon_effectstar";
                 BindFxHubBodyAnimator(_currentFxStarGO);
             }
         }
 
-        // 5) 注入到 Relay：武器本体 Hub、命中体、以及所有 FX Hub 进入 vfxHubs
         if (relay)
         {
             relay.attackHub = _currentWeaponHub;
             if (_currentHitbox) relay.SetWeaponHitbox(_currentHitbox);
             relay.vfxHubs.Clear();
 
-            // 收集两个 FX 插槽里的 AttackEventHub（一个 FX 里也可以有多个 Hub）
             if (_currentFxGO)
             {
                 var hubs = _currentFxGO.GetComponentsInChildren<AttackEventHub>(true);
@@ -132,14 +142,13 @@ public class WeaponManager : MonoBehaviour
                 foreach (var h in hubs) if (h) relay.vfxHubs.Add(h);
             }
 
-            // 如果武器本体 prefab 里还有额外 FX Hub，也一并纳入 vfxHubs（可选）
             if (_currentWeaponGO)
             {
                 var extraFxHubs = _currentWeaponGO.GetComponentsInChildren<AttackEventHub>(true);
                 foreach (var h in extraFxHubs)
                 {
                     if (!h) continue;
-                    if (h == _currentWeaponHub) continue; // 跳过本体 Hub
+                    if (h == _currentWeaponHub) continue;
                     relay.vfxHubs.Add(h);
                 }
             }

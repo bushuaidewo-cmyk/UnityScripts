@@ -4,7 +4,7 @@ using UnityEngine;
 [CreateAssetMenu(fileName = "NewMonsterConfig", menuName = "怪物配置/新怪物配置")]
 public class MonsterConfig : ScriptableObject
 {
-    
+
     [Tooltip("怪物唯一ID，用于查找或存档标识")]
     public string monsterID;
     [Tooltip("怪物等级（用于数值与掉落曲线）")]
@@ -51,6 +51,42 @@ public class MonsterConfig : ScriptableObject
 [System.Serializable]
 public class MonsterHitConfig
 {
+    [Header("受击表现配置")]
+    [Tooltip("受击特效Prefab（在攻击接触点播放，例如火花/血液）。优先播放武器传入的特效，若武器无特效则播放此配置。")]
+    public GameObject hitImpactEffectPrefab;
+
+    [Tooltip("材质球 Renderer 路径（相对于怪物根节点，为空则查找根节点）")]
+    public string hitMaterialRendererPath;
+
+    [Tooltip("材质球受击变化持续时间（秒）。再次受击会刷新此时间。")]
+    public float hitMaterialFlashDuration = 0.1f;
+
+    [Tooltip("材质球受击时 Blend 属性的目标值（通常为 1:变白/变红，0:正常）。")]
+    public float hitMaterialBlendTarget = 1.0f;
+
+    [Header("自爆配置")]
+    [Tooltip("勾选后：在发现阶段（地面或空中）若玩家进入触发半径，则立即自爆死亡")]
+    public bool enableSelfDestructOnTouch = false;
+
+    [Tooltip("勾选后：在 Scene 窗口绘制自爆触发半径(橙)和爆炸半径(红)")]
+    public bool showSelfDestructGizmos = false;
+
+    [Tooltip("自爆触发半径：玩家小于此距离时触发自爆")]
+    public float selfDestructTriggerRadius = 1.0f;
+
+    [Tooltip("自爆伤害半径：爆炸对玩家造成伤害的范围（通常>=触发半径）")]
+    public float selfDestructExplosionRadius = 2.5f;
+
+    [Tooltip("自爆对玩家造成的伤害数值")]
+    public int selfDestructDamage = 30;
+
+    [Tooltip("自爆特效 Prefab")]
+    public GameObject selfDestructExplosionEffect;
+
+    [Tooltip("自爆特效释放点子物体路径（从怪物根开始的相对路径），为空则使用怪物根节点")]
+    public string selfDestructSpawnChildPath; 
+
+    [Header("死亡表现配置")]
     public string MasterDieAnimaton;
     [Tooltip("死亡特效 Prefab")]
     public GameObject MasterDiePrefab;
@@ -69,6 +105,17 @@ public class AirPhaseConfig
     public bool groundPhase = true;
     [Tooltip("勾选：永远运行空中阶段（出生即无重力漂浮，使用空中循环）；不勾选：不运行空中阶段逻辑")]
     public bool airPhase = false;
+
+    [Tooltip("当地面和空中都勾选时，优先进入哪个阶段")]
+    public PhasePriority startPriority = PhasePriority.GroundFirst;
+
+    [Header("地面 -> 空中 转换配置")]
+    public PhaseTransitionConfig groundToSkyConfig = new PhaseTransitionConfig();
+
+    // === 修复点：添加了缺失的 skyToGroundConfig ===
+    [Header("空中 -> 地面 转换配置")]
+    public PhaseTransitionConfig skyToGroundConfig = new PhaseTransitionConfig();
+
     [Tooltip("勾选后：绘制地面阶段发现(follow/reverse/backstep)与攻击(近战/远程)辅助线 Gizmos")]
     public bool showGroundGizmosManual = false;
     [Tooltip("勾选后：绘制空中阶段发现(follow/reverse/backstep)与攻击(近战/远程)辅助线 Gizmos")]
@@ -89,7 +136,7 @@ public class AirStageConfig
 }
 
 [System.Serializable]
-public class AirHitConfig{}
+public class AirHitConfig { }
 
 [System.Serializable]
 public class DamageConfig
@@ -110,7 +157,7 @@ public class AirPatrolConfig
     [Tooltip("勾选：受区域影响；不勾选：不受到区域影响")]
     public bool canPassThroughScene = false;
 
-    
+
     public string skymoveAnimation;
     public string skyrestAnimation;
     public GameObject skymoveEffectPrefab;
@@ -131,6 +178,49 @@ public enum AirPatrolPathType
     AreaRandomH = 3,
     AreaHorizontal = 1,
     AreaVertical = 2
+}
+
+// --- 转换所需的枚举和类 ---
+public enum PhasePriority
+{
+    GroundFirst = 0,
+    AirFirst = 1
+}
+
+[System.Serializable]
+public class PhaseTransitionConfig
+{
+    [Header("触发条件")]
+    [Tooltip("HP 低于此百分比（0~1）时触发一次强制转换（例如 0.5 表示 50% 血量）。0 表示不启用 HP 触发。")]
+    [Range(0f, 1f)]
+    public float hpThresholdPercent = 0f;
+
+    [Tooltip("攻击列表完整循环执行多少次后触发转换。0 表示不启用攻击次数触发。")]
+    public int attackCycleThreshold = 0;
+
+    [Header("移动参数 (仅使用: Speed, Accel/Time, Decel/Time, Duration)")]
+    [Tooltip("转换过程中的移动参数（升空或下降）")]
+    public PatrolMovement moveParams = new PatrolMovement
+    {
+        type = MovementType.Straight, // 借用直线类型
+        moveSpeed = 3f,
+        accelerationTime = 0.5f,
+        decelerationTime = 0.5f,
+        moveDuration = 1.0f
+    };
+
+    [Header("表现资源")]
+    [Tooltip("转换时的动画状态名")]
+    public string transitionAnimation;
+
+    [Tooltip("转换开始时播放的特效")]
+    public GameObject transitionEffectPrefab;
+
+    // 注意：事件帧名字固定为 GroundtoskyPrefab / SkytogroundPrefab，无需配置，代码硬编码匹配
+
+    [Header("碰撞体")]
+    [Tooltip("转换开始时是否切换碰撞体（需要 MonsterController 上赋值 colliderGround/colliderAir）")]
+    public bool switchCollider = false;
 }
 
 [System.Serializable]
@@ -157,7 +247,7 @@ public class AirPatrolElement
         restMax = 0.5f
     };
 
-    
+
     public bool sinEnabled = false;
     public float sinFrequency = 2.0f;   // 频率 Hz
     public float sinAmplitude = 0.5f;   // 幅度 米
@@ -193,13 +283,13 @@ public class AirDiscoveryConfig
     public float sinAmplitude = 0.4f;
 
     // ====== 全局资源配置（原 Follow/Backstep 里的资源上移至此） ======
-    
+
     public string followMoveAnimation;
     public string followRestAnimation;
     public GameObject followMoveEffectPrefab;
     public GameObject followRestEffectPrefab;
 
-    
+
     public string backMoveAnimation;
     public string backRestAnimation;
     public GameObject backMoveEffectPrefab;
@@ -214,7 +304,7 @@ public class AirDiscoveryConfig
     public bool skyattacksRandomOrder = false;
 
     [Tooltip("空中发现攻击条目列表 (仅空中独占时生效)")]
-    public List<AirAttackEvent> skyAttacks = new List<AirAttackEvent>(); 
+    public List<AirAttackEvent> skyAttacks = new List<AirAttackEvent>();
 }
 
 [System.Serializable]
@@ -236,6 +326,13 @@ public class SkyProjectileConfig
     public float SkyintraBurstInterval = 0f;
     public float SkylifeTime = 5f;
 
+    // ================== 空中飞行物被武器击毁配置 ==================
+    [Header("玩家武器击毁")]
+    [Tooltip("勾选后：该飞行物可以被玩家武器（PWeapon HIT 层）击毁")]
+    public bool SkycanBeDestroyedByWeapon = false;
+    [Tooltip("被武器击毁时播放的特效")]
+    public GameObject SkydestroyEffectPrefab;
+
     // 扇形分布
     [Header("扇形分布")]
     public float SkyspreadAngle = 0f;
@@ -247,7 +344,7 @@ public class SkyProjectileConfig
     public GameObject SkyFlygunEffectPrefab;
 
     // 自身旋转
-    
+
     public bool SkyselfRotate = false;
     public bool SkyselfRotateX = false;
     public bool SkyselfRotateY = false;
@@ -269,7 +366,7 @@ public class SkyProjectileConfig
     public GameObject SkyFlygunBoomEffectPrefab;
 
     // 直线移动
-    
+
     public bool SkylinearEnabled = true;
     public float Skyspeed = 6f;
     public float Skyaccel = 0f;
@@ -279,13 +376,13 @@ public class SkyProjectileConfig
     public float SkymoveDuration = 0f;
 
     // S 型侧向
-    
+
     public bool SkysinEnabled = false;
     public float SkysinAmplitude = 0.5f;
     public float SkysinFrequency = 3f;
 
     // 抛物线
-   
+
     public bool SkyparabolaEnabled = false;
     public float SkygravityScale = 1f;
     public float SkybounceCoefficient = 0f;
@@ -295,20 +392,20 @@ public class SkyProjectileConfig
     public float SkybounceEndVyThreshold = 0.05f;
 
     // 跟踪导弹
-    
+
     public bool SkyhomingEnabled = false;
     public float SkyhomingFrequency = 0f;
     [Range(0f, 1f)] public float SkyhomingStrength = 1f;
 
     // 半径旋转
-    
+
     public bool SkyorbitEnabled = false;
     public float SkyorbitRadius = 0f;
     public float SkyorbitAngular = 360f;
     public float SkyorbitSweepSpeedDeg = 360f;
 
     // 回旋镖
-   
+
     public bool SkyboomerangEnabled = false;
     public float SkyboomerangOutMaxDistance = 0f;
     public float SkyboomerangApexStopTime = 0f;
@@ -392,7 +489,7 @@ public class AirMoveParams
 [System.Serializable]
 public class AirBackstepParams
 {
-    
+
     public float moveSpeed = 3f;
     public float acceleration = 5f;
     public float accelerationTime = 0f;
@@ -496,7 +593,7 @@ public class PatrolMovement
     [Tooltip("直线动作结束后的休息时长上限（秒）")]
     public float restMax = 0f;
 
-    
+
     [Tooltip("直线移动时播放的动画状态名")]
     public string moveAnimation;
     [Tooltip("直线休息时播放的动画状态名")]
@@ -506,7 +603,7 @@ public class PatrolMovement
     [Tooltip("直线休息时播放的特效")]
     public GameObject restEffectPrefab;
 
-    
+
     [Tooltip("跳跃的水平速度（米/秒）")]
     public float jumpSpeed;
     [Tooltip("跳跃的竖直高度（米）")]
@@ -522,7 +619,7 @@ public class PatrolMovement
     [Tooltip("跳跃到地面后的休息时长上限（秒）")]
     public float jumprestMax = 0f;
 
-    
+
     [Tooltip("起跳/空中阶段播放的动画状态名")]
     public string jumpAnimation;
     [Tooltip("落地休息阶段播放的动画状态名")]
@@ -532,7 +629,7 @@ public class PatrolMovement
     [Tooltip("跳休时播放的特效")]
     public GameObject jumpRestEffectPrefab;
 
-    
+
     [Tooltip("自动跳时的水平速度（米/秒）")]
     public float autojumpSpeed;
     [Tooltip("自动跳时的竖直高度（米）")]
@@ -586,7 +683,7 @@ public class DiscoveryV2Config
     [Tooltip("勾选后：处于 Retreat/Backstep 且靠近墙或悬崖时，自动向玩家方向跳跃（使用事件的 JumpSet）。")]
     public bool enableBackAutoJumpOnObstacle = false;
 
-    
+
     [Header("随机播放发现动作")]
     [Tooltip("是否随机播放发现动作（否则顺序播放）")]
     public bool findRandomOrder = false;
@@ -680,7 +777,7 @@ public class FollowMoveParams
 [System.Serializable]
 public class RetreatMoveParams
 {
-    
+
     [Tooltip("后退档位：目标水平速度")]
     public float reversemoveSpeed = 1f;
     [Tooltip("后退档位：加速度")]
@@ -814,7 +911,7 @@ public class AttackEventV2
     [Tooltip("攻击类型：近战 或 远程（可保留；运行时会根据距离决定执行模式）")]
     public AttackType attackType = AttackType.Melee;
 
-    
+
     [Tooltip("本次攻击的时间窗口（秒）。在该时间内可循环播放攻击动画并触发效果。")]
     public float attackDuration = 0.8f;
 
@@ -885,7 +982,7 @@ public class AttackEventV2
     public float attackjumpRestDuration = 0f;
 
     // 新增：按类型分开的“移动中攻击”参数
-    
+
     [Tooltip("近战时的攻击位移速度")]
     public float attackmoveSpeedMelee = 0f;
     [Tooltip("近战时的攻击位移加速度")]
@@ -899,7 +996,7 @@ public class AttackEventV2
     [Tooltip("近战时的总位移时长（含加/匀/减）")]
     public float attackmoveDurationMelee = 0f;
 
-    
+
     [Tooltip("远程时的攻击位移速度")]
     public float attackmoveSpeedRanged = 0f;
     [Tooltip("远程时的攻击位移加速度")]
@@ -914,7 +1011,7 @@ public class AttackEventV2
     public float attackmoveDurationRanged = 0f;
 
     // 按类型分开的“跳跃中攻击”参数
-    
+
     [Tooltip("近战时攻击起跳的水平速度")]
     public float attackjumpSpeedMelee = 0f;
     [Tooltip("近战时攻击起跳的高度")]
@@ -926,7 +1023,7 @@ public class AttackEventV2
     [Tooltip("近战时攻击跳跃落地后的休息时长")]
     public float attackjumpRestDurationMelee = 0f;
 
-    
+
     [Tooltip("远程时攻击起跳的水平速度")]
     public float attackjumpSpeedRanged = 0f;
     [Tooltip("远程时攻击起跳的高度")]
@@ -949,6 +1046,13 @@ public class ProjectileConfig
     public float intraBurstInterval = 0.0f;
     [Tooltip("投射物存活时间（秒）")]
     public float lifeTime = 5.0f;
+
+    // ================== 地面飞行物被武器击毁配置 ==================
+    [Header("玩家武器击毁")]
+    [Tooltip("勾选后：该飞行物可以被玩家武器（PWeapon HIT 层）击毁")]
+    public bool canBeDestroyedByWeapon = false;
+    [Tooltip("被武器击毁时播放的特效")]
+    public GameObject destroyEffectPrefab;
 
     [Header("扇形分布")]
     [Tooltip("多发时的扇形角度（度），0 表示同向")]
@@ -974,7 +1078,7 @@ public class ProjectileConfig
     // 统一的“沿移动方向自动朝向”
     [Tooltip("勾选后：根对象沿移动方向自动朝向；若“自身旋转”启用，本项失效")]
     public bool faceAlongPath = true;
-    
+
     [Tooltip("TowardsPlayer=朝向玩家飞；HorizontalToPlayer=按水平朝向玩家飞（忽略Y）")]
     public SpawnAimMode spawnAim = SpawnAimMode.TowardsPlayer;
 
@@ -1017,7 +1121,7 @@ public class ProjectileConfig
     public float moveDuration = 0f;
 
     // ========== S 型直线（侧向正弦） ==========
-    
+
     [Tooltip("启用 S 型侧向偏移")]
     public bool sinEnabled = false;
 
@@ -1027,7 +1131,7 @@ public class ProjectileConfig
     public float sinFrequency = 3f;
 
     // ProjectileConfig 内“抛物线（重力）”区块追加字段
-    
+
     [Tooltip("启用抛物线重力效果")]
     public bool parabolaEnabled = false;
 
@@ -1050,7 +1154,7 @@ public class ProjectileConfig
     public float parabolaApexHeight = 0f;
 
     // ========== 跟踪导弹 ==========
-    
+
     [Tooltip("启用跟踪：按频率刷新朝向目标（频率低更棱角，频率高更顺滑）")]
     public bool homingEnabled = false;
 
@@ -1062,7 +1166,7 @@ public class ProjectileConfig
     public float homingStrength = 1f;   // 0=不跟踪，1=最强跟踪
 
     // 半径旋转
-    
+
     [Tooltip("启用半径旋转：相对载体按半径做圆周偏移")]
     public bool orbitEnabled = false;
 
@@ -1076,7 +1180,7 @@ public class ProjectileConfig
     public float orbitSweepSpeedDeg = 360f;
 
     // ========== 回旋镖 ==========
-    
+
     [Tooltip("启用回旋镖：飞到最远距离 -> 停顿 -> 返回起点/发射者")]
     public bool boomerangEnabled = false;
 
@@ -1112,6 +1216,6 @@ public enum SpawnPositionType { Points, Area }
 public enum SpawnAimMode { TowardsPlayer = 0, HorizontalToPlayer = 1 }
 public enum BounceEnergyMode
 {
-    Constant = 0,    
-    DecayToZero = 1  
+    Constant = 0,
+    DecayToZero = 1
 }

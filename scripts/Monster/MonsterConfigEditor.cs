@@ -81,15 +81,39 @@ public class MonsterConfigEditor : Editor
         serializedObject.ApplyModifiedProperties();
     }
 
-    
-
     private void DrawMonsterHitConfig(SerializedProperty spHit)
     {
         if (spHit == null) return;
         if (!Fold("hit", "命中/死亡配置", true)) return;
         using (new EditorGUI.IndentLevelScope())
         {
-            
+            // === 先绘制受击配置 ===
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("hitImpactEffectPrefab"), new GUIContent("受击特效 (默认)"));
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("hitMaterialRendererPath"), new GUIContent("材质球 Renderer 路径"));
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("hitMaterialFlashDuration"), new GUIContent("材质变化时长(秒)"));
+            EditorGUILayout.PropertyField(spHit.FindPropertyRelative("hitMaterialBlendTarget"), new GUIContent("材质 Blend 目标值"));
+            EditorGUILayout.Space(4);
+
+            // === 自爆配置绘制 ===
+            EditorGUILayout.Space(4);
+            var spSelfDestruct = spHit.FindPropertyRelative("enableSelfDestructOnTouch");
+            EditorGUILayout.PropertyField(spSelfDestruct, new GUIContent("启用发现阶段自爆"));
+
+            if (spSelfDestruct.boolValue)
+            {
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    EditorGUILayout.PropertyField(spHit.FindPropertyRelative("showSelfDestructGizmos"), new GUIContent("显示自爆范围 Gizmos"));
+                    EditorGUILayout.PropertyField(spHit.FindPropertyRelative("selfDestructTriggerRadius"), new GUIContent("触发半径 (Trigger)"));
+                    EditorGUILayout.PropertyField(spHit.FindPropertyRelative("selfDestructExplosionRadius"), new GUIContent("爆炸半径 (Damage)"));
+                    EditorGUILayout.PropertyField(spHit.FindPropertyRelative("selfDestructDamage"), new GUIContent("爆炸伤害"));
+                    EditorGUILayout.PropertyField(spHit.FindPropertyRelative("selfDestructExplosionEffect"), new GUIContent("爆炸特效 Prefab"));
+                    EditorGUILayout.PropertyField(spHit.FindPropertyRelative("selfDestructSpawnChildPath"), new GUIContent("特效释放点路径"));
+                }
+            }
+            EditorGUILayout.Space(4);
+
+            // === 后绘制死亡配置 ===
             EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterDieAnimaton"), new GUIContent("死亡动画"));
             EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterDiePrefab"), new GUIContent("死亡特效 Prefab"));
             EditorGUILayout.PropertyField(spHit.FindPropertyRelative("MasterDieSpawnChildPath"), new GUIContent("死亡特效释放点路径"));
@@ -448,6 +472,13 @@ public class MonsterConfigEditor : Editor
                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("SkycountPerBurst"));
                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("SkyintraBurstInterval"));
                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("SkylifeTime"));
+
+                        EditorGUILayout.PropertyField(spProj.FindPropertyRelative("SkycanBeDestroyedByWeapon"), new GUIContent("可被武器击毁"));
+                        if (spProj.FindPropertyRelative("SkycanBeDestroyedByWeapon").boolValue)
+                        {
+                            EditorGUILayout.PropertyField(spProj.FindPropertyRelative("SkydestroyEffectPrefab"), new GUIContent("击毁特效"));
+                        }
+
                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("SkyspreadAngle"));
                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("SkyspreadUniform"));
                         EditorGUILayout.PropertyField(spProj.FindPropertyRelative("SkyFlygunAnimation"));
@@ -633,6 +664,28 @@ public class MonsterConfigEditor : Editor
             EditorGUILayout.PropertyField(spGround, new GUIContent("groundPhase"));
             EditorGUILayout.PropertyField(spAirFlag, new GUIContent("airPhase"));
 
+            if (spGround.boolValue && spAirFlag.boolValue)
+            {
+                EditorGUILayout.PropertyField(spAir.FindPropertyRelative("startPriority"), new GUIContent("初始优先阶段"));
+            }
+
+            EditorGUILayout.Space(4);
+            if (Fold("air.trans.g2s", "转换：地面 -> 空中 (Ground To Sky)", false))
+            {
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    DrawTransitionConfig(spAir.FindPropertyRelative("groundToSkyConfig"));
+                }
+            }
+            if (Fold("air.trans.s2g", "转换：空中 -> 地面 (Sky To Ground)", false))
+            {
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    DrawTransitionConfig(spAir.FindPropertyRelative("skyToGroundConfig"));
+                }
+            }
+            EditorGUILayout.Space(4);
+
             var spShowGround = spAir.FindPropertyRelative("showGroundGizmosManual");
             var spShowAir = spAir.FindPropertyRelative("showAirGizmosManual");
             if (spShowGround != null && spShowAir != null)
@@ -642,6 +695,24 @@ public class MonsterConfigEditor : Editor
                 EditorGUILayout.PropertyField(spShowAir, new GUIContent("显示空中发现/攻击 Gizmos"));
             }
         }
+    }
+
+    // --- 绘制 PhaseTransitionConfig 的辅助方法 ---
+    private void DrawTransitionConfig(SerializedProperty sp)
+    {
+        EditorGUILayout.PropertyField(sp.FindPropertyRelative("hpThresholdPercent"), new GUIContent("触发: HP百分比(0-1)"));
+        EditorGUILayout.PropertyField(sp.FindPropertyRelative("attackCycleThreshold"), new GUIContent("触发: 攻击循环次数"));
+
+        EditorGUILayout.Space(2);
+        EditorGUILayout.LabelField("移动参数 (升空/下降)", EditorStyles.miniBoldLabel);
+        var spMove = sp.FindPropertyRelative("moveParams");
+        // 复用已有的 DrawAirPatrolMoveCore 绘制核心移动参数
+        DrawAirPatrolMoveCore(spMove);
+
+        EditorGUILayout.Space(2);
+        EditorGUILayout.PropertyField(sp.FindPropertyRelative("transitionAnimation"), new GUIContent("动画名"));
+        EditorGUILayout.PropertyField(sp.FindPropertyRelative("transitionEffectPrefab"), new GUIContent("特效 Prefab"));
+        EditorGUILayout.PropertyField(sp.FindPropertyRelative("switchCollider"), new GUIContent("是否切换 Collider"));
     }
 
     private void DrawSpawnConfig(SerializedProperty spSpawn)
@@ -1216,6 +1287,13 @@ public class MonsterConfigEditor : Editor
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("countPerBurst"));
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("intraBurstInterval"));
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("lifeTime"));
+
+                                EditorGUILayout.PropertyField(spProj.FindPropertyRelative("canBeDestroyedByWeapon"), new GUIContent("可被武器击毁"));
+                                if (spProj.FindPropertyRelative("canBeDestroyedByWeapon").boolValue)
+                                {
+                                    EditorGUILayout.PropertyField(spProj.FindPropertyRelative("destroyEffectPrefab"), new GUIContent("击毁特效"));
+                                }
+
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("spreadAngle"));
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("spreadUniform"));
                                 EditorGUILayout.PropertyField(spProj.FindPropertyRelative("FlygunAnimation"));

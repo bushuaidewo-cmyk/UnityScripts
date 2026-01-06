@@ -30,7 +30,7 @@ public class ProjectileBehaviour : MonoBehaviour
 
     // 载体（半径旋转绕此做圆周，PathTangent 空间）
     private Vector2 _carrierPos;
-    private float _orbitAngleDeg;         // 当前相位（仅用于调试/可视化）
+
     private float _orbitSweepAccumDeg = 0f; // 本次 sweep 已累计角度（0..orbitAngular）
 
     // 回旋镖
@@ -95,7 +95,7 @@ public class ProjectileBehaviour : MonoBehaviour
         _boomerangAtApex = false;
         _boomerangReturning = false;
 
-        _orbitAngleDeg = 0f;
+
         _orbitSweepAccumDeg = 0f;
 
         if (_cfg.faceAlongPath && !_cfg.selfRotate)
@@ -174,13 +174,13 @@ public class ProjectileBehaviour : MonoBehaviour
 
             // 相对本段起点的相位（驱动 cos/sin）
             float angleDegRel = dir * _orbitSweepAccumDeg;
-            _orbitAngleDeg = angleDegRel; // 仅用于调试显示
+
 
             if (_orbitSweepAccumDeg >= sweepGoal)
             {
                 _orbitSweepAccumDeg = 0f; // 重置到起点
                 angleDegRel = 0f;
-                _orbitAngleDeg = 0f;
+
             }
 
             // PathTangent 基：切线=heading，法线=左法线
@@ -261,29 +261,60 @@ public class ProjectileBehaviour : MonoBehaviour
     private void TryHandlePlayerHit(GameObject hitGo)
     {
         if (_explodedOrDestroyed || hitGo == null) return;
+
+        if (_cfg.canBeDestroyedByWeapon)
+        {
+            int weaponLayer = LayerMask.NameToLayer("PWeapon HIT");
+            if (weaponLayer != -1 && hitGo.layer == weaponLayer)
+            {
+                // 播放被击毁特效
+                if (_cfg.destroyEffectPrefab != null)
+                {
+                    Instantiate(_cfg.destroyEffectPrefab, transform.position, Quaternion.identity);
+                }
+
+                // 销毁自身（不触发自爆伤害，直接消失）
+                Destroy(gameObject);
+                _explodedOrDestroyed = true;
+                return;
+            }
+        }
+
+        // 1. 处理命中玩家 (保持不变)
         if (_target != null)
         {
             var targetRoot = _target.root;
             var hitRoot = hitGo.transform.root;
             if ((hitRoot == targetRoot) || hitGo.CompareTag("Player"))
             {
-                // 新增：在扣血前，通知玩家当前投射物的水平速度（用于决定正确的击退方向）
                 var playerCtrl = hitGo.GetComponentInParent<PlayerController>();
                 if (playerCtrl != null)
                 {
-                    float vx = GetCurrentVelX();          // ← 你已有的“当前水平速度”估算
-                    playerCtrl.NotifyProjectileKnockback( // ← 新增的通知函数（见下文 PlayerController）
-                        transform.position,               // 伤害源当前位置（世界坐标）
-                        vx                                // 投射物当前水平速度（正右负左）
-                    );
+                    float vx = GetCurrentVelX();
+                    playerCtrl.NotifyProjectileKnockback(transform.position, vx);
                 }
-
-                // 原逻辑：造成伤害（保持顺序不变）
                 int projDamage = (_cfg != null && _cfg.damage > 0) ? _cfg.damage : 1;
                 hitGo.SendMessageUpwards("TakeDamage", projDamage, SendMessageOptions.DontRequireReceiver);
-
                 ExplodeAndDestroy();
+                return; // 命中玩家后结束
             }
+        }
+
+        // 2. 处理命中怪物 (支持特效位置和材质闪烁)
+        // 假设怪物 Tag 为 "Monster" 或 Layer 正确
+        var monster = hitGo.GetComponentInParent<MonsterController>();
+        if (monster != null)
+        {
+            int projDamage = (_cfg != null && _cfg.damage > 0) ? _cfg.damage : 1;
+
+            // 计算接触点：使用 HitGo (怪物的 Collider) 的最近点
+            Collider2D hitCol = hitGo.GetComponent<Collider2D>();
+            Vector2 hitPoint = hitCol ? hitCol.ClosestPoint(transform.position) : (Vector2)transform.position;
+
+            // 调用新接口
+            monster.TakeHit(projDamage, hitPoint);
+
+            ExplodeAndDestroy();
         }
     }
 
